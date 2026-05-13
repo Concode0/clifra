@@ -11,7 +11,17 @@ import torch
 from core.config import make_algebra
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.decomposition import ExpPolicy
-from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, MultiRotorLayer, MultivectorEmbedding, RotorLayer
+from layers import (
+    BladeSelector,
+    CliffordLayerNorm,
+    CliffordLinear,
+    EntropyGatedAttention,
+    MotherEmbedding,
+    MultiRotorLayer,
+    MultivectorEmbedding,
+    PhaseShiftHead,
+    RotorLayer,
+)
 from layers.blocks.multi_rotor_ffn import MultiRotorFFN
 from layers.blocks.transformer import GeometricTransformerBlock
 from layers.primitives.reflection import ReflectionLayer
@@ -127,6 +137,47 @@ class TestLayers:
         output = block(embedding(token_ids))
 
         assert output.shape == (2, 5, 4, algebra.n)
+
+    def test_mother_embedding_declared_grades_emit_compact_lanes(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+        layer = MotherEmbedding(algebra, input_dim=6, channels=3, grades=(1,))
+        x = torch.randn(2, 6)
+
+        y = layer(x)
+
+        assert layer.layout.grades == (1,)
+        assert y.shape == (2, 3, algebra.n)
+
+    def test_entropy_gated_attention_declared_feature_grades_run_compact(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+        layout = algebra.layout((1, 2))
+        layer = EntropyGatedAttention(
+            algebra,
+            channels=4,
+            num_heads=2,
+            feature_grades=(1, 2),
+            score_grades=(1,),
+        )
+        x = torch.randn(2, 5, 4, layout.dim)
+
+        y, entropy, gate = layer(x, return_gating=True)
+
+        assert layer.g2_idx.numel() == algebra.layout((2,)).dim
+        assert y.shape == x.shape
+        assert entropy.shape == (2,)
+        assert gate.shape == (2,)
+
+    def test_phase_shift_head_declared_feature_grades_read_compact_lanes(self):
+        algebra = make_algebra(10, 0, 0, device="cpu", dtype=torch.float32)
+        layout = algebra.layout((0, 4))
+        layer = PhaseShiftHead(algebra, channels=2, feature_grades=(0, 4))
+        x = torch.randn(3, 5, 2, layout.dim)
+
+        y = layer(x)
+
+        assert layer.g0_idx.numel() == 1
+        assert layer.g4_idx.numel() == algebra.layout((4,)).dim
+        assert y.shape == (3, 1)
 
     def test_rotor_shape(self, algebra_3d):
         # Batch=4, Channels=5
