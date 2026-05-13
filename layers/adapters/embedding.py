@@ -28,6 +28,9 @@ class MultivectorEmbedding(CliffordModule):
         embedding (nn.Embedding): Underlying embedding table.
     """
 
+    optimization_operators = ("embed",)
+    optimization_input_grades = None
+
     def __init__(
         self,
         algebra,
@@ -104,6 +107,10 @@ class RotaryBivectorPE(CliffordModule):
         bivector_weights (nn.Parameter): [max_seq_len, num_bivectors] or fixed.
         bivector_indices (torch.Tensor): Indices of grade-2 basis elements.
     """
+
+    optimization_operators = ("dense_sandwich",)
+    optimization_parameter_grades = (2,)
+    optimization_dense_only_reason = "positional rotor path still materializes dense multivectors"
 
     def __init__(
         self,

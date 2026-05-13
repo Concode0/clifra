@@ -25,6 +25,8 @@ class BladeSelector(CliffordModule):
         weights (nn.Parameter): Soft gates [Channels, Dim].
     """
 
+    optimization_operators = ("blade_gate",)
+
     def __init__(self, algebra, channels: int, grades: Optional[Iterable[int]] = None):
         """Sets up the selector.
 
@@ -73,6 +75,9 @@ class GeometricNeutralizer(CliffordModule):
         algebra (CliffordAlgebra): The algebra instance.
         momentum (float): EMA momentum.
     """
+
+    optimization_operators = ("grade_projection", "linear_solve")
+    optimization_dense_only_reason = "neutralizer reads fixed dense grade positions"
 
     def __init__(self, algebra, channels: int, momentum: float = 0.1):
         """Initialize the neutralizer.

@@ -29,6 +29,10 @@ class ReflectionLayer(CliffordModule):
         vector_weights (nn.Parameter): Learnable grade-1 coefficients [C, n].
     """
 
+    optimization_operators = ("dense_sandwich",)
+    optimization_parameter_grades = (1,)
+    optimization_dense_only_reason = "reflection path still materializes dense multivectors"
+
     def __init__(self, algebra, channels: int):
         """Initialize the reflection layer.
 

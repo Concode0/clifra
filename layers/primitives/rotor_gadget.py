@@ -42,6 +42,10 @@ class RotorGadget(CliffordModule):
         aggregation: Aggregation method ('mean', 'sum', or 'learned')
     """
 
+    optimization_operators = ("dense_rotor_toolbox",)
+    optimization_parameter_grades = (2,)
+    optimization_dense_only_reason = "rotor gadget path still materializes dense multivectors"
+
     def __init__(
         self,
         algebra,

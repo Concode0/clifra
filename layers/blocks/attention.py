@@ -45,6 +45,8 @@ class GeometricProductAttention(CliffordModule):
         bivector_weight (float): lambda_ - weight of bivector score component.
     """
 
+    optimization_operators = ("linear", "gp_score", "softmax", "linear")
+
     def __init__(
         self,
         algebra,

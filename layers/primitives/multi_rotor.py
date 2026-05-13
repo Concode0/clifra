@@ -34,6 +34,9 @@ class MultiRotorLayer(CliffordModule):
         weights (nn.Parameter): Mixing weights [channels, num_rotors].
     """
 
+    optimization_operators = ("dense_sandwich",)
+    optimization_dense_only_reason = "sandwich path still materializes dense multivectors"
+
     def __init__(
         self,
         algebra,

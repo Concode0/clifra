@@ -9,6 +9,7 @@ import pytest
 import torch
 
 from core.config import make_algebra
+from core.planning import collect_module_optimization_plans
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.decomposition import ExpPolicy
 from layers import (
@@ -21,7 +22,6 @@ from layers import (
     MultivectorEmbedding,
     PhaseShiftHead,
     RotorLayer,
-    collect_layer_optimization_plans,
 )
 from layers.blocks.multi_rotor_ffn import MultiRotorFFN
 from layers.blocks.transformer import GeometricTransformerBlock
@@ -149,7 +149,7 @@ class TestLayers:
             use_ffn_rotor_toolbox=False,
         )
 
-        plans = collect_layer_optimization_plans(block, compact_only=True)
+        plans = collect_module_optimization_plans(block, compact_only=True)
         by_path = {plan.path: plan for plan in plans}
 
         assert "attn.q_proj" in by_path
@@ -160,6 +160,18 @@ class TestLayers:
         assert all(plan.basis_dim == algebra.n for plan in plans)
         assert all(plan.dense_dim == algebra.dim for plan in plans)
         assert all(plan.compression_ratio < 0.001 for plan in plans)
+
+    def test_core_collector_reports_dense_only_declared_paths(self, algebra_3d):
+        layer = RotorLayer(algebra_3d, channels=4)
+
+        plans = collect_module_optimization_plans(layer)
+
+        assert len(plans) == 1
+        assert plans[0].path == "<root>"
+        assert plans[0].operators == ("dense_sandwich",)
+        assert plans[0].parameter_grades == (2,)
+        assert not plans[0].compact
+        assert plans[0].dense_only_reason == "sandwich path still materializes dense multivectors"
 
     def test_mother_embedding_declared_grades_emit_compact_lanes(self):
         algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)

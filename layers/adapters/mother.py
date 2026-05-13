@@ -22,6 +22,9 @@ class MotherEmbedding(CliffordModule):
     reference frame, effectively aligning disparate geometric manifolds.
     """
 
+    optimization_operators = ("embed",)
+    optimization_input_grades = None
+
     def __init__(
         self,
         algebra,
@@ -86,6 +89,8 @@ class EntropyGatedAttention(CliffordModule):
     Segments with high bivector entropy (disordered phase states) are "stiffened"
     or suppressed, allowing only coherent, synchronized states to propagate.
     """
+
+    optimization_operators = ("grade_energy", "gate", "attention")
 
     def __init__(
         self,
@@ -187,6 +192,9 @@ class PhaseShiftHead(CliffordModule):
     Resolves the final state by mixing the scalar component (G0) and
     high-grade component (G4) via a learned phase angle theta.
     """
+
+    optimization_operators = ("grade_readout",)
+    optimization_output_grades = None
 
     def __init__(self, algebra, channels: int, feature_grades=None):
         """Initializes the Phase-Shift Head.

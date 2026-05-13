@@ -30,6 +30,8 @@ class CliffordLayerNorm(CliffordModule):
             starts identical to the old (scale-discarding) behaviour.
     """
 
+    optimization_operators = ("normalize",)
+
     def __init__(
         self,
         algebra,

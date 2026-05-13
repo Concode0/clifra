@@ -74,6 +74,7 @@ class CliffordLinear(CliffordModule):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.backend = backend
+        self.optimization_operators = (f"linear:{backend}",)
         self.layout = resolve_layer_layout(algebra, grades)
         self.basis_dim = lane_count(algebra, self.layout)
 
@@ -86,6 +87,7 @@ class CliffordLinear(CliffordModule):
         elif backend == "rotor":
             if self.layout is not None:
                 raise ValueError("CliffordLinear rotor backend does not yet support compact grade declarations")
+            self.optimization_dense_only_reason = "rotor backend requires dense sandwich execution"
             from .rotor_gadget import RotorGadget
 
             self.gadget = RotorGadget(

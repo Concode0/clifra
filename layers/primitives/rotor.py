@@ -30,6 +30,9 @@ class RotorLayer(CliffordModule):
         grade_weights (nn.Parameter): Learnable grade-k coefficients [channels, num_grade_elements].
     """
 
+    optimization_operators = ("dense_sandwich",)
+    optimization_dense_only_reason = "sandwich path still materializes dense multivectors"
+
     def __init__(
         self,
         algebra,

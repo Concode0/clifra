@@ -10,7 +10,6 @@ from .adapters.mother import EntropyGatedAttention, MotherEmbedding, PhaseShiftH
 from .blocks.attention import GeometricProductAttention
 from .blocks.multi_rotor_ffn import MultiRotorFFN
 from .blocks.transformer import GeometricTransformerBlock
-from .planning import LayerOptimizationPlan, collect_layer_optimization_plans, layer_optimization_plan
 from .primitives.linear import CliffordLinear
 from .primitives.multi_rotor import MultiRotorLayer
 from .primitives.normalization import CliffordLayerNorm
@@ -42,7 +41,4 @@ __all__ = [
     "MultiRotorFFN",
     "GeometricTransformerBlock",
     "CliffordGraphConv",
-    "LayerOptimizationPlan",
-    "layer_optimization_plan",
-    "collect_layer_optimization_plans",
 ]
