@@ -13,7 +13,7 @@ import torch.nn as nn
 from core.foundation.module import CliffordModule
 from utils.compat import safe_linalg_solve
 
-from ..grade import check_multivector_lanes, lane_count, resolve_layer_layout
+from ..planning import check_multivector_lanes, lane_count, resolve_layer_layout
 
 
 class BladeSelector(CliffordModule):
@@ -31,7 +31,7 @@ class BladeSelector(CliffordModule):
         Args:
             algebra (CliffordAlgebra): The algebra instance.
             channels (int): Input features.
-            grades: Optional layer-owned active grades for compact lane execution.
+            grades: Optional declared grades for compact lane execution.
         """
         super().__init__(algebra)
         self.layout = resolve_layer_layout(algebra, grades)
@@ -86,9 +86,13 @@ class GeometricNeutralizer(CliffordModule):
         self.channels = channels
         self.momentum = momentum
 
-        # Get indices for Grade-0 and Grade-2
-        self.register_buffer("g0_idx", algebra.grade_masks[0].nonzero(as_tuple=False).squeeze(-1))
-        self.register_buffer("g2_idx", algebra.grade_masks[2].nonzero(as_tuple=False).squeeze(-1))
+        # Get indices for Grade-0 and Grade-2 through planner layouts.
+        self.register_buffer("g0_idx", algebra.planner.layout((0,)).indices_tensor(device=algebra.device))
+        if algebra.n >= 2:
+            g2_idx = algebra.planner.layout((2,)).indices_tensor(device=algebra.device)
+        else:
+            g2_idx = torch.zeros(0, dtype=torch.long, device=algebra.device)
+        self.register_buffer("g2_idx", g2_idx)
 
         # Dimensions for Cl(3,1): Grade-0 is 1, Grade-2 is 6
         self.d0 = len(self.g0_idx)

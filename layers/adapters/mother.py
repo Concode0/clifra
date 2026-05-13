@@ -11,7 +11,7 @@ import torch.nn as nn
 from core.foundation.module import CliffordModule
 
 from ..blocks.attention import GeometricProductAttention
-from ..grade import lane_count, resolve_layer_layout
+from ..planning import lane_count, resolve_layer_layout
 from ..primitives.normalization import CliffordLayerNorm
 
 
@@ -39,7 +39,7 @@ class MotherEmbedding(CliffordModule):
             channels: Number of multivector channels.
             U: Geometric uncertainty index for manifold suppression.
             V: Fixed rotor proxy for Procrustes alignment (input_dim x input_dim).
-            grades: Optional layer-owned active output grades for compact lanes.
+            grades: Optional declared output grades for compact lanes.
         """
         super().__init__(algebra)
         self.channels = channels
@@ -105,7 +105,7 @@ class EntropyGatedAttention(CliffordModule):
             num_heads: Number of attention heads.
             eta: Gating multiplier.
             H_base: Base entropy threshold.
-            feature_grades: Optional layer-owned active grades for compact lanes.
+            feature_grades: Optional declared feature grades for compact lanes.
             score_grades: Optional attention scoring grades.
         """
         super().__init__(algebra)
@@ -194,7 +194,7 @@ class PhaseShiftHead(CliffordModule):
         Args:
             algebra: Clifford algebra instance.
             channels: Number of channels to mix.
-            feature_grades: Optional layer-owned active grades for compact lanes.
+            feature_grades: Optional declared feature grades for compact lanes.
         """
         super().__init__(algebra)
         self.channels = channels

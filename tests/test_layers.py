@@ -21,6 +21,7 @@ from layers import (
     MultivectorEmbedding,
     PhaseShiftHead,
     RotorLayer,
+    collect_layer_optimization_plans,
 )
 from layers.blocks.multi_rotor_ffn import MultiRotorFFN
 from layers.blocks.transformer import GeometricTransformerBlock
@@ -137,6 +138,28 @@ class TestLayers:
         output = block(embedding(token_ids))
 
         assert output.shape == (2, 5, 4, algebra.n)
+
+    def test_compact_composed_layers_expose_static_optimization_plans(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+        block = GeometricTransformerBlock(
+            algebra,
+            channels=4,
+            num_heads=2,
+            feature_grades=(1,),
+            use_ffn_rotor_toolbox=False,
+        )
+
+        plans = collect_layer_optimization_plans(block, compact_only=True)
+        by_path = {plan.path: plan for plan in plans}
+
+        assert "attn.q_proj" in by_path
+        assert "ffn.expand" in by_path
+        assert by_path["attn"].score_grades == (1,)
+        assert by_path["attn.q_proj"].operators == ("linear:traditional",)
+        assert all(plan.output_grades == (1,) for plan in plans)
+        assert all(plan.basis_dim == algebra.n for plan in plans)
+        assert all(plan.dense_dim == algebra.dim for plan in plans)
+        assert all(plan.compression_ratio < 0.001 for plan in plans)
 
     def test_mother_embedding_declared_grades_emit_compact_lanes(self):
         algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)

@@ -18,7 +18,7 @@ import torch.nn as nn
 from core.foundation.module import CliffordModule
 from core.foundation.validation import check_channels
 
-from ..grade import check_multivector_lanes, lane_count, resolve_layer_layout
+from ..planning import check_multivector_lanes, lane_count, resolve_layer_layout
 
 
 class CliffordLinear(CliffordModule):
@@ -66,7 +66,7 @@ class CliffordLinear(CliffordModule):
                 - 'none': No shuffle (default)
                 - 'fixed': Fixed random permutation
                 - 'random': Random permutation each forward pass
-            grades: Optional layer-owned active grades. When set, the traditional
+            grades: Optional declared active grades. When set, the traditional
                 backend operates on compact lanes for those grades instead of
                 requiring a full dense multivector width.
         """

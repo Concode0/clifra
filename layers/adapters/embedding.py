@@ -12,7 +12,7 @@ import torch.nn as nn
 
 from core.foundation.module import CliffordModule
 
-from ..grade import lane_count, resolve_layer_layout
+from ..planning import lane_count, resolve_layer_layout
 
 
 class MultivectorEmbedding(CliffordModule):
@@ -41,7 +41,7 @@ class MultivectorEmbedding(CliffordModule):
             algebra: Clifford algebra instance.
             vocab_size: Vocabulary size.
             channels: Number of multivector channels per token.
-            grades: Optional layer-owned active output grades. When set, the
+            grades: Optional declared output grades. When set, the
                 embedding table stores compact lanes only.
         """
         super().__init__(algebra)

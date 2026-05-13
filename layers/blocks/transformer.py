@@ -55,7 +55,7 @@ class GeometricTransformerBlock(CliffordModule):
             use_entropy_gating: If True, uses EntropyGatedAttention.
             eta: Gating multiplier for entropy attention.
             H_base: Base entropy threshold.
-            feature_grades: Optional layer-owned active grades for compact execution.
+            feature_grades: Optional declared feature grades for compact execution.
             attention_score_grades: Optional score grades for attention; defaults to
                 ``feature_grades`` when compact execution is used.
             use_ffn_rotor_toolbox: Whether to use the dense rotor toolbox in the

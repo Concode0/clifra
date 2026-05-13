@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from core.foundation.basis import normalize_grades, reverse_sign
 from core.foundation.module import CliffordModule
 
-from ..grade import check_multivector_lanes, lane_count, resolve_layer_layout
+from ..planning import check_multivector_lanes, lane_count, resolve_layer_layout
 from ..primitives.linear import CliffordLinear
 
 # Memory-bounded block size for chunked attention computation

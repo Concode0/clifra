@@ -74,7 +74,7 @@ class RotorGadget(CliffordModule):
         self.aggregation = aggregation
         self.shuffle = shuffle
 
-        # Use the algebra planner layout for layer-owned bivector indices.
+        # Use the algebra planner layout for static bivector indices.
         if algebra.num_grades > 2:
             self.register_buffer("bivector_indices", algebra.planner.layout((2,)).indices_tensor(device=algebra.device))
         else:

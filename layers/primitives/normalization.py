@@ -12,7 +12,7 @@ import torch.nn as nn
 
 from core.foundation.module import CliffordModule
 
-from ..grade import check_multivector_lanes, lane_count, resolve_layer_layout
+from ..planning import check_multivector_lanes, lane_count, resolve_layer_layout
 
 
 class CliffordLayerNorm(CliffordModule):
@@ -45,7 +45,7 @@ class CliffordLayerNorm(CliffordModule):
             channels (int): Features.
             eps (float): Stability term.
             recover (bool): Whether to inject original scale into the scalar part.
-            grades: Optional layer-owned active grades for compact lane execution.
+            grades: Optional declared grades for compact lane execution.
         """
         super().__init__(algebra)
         self.eps = eps
