@@ -10,7 +10,6 @@ import torch.nn as nn
 
 from core.foundation.module import CliffordModule
 from core.foundation.validation import check_channels, check_multivector
-from core.runtime.algebra import CliffordAlgebra
 
 
 class ReflectionLayer(CliffordModule):
@@ -30,7 +29,7 @@ class ReflectionLayer(CliffordModule):
         vector_weights (nn.Parameter): Learnable grade-1 coefficients [C, n].
     """
 
-    def __init__(self, algebra: CliffordAlgebra, channels: int):
+    def __init__(self, algebra, channels: int):
         """Initialize the reflection layer.
 
         Args:
@@ -41,8 +40,7 @@ class ReflectionLayer(CliffordModule):
         self.channels = channels
 
         # Grade-1 indices: 2^0, 2^1, ..., 2^(n-1)
-        g1_mask = algebra.grade_masks[1]
-        self.register_buffer("vector_indices", g1_mask.nonzero(as_tuple=False).squeeze(-1))
+        self.register_buffer("vector_indices", algebra.planner.layout((1,)).indices_tensor(device=algebra.device))
         self.num_vectors = algebra.n
 
         self.vector_weights = nn.Parameter(torch.Tensor(channels, self.num_vectors))

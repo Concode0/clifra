@@ -15,7 +15,6 @@ import torch.nn as nn
 
 from core.foundation.module import CliffordModule
 from core.foundation.validation import check_channels, check_multivector
-from core.runtime.algebra import CliffordAlgebra
 
 
 class MultiRotorLayer(CliffordModule):
@@ -37,7 +36,7 @@ class MultiRotorLayer(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra,
         channels: int,
         num_rotors: int = 8,
         grade: int = 2,
@@ -57,8 +56,8 @@ class MultiRotorLayer(CliffordModule):
         self.num_rotors = num_rotors
         self.grade = grade
 
-        grade_mask = algebra.grade_masks[grade]
-        self.register_buffer("grade_indices", grade_mask.nonzero(as_tuple=False).squeeze(-1))
+        grade_layout = algebra.planner.layout((grade,))
+        self.register_buffer("grade_indices", grade_layout.indices_tensor(device=algebra.device))
         self.num_grade_elements = len(self.grade_indices)
 
         self.rotor_grade_weights = nn.Parameter(torch.Tensor(num_rotors, self.num_grade_elements))

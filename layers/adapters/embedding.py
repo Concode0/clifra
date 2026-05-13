@@ -11,7 +11,6 @@ import torch
 import torch.nn as nn
 
 from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
 
 from ..grade import lane_count, resolve_layer_layout
 
@@ -108,7 +107,7 @@ class RotaryBivectorPE(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra,
         channels: int,
         max_seq_len: int,
         learnable: bool = True,
@@ -125,10 +124,13 @@ class RotaryBivectorPE(CliffordModule):
         self.max_seq_len = max_seq_len
         self.learnable = learnable
 
-        # Identify grade-2 basis elements
-        indices = [i for i in range(algebra.dim) if bin(i).count("1") == 2]
-        self.register_buffer("bivector_indices", torch.tensor(indices, dtype=torch.long))
-        self.num_bivectors = len(indices)
+        # Identify grade-2 basis elements through the planner layout.
+        if algebra.n >= 2:
+            bivector_indices = algebra.planner.layout((2,)).indices_tensor(device=algebra.device)
+        else:
+            bivector_indices = torch.zeros(0, dtype=torch.long, device=algebra.device)
+        self.register_buffer("bivector_indices", bivector_indices)
+        self.num_bivectors = int(bivector_indices.numel())
 
         # Sinusoidal initialization
         init = self._sinusoidal_init(max_seq_len, self.num_bivectors)
