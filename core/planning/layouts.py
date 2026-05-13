@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 #
 
-"""Normalized product requests for grade-plan lowering."""
+"""Layout and request normalization for static grade planning."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ _VALID_PRODUCT_OPS = {"gp", "wedge", "inner", "commutator", "anti_commutator"}
 class ProductRequest:
     """Fully resolved static request for one bilinear product.
 
-    The request is the translator's intermediate representation. It removes
+    The request is the planner's intermediate representation. It removes
     ambiguity from caller input before any executor is built: layouts are
     normalized, compact-vs-dense operand storage is known, and output grades are
     inferred when callers do not explicitly project them.

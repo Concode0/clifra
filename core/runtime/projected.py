@@ -15,7 +15,7 @@ from core.foundation.validation import check_multivector
 
 
 class ProjectedProductMixin:
-    """Route declared grade products through an algebra's grade translator."""
+    """Execute declared grade products through an algebra's static planner."""
 
     def projected_product(
         self,
@@ -34,7 +34,7 @@ class ProjectedProductMixin:
         compact_output: bool = False,
         return_layout: bool = False,
     ):
-        """Compute a declared grade-restricted product through the translator."""
+        """Compute a declared grade-restricted product through a static executor."""
         if not left_compact and left_layout is not None and A.shape[-1] == left_layout.dim:
             left_compact = left_layout.dim != self.dim
         if not right_compact and right_layout is not None and B.shape[-1] == right_layout.dim:
@@ -43,7 +43,8 @@ class ProjectedProductMixin:
             check_multivector(A, self, "projected_product(A)")
         if not right_compact:
             check_multivector(B, self, "projected_product(B)")
-        return self.translator.projected_product(
+
+        request = self.planner.product_request(
             A,
             B,
             left_grades=left_grades,
@@ -55,9 +56,21 @@ class ProjectedProductMixin:
             op=op,
             left_compact=left_compact,
             right_compact=right_compact,
-            compact_output=compact_output,
-            return_layout=return_layout,
         )
+        executor = self.planner.product_executor_for_request(request)
+
+        if request.left_compact or request.right_compact:
+            A_values = A if request.left_compact else executor.left_layout.compact(A)
+            B_values = B if request.right_compact else executor.right_layout.compact(B)
+            values = executor.forward_compact(A_values, B_values)
+        else:
+            values = executor(A, B)
+
+        if return_layout:
+            return values, executor.output_layout
+        if compact_output:
+            return values
+        return executor.output_layout.dense(values)
 
     def projected_geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Projected geometric product convenience wrapper."""

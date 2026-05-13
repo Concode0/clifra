@@ -24,6 +24,7 @@ class AlgebraLike(Protocol):
     dim: int
     eps: float
     eps_sq: float
+    planner: object
 
     @property
     def device(self):

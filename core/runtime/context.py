@@ -16,7 +16,7 @@ import torch
 from core.foundation.basis import normalize_grades
 from core.foundation.device import resolve_device, resolve_dtype
 from core.foundation.layout import AlgebraSpec, GradeLayout
-from core.planning.translator import GradeTranslator
+from core.planning.planner import GradePlanner
 from core.runtime.projected import ProjectedProductMixin
 
 
@@ -51,7 +51,7 @@ class AlgebraContext(ProjectedProductMixin):
         )
         self._default_grades = None if default_grades is None else normalize_grades(default_grades, self.n)
         self._default_layout: Optional[GradeLayout] = None
-        self.translator = GradeTranslator(self)
+        self.planner = GradePlanner(self)
         self._sync_eps()
 
     @property
@@ -76,9 +76,9 @@ class AlgebraContext(ProjectedProductMixin):
                     grades = range(self.num_grades)
                 else:
                     grades = self._default_grades
-                self._default_layout = self.translator.layout(grades)
+                self._default_layout = self.planner.layout(grades)
             return self._default_layout
-        return self.translator.layout(grades)
+        return self.planner.layout(grades)
 
     def _apply(self, fn):
         """Apply a PyTorch module-style device/dtype transform to cached executors."""
@@ -87,7 +87,7 @@ class AlgebraContext(ProjectedProductMixin):
         if probe.dtype.is_floating_point:
             self._dtype = probe.dtype
         self._sync_eps()
-        self.translator._apply(fn)
+        self.planner._apply(fn)
         return self
 
     def to(self, device=None, dtype=None):
@@ -97,7 +97,7 @@ class AlgebraContext(ProjectedProductMixin):
         if dtype is not None:
             self._dtype = resolve_dtype(dtype)
         self._sync_eps()
-        self.translator.clear_cache()
+        self.planner.clear_cache()
         return self
 
     def geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -158,7 +158,7 @@ class AlgebraContext(ProjectedProductMixin):
         return_layout: bool = False,
     ):
         """Execute a unary planned operation."""
-        return self.translator.planned_unary(
+        request = self.planner.unary_request(
             values,
             op=op,
             input_grades=input_grades,
@@ -166,9 +166,15 @@ class AlgebraContext(ProjectedProductMixin):
             input_layout=input_layout,
             output_layout=output_layout,
             input_compact=input_compact,
-            compact_output=compact_output,
-            return_layout=return_layout,
         )
+        executor = self.planner.unary_executor_for_request(request)
+        output = executor.forward_compact(values) if request.input_compact else executor(values)
+
+        if return_layout:
+            return output, executor.output_layout
+        if compact_output:
+            return output
+        return executor.output_layout.dense(output)
 
     def _sync_eps(self) -> None:
         finfo = torch.finfo(self.dtype)

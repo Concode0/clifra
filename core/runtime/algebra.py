@@ -169,9 +169,9 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         self.eps: float = float(_finfo.eps)
         self.eps_sq: float = float(_finfo.eps**2)
 
-        from core.planning.translator import GradeTranslator
+        from core.planning.planner import GradePlanner
 
-        self.translator = GradeTranslator(self)
+        self.planner = GradePlanner(self)
 
     @property
     def device(self):
@@ -193,6 +193,7 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         _finfo = torch.finfo(self.cayley_signs.dtype)
         self.eps = float(_finfo.eps)
         self.eps_sq = float(_finfo.eps**2)
+        self.planner._apply(fn)
         return result
 
     @property

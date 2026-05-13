@@ -22,7 +22,7 @@ import torch.nn as nn
 
 from core.foundation.basis import GradeProductOp, expand_output_grades, normalize_grades, operation_coefficient
 from core.foundation.layout import AlgebraSpec, GradeLayout
-from core.planning.request import ProductRequest
+from core.planning.layouts import ProductRequest
 from core.planning.tree import GradePlanTree, build_grade_plan_tree
 
 

@@ -5,12 +5,12 @@ from core.config import make_algebra
 from core.foundation.basis import basis_indices_for_grades, expand_output_grades, geometric_product_output_grades
 from core.foundation.layout import AlgebraSpec
 from core.planning.flow import GradeFlow
-from core.planning.grade_plan import (
+from core.planning.layouts import build_product_request
+from core.planning.planner import GradePlanner
+from core.planning.product import (
     GradeProductExecutor,
     build_grade_product_plan,
 )
-from core.planning.request import build_product_request
-from core.planning.translator import GradeTranslator
 from core.planning.tree import build_grade_plan_tree
 from core.planning.unary import build_unary_request
 from core.runtime.algebra import CliffordAlgebra
@@ -212,11 +212,11 @@ def test_algebra_projected_product_matches_dense_kernel_and_compact_output():
     assert compact_actual.shape[-1] == AlgebraSpec.from_algebra(algebra).layout((0, 2)).dim
 
 
-def test_grade_translator_reuses_projected_product_executor():
+def test_grade_planner_reuses_projected_product_executor():
     algebra = CliffordAlgebra(4, 1, 1, device=DEVICE, dtype=torch.float64)
-    translator = GradeTranslator(algebra)
+    planner = GradePlanner(algebra)
 
-    first = translator.product_executor(
+    first = planner.product_executor(
         op="gp",
         left_grades=(1,),
         right_grades=(1,),
@@ -224,7 +224,7 @@ def test_grade_translator_reuses_projected_product_executor():
         dtype=torch.float64,
         device=DEVICE,
     )
-    second = translator.product_executor(
+    second = planner.product_executor(
         op="gp",
         left_grades=(1,),
         right_grades=(1,),
@@ -234,6 +234,31 @@ def test_grade_translator_reuses_projected_product_executor():
     )
 
     assert first is second
+
+
+def test_grade_planner_rekeys_cached_executor_after_dtype_move():
+    algebra = CliffordAlgebra(4, 1, 1, device=DEVICE, dtype=torch.float64)
+    executor = algebra.planner.product_executor(
+        op="gp",
+        left_grades=(1,),
+        right_grades=(1,),
+        output_grades=(0, 2),
+        dtype=algebra.dtype,
+        device=DEVICE,
+    )
+
+    algebra.to(dtype=torch.float32)
+    moved = algebra.planner.product_executor(
+        op="gp",
+        left_grades=(1,),
+        right_grades=(1,),
+        output_grades=(0, 2),
+        dtype=algebra.dtype,
+        device=DEVICE,
+    )
+
+    assert moved is executor
+    assert moved.coefficients.dtype == torch.float32
 
 
 def test_multivector_compact_projected_product_keeps_dense_tensor_compatibility():
@@ -401,7 +426,7 @@ def test_static_grade_product_compiles_fullgraph_with_aot_eager():
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 def test_planned_unary_compiles_fullgraph_with_aot_eager():
     algebra = make_algebra(6, 0, 0, kernel="context", device=DEVICE, dtype=torch.float32)
-    executor = algebra.translator.unary_executor(
+    executor = algebra.planner.unary_executor(
         op="reverse",
         input_grades=(2,),
         dtype=torch.float32,

@@ -111,7 +111,7 @@ class GeometricProductAttention(CliffordModule):
         self._score_bivector_product = None
         if self.score_grades is not None:
             self.n_g2 = alg.n * (alg.n - 1) // 2
-            self._score_layout = alg.translator.layout(self.score_grades)
+            self._score_layout = alg.planner.layout(self.score_grades)
             layout_indices = self._score_layout.indices_tensor(device=alg.device)
             rev_signs = torch.tensor(
                 [reverse_sign(index) for index in self._score_layout.basis_indices],
@@ -120,7 +120,7 @@ class GeometricProductAttention(CliffordModule):
             )
             self.register_buffer("_score_layout_indices", layout_indices)
             self.register_buffer("_score_rev_signs", rev_signs)
-            self._score_scalar_product = alg.translator.product_executor(
+            self._score_scalar_product = alg.planner.product_executor(
                 op="gp",
                 left_grades=self.score_grades,
                 right_grades=self.score_grades,
@@ -130,7 +130,7 @@ class GeometricProductAttention(CliffordModule):
                 cache=False,
             )
             if self.n_g2 > 0:
-                self._score_bivector_product = alg.translator.product_executor(
+                self._score_bivector_product = alg.planner.product_executor(
                     op="gp",
                     left_grades=self.score_grades,
                     right_grades=self.score_grades,

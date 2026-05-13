@@ -27,9 +27,9 @@ from .foundation.layout import AlgebraSpec, GradeLayout
 from .foundation.module import AlgebraLike, CliffordModule
 from .foundation.validation import check_channels, check_multivector
 from .planning.flow import GradeFlow
-from .planning.grade_plan import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
-from .planning.request import ProductRequest, build_product_request
-from .planning.translator import GradeTranslator
+from .planning.layouts import ProductRequest, build_product_request
+from .planning.planner import GradePlanner
+from .planning.product import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
 from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .planning.unary import GradeUnaryExecutor, GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
 from .runtime.algebra import CliffordAlgebra
@@ -69,7 +69,7 @@ __all__ = [
     "Multivector",
     "AlgebraSpec",
     "GradeLayout",
-    "GradeTranslator",
+    "GradePlanner",
     "make_algebra",
     "make_algebra_from_config",
     # device / validation

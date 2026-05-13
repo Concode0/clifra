@@ -106,7 +106,7 @@ class Multivector:
 
     def compact(self, grades) -> Multivector:
         """Return a compact-storage multivector containing ``grades``."""
-        layout = self.algebra.translator.layout(grades)
+        layout = self.algebra.planner.layout(grades)
         return self.with_layout(layout)
 
     def with_layout(self, layout: GradeLayout) -> Multivector:

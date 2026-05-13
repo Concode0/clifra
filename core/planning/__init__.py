@@ -5,12 +5,12 @@
 # you may not use this file except in compliance with the License.
 #
 
-"""Grade-plan translation and Torch executor lowering."""
+"""Static grade planning and Torch executor lowering."""
 
 from .flow import GradeFlow
-from .grade_plan import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
-from .request import ProductRequest, build_product_request
-from .translator import GradeTranslator
+from .layouts import ProductRequest, build_product_request
+from .planner import GradePlanner
+from .product import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
 from .tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .unary import GradeUnaryExecutor, GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
 
@@ -20,7 +20,7 @@ __all__ = [
     "GradeProductExecutor",
     "GradeProductPlan",
     "GradePlanTree",
-    "GradeTranslator",
+    "GradePlanner",
     "GradeUnaryExecutor",
     "GradeUnaryOp",
     "GradeUnaryPlan",

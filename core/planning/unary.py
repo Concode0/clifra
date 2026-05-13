@@ -17,7 +17,7 @@ import torch.nn as nn
 
 from core.foundation.basis import normalize_grades, reverse_sign
 from core.foundation.layout import AlgebraSpec, GradeLayout
-from core.planning.request import check_layout_spec, is_compact_tensor, resolve_operand_layout
+from core.planning.layouts import check_layout_spec, is_compact_tensor, resolve_operand_layout
 
 GradeUnaryOp = Literal["identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"]
 _VALID_UNARY_OPS = {"identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"}

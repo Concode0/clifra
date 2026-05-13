@@ -5,15 +5,15 @@
 # you may not use this file except in compliance with the License.
 #
 
-"""Grade-aware translator from algebraic intent to static executors."""
+"""Grade-aware planner from algebraic intent to static executors."""
 
 from __future__ import annotations
 
 import torch
 
 from core.foundation.layout import AlgebraSpec, GradeLayout
-from core.planning.grade_plan import GradeProductExecutor, build_grade_product_plan_from_request
-from core.planning.request import ProductRequest, build_product_request, normalize_product_op
+from core.planning.layouts import ProductRequest, build_product_request, normalize_product_op
+from core.planning.product import GradeProductExecutor, build_grade_product_plan_from_request
 from core.planning.tree import build_grade_plan_tree
 from core.planning.unary import (
     GradeUnaryExecutor,
@@ -24,10 +24,10 @@ from core.planning.unary import (
 )
 
 
-class GradeTranslator:
+class GradePlanner:
     """Owns layout and product-plan lowering for one algebra instance.
 
-    The translator is deliberately not an ``nn.Module``. It builds static
+    The planner is deliberately not an ``nn.Module``. It builds static
     executor modules keyed by signature, grades, dtype, and device, while the
     algebra remains the source of truth for buffers and dense reference paths.
     """
@@ -53,10 +53,17 @@ class GradeTranslator:
 
     def _apply(self, fn):
         """Apply a PyTorch module-style transform to cached executor buffers."""
-        for executor in self._product_executors.values():
+        product_executors = list(self._product_executors.values())
+        self._product_executors.clear()
+        for executor in product_executors:
             executor._apply(fn)
-        for executor in self._unary_executors.values():
+            self._product_executors[self._product_cache_key(executor)] = executor
+
+        unary_executors = list(self._unary_executors.values())
+        self._unary_executors.clear()
+        for executor in unary_executors:
             executor._apply(fn)
+            self._unary_executors[self._unary_cache_key(executor)] = executor
         return self
 
     def product_executor(
@@ -82,9 +89,41 @@ class GradeTranslator:
             dtype=dtype,
             device=torch.device(device),
         )
-        return self.executor_for_request(request, cache=cache)
+        return self.product_executor_for_request(request, cache=cache)
 
-    def executor_for_request(self, request: ProductRequest, *, cache: bool = True) -> GradeProductExecutor:
+    def product_request(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        *,
+        op: str = "gp",
+        left_grades=None,
+        right_grades=None,
+        output_grades=None,
+        left_layout: GradeLayout = None,
+        right_layout: GradeLayout = None,
+        output_layout: GradeLayout = None,
+        left_compact: bool = False,
+        right_compact: bool = False,
+    ) -> ProductRequest:
+        """Normalize product intent into a static request without executing tensors."""
+        return build_product_request(
+            self.spec,
+            left,
+            right,
+            op=op,
+            left_grades=left_grades,
+            right_grades=right_grades,
+            output_grades=output_grades,
+            left_layout=left_layout,
+            right_layout=right_layout,
+            output_layout=output_layout,
+            left_compact=left_compact,
+            right_compact=right_compact,
+            full_layout_allowed=self._full_layout_allowed(),
+        )
+
+    def product_executor_for_request(self, request: ProductRequest, *, cache: bool = True) -> GradeProductExecutor:
         """Return an executor for an already normalized product request."""
         key = request.cache_key
         executor = self._product_executors.get(key) if cache else None
@@ -103,6 +142,30 @@ class GradeTranslator:
             left_grades=left_grades,
             right_grades=right_grades,
             output_grades=output_grades,
+        )
+
+    def unary_request(
+        self,
+        values: torch.Tensor,
+        *,
+        op: str,
+        input_grades=None,
+        output_grades=None,
+        input_layout: GradeLayout = None,
+        output_layout: GradeLayout = None,
+        input_compact: bool = False,
+    ) -> UnaryRequest:
+        """Normalize unary intent into a static request without executing tensors."""
+        return build_unary_request(
+            self.spec,
+            values,
+            op=op,
+            input_grades=input_grades,
+            output_grades=output_grades,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            input_compact=input_compact,
+            full_layout_allowed=self._full_layout_allowed(),
         )
 
     def unary_executor(
@@ -143,87 +206,26 @@ class GradeTranslator:
                 self._unary_executors[key] = executor
         return executor
 
-    def planned_unary(
-        self,
-        values: torch.Tensor,
-        *,
-        op: str,
-        input_grades=None,
-        output_grades=None,
-        input_layout: GradeLayout = None,
-        output_layout: GradeLayout = None,
-        input_compact: bool = False,
-        compact_output: bool = False,
-        return_layout: bool = False,
-    ):
-        """Execute a unary operation using a static gather/sign plan."""
-        request = build_unary_request(
+    def _product_cache_key(self, executor: GradeProductExecutor) -> tuple[object, ...]:
+        return (
             self.spec,
-            values,
-            op=op,
-            input_grades=input_grades,
-            output_grades=output_grades,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            input_compact=input_compact,
-            full_layout_allowed=self._full_layout_allowed(),
+            str(executor.coefficients.device),
+            str(executor.coefficients.dtype),
+            executor.op,
+            executor.left_grades,
+            executor.right_grades,
+            executor.output_grades,
         )
-        executor = self.unary_executor_for_request(request)
-        output = executor.forward_compact(values) if request.input_compact else executor(values)
 
-        if return_layout:
-            return output, executor.output_layout
-        if compact_output:
-            return output
-        return executor.output_layout.dense(output)
-
-    def projected_product(
-        self,
-        A: torch.Tensor,
-        B: torch.Tensor,
-        *,
-        left_grades=None,
-        right_grades=None,
-        output_grades=None,
-        left_layout: GradeLayout = None,
-        right_layout: GradeLayout = None,
-        output_layout: GradeLayout = None,
-        op: str = "gp",
-        left_compact: bool = False,
-        right_compact: bool = False,
-        compact_output: bool = False,
-        return_layout: bool = False,
-    ):
-        """Execute a projected product using dense or compact input lanes."""
-        request = build_product_request(
+    def _unary_cache_key(self, executor: GradeUnaryExecutor) -> tuple[object, ...]:
+        return (
             self.spec,
-            A,
-            B,
-            op=op,
-            left_grades=left_grades,
-            right_grades=right_grades,
-            output_grades=output_grades,
-            left_layout=left_layout,
-            right_layout=right_layout,
-            output_layout=output_layout,
-            left_compact=left_compact,
-            right_compact=right_compact,
-            full_layout_allowed=self._full_layout_allowed(),
+            str(executor.signs.device),
+            str(executor.signs.dtype),
+            executor.op,
+            executor.input_layout.grades,
+            executor.output_layout.grades,
         )
-        executor = self.executor_for_request(request)
-
-        if request.left_compact or request.right_compact:
-            A_values = A if request.left_compact else executor.left_layout.compact(A)
-            B_values = B if request.right_compact else executor.right_layout.compact(B)
-            values = executor.forward_compact(A_values, B_values)
-        else:
-            values = executor(A, B)
-
-        if return_layout:
-            return values, executor.output_layout
-        if compact_output:
-            return values
-        return executor.output_layout.dense(values)
 
     def _full_layout_allowed(self) -> bool:
         return bool(getattr(self.algebra, "allow_full_layout_products", True))
