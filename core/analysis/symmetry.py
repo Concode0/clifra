@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 from ._types import CONSTANTS, CommutatorResult, SymmetryResult
 

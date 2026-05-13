@@ -12,7 +12,7 @@ import torch
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 
 class GeneralVisualizer:

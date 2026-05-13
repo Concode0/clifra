@@ -8,7 +8,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 
-from core.algebra import CliffordAlgebra
 from core.analysis import (
     CommutatorAnalyzer as CoreCommutatorAnalyzer,
 )
@@ -16,6 +15,7 @@ from core.analysis import (
     GeodesicFlow,
     SpectralAnalyzer,
 )
+from core.runtime.algebra import CliffordAlgebra
 from layers import MultiRotorLayer, RotorLayer
 
 from .config import GDOConfig

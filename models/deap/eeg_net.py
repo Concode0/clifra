@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 
 from core.config import make_algebra, make_algebra_from_config
-from core.module import AlgebraLike, CliffordModule
+from core.foundation.module import AlgebraLike, CliffordModule
 from layers import (
     CliffordLayerNorm,
     GeometricNeutralizer,

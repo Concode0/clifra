@@ -56,9 +56,9 @@ from torch.utils.data import DataLoader, Dataset
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
-from core.algebra import CliffordAlgebra
-from core.metric import signature_norm_squared
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
+from core.runtime.algebra import CliffordAlgebra
+from core.runtime.metric import signature_norm_squared
 from experiments._lib import (
     build_visualization_metadata,
     count_parameters,

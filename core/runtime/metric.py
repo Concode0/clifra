@@ -13,7 +13,7 @@ the metric signature.
 
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 
 def _hermitian_signs(algebra: CliffordAlgebra) -> torch.Tensor:

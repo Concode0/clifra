@@ -16,7 +16,6 @@ import math
 import pytest
 import torch
 
-from core.algebra import CliffordAlgebra
 from core.analysis import (
     AnalysisConfig,
     AnalysisReport,
@@ -33,6 +32,7 @@ from core.analysis import (
     SymmetryResult,
     compute_uncertainty_and_alignment,
 )
+from core.runtime.algebra import CliffordAlgebra
 
 DEVICE = "cpu"
 

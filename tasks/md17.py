@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 from core.config import make_algebra_from_config
-from core.metric import hermitian_grade_spectrum, hermitian_norm
+from core.runtime.metric import hermitian_grade_spectrum, hermitian_norm
 from datalib.md17 import get_md17_loaders
 from functional.loss import ConservativeLoss, HermitianGradeRegularization
 from log import get_logger

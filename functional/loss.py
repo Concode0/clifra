@@ -9,8 +9,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.metric import hermitian_grade_spectrum
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
+from core.runtime.metric import hermitian_grade_spectrum
 
 
 class GeometricMSELoss(CliffordModule):

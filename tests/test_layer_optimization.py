@@ -8,7 +8,7 @@
 import pytest
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers import RotorLayer
 
 pytestmark = pytest.mark.unit

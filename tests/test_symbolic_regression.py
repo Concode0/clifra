@@ -8,7 +8,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from datalib.symbolic_regression import (
     BLACKBOX_DATASETS,
     FIRST_PRINCIPLES_DATASETS,
@@ -54,13 +54,8 @@ def _make_cfg(dataset_name=_TEST_DATASET, hidden_channels=4, num_layers=1, n_sam
                 "exp_policy": "balanced",
                 "kernel": "auto",
                 "metric_search": metric_search,
-                "partition_threshold": 8,
-                "partition": {
-                    "leaf_n": None,
-                    "product_chunk_size": None,
-                    "tree": None,
-                    "accumulation_dtype": None,
-                },
+                "dense_threshold": 8,
+                "default_grades": None,
             },
             "dataset": {
                 "dataset_name": dataset_name,

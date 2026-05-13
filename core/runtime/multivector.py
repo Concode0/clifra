@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import torch
 
-from core.module import AlgebraLike
+from core.foundation.layout import GradeLayout
+from core.foundation.module import AlgebraLike
 
 
 class Multivector:
@@ -22,14 +23,38 @@ class Multivector:
 
     Attributes:
         algebra (AlgebraLike): The backend.
-        tensor (torch.Tensor): The raw data [..., Dim].
+        tensor (torch.Tensor): Dense coefficients [..., Dim].
+        values (torch.Tensor): Optional compact lane values [..., layout.dim].
+        layout (GradeLayout): Optional compact layout for ``values``.
     """
 
-    __slots__ = ("algebra", "tensor")
+    __slots__ = ("_tensor", "algebra", "layout", "values")
 
-    def __init__(self, algebra: AlgebraLike, tensor: torch.Tensor):
+    def __init__(
+        self,
+        algebra: AlgebraLike,
+        tensor: torch.Tensor = None,
+        *,
+        values: torch.Tensor = None,
+        layout: GradeLayout = None,
+    ):
         self.algebra = algebra
-        self.tensor = tensor
+        self.layout = layout
+        if layout is None:
+            if tensor is None:
+                raise ValueError("tensor is required when layout is not provided")
+            self._tensor = tensor
+            self.values = None
+        else:
+            self._check_layout(layout)
+            if values is None:
+                if tensor is None:
+                    raise ValueError("values or tensor is required when layout is provided")
+                values = layout.compact(tensor)
+            if values.shape[-1] != layout.dim:
+                raise ValueError(f"compact values last dimension must be {layout.dim}, got {values.shape[-1]}")
+            self._tensor = None
+            self.values = values
 
     @classmethod
     def from_vectors(cls, algebra: AlgebraLike, vectors: torch.Tensor) -> Multivector:
@@ -47,7 +72,57 @@ class Multivector:
         return cls(algebra, t)
 
     def __repr__(self):
-        return f"Multivector(shape={self.tensor.shape}, algebra=Cl({self.algebra.p},{self.algebra.q},{self.algebra.r}))"
+        storage = "compact" if self.is_compact else "dense"
+        return (
+            f"Multivector(shape={self.tensor.shape}, storage={storage}, "
+            f"algebra=Cl({self.algebra.p},{self.algebra.q},{self.algebra.r}))"
+        )
+
+    @property
+    def tensor(self) -> torch.Tensor:
+        """Dense coefficient tensor.
+
+        This property remains dense for backward compatibility. Performance
+        paths that operate on compact data should use ``values`` directly.
+        """
+        if self._tensor is not None:
+            return self._tensor
+        return self.layout.dense(self.values)
+
+    @tensor.setter
+    def tensor(self, value: torch.Tensor) -> None:
+        self._tensor = value
+        self.values = None
+        self.layout = None
+
+    @property
+    def is_compact(self) -> bool:
+        """Whether this multivector stores compact grade lanes."""
+        return self.layout is not None
+
+    def dense(self) -> Multivector:
+        """Return a dense-storage multivector."""
+        return Multivector(self.algebra, self.tensor)
+
+    def compact(self, grades) -> Multivector:
+        """Return a compact-storage multivector containing ``grades``."""
+        layout = self.algebra.translator.layout(grades)
+        return self.with_layout(layout)
+
+    def with_layout(self, layout: GradeLayout) -> Multivector:
+        """Return this multivector represented by ``layout``."""
+        self._check_layout(layout)
+        if self.layout == layout:
+            return Multivector(self.algebra, values=self.values, layout=layout)
+        return Multivector(self.algebra, values=layout.compact(self.tensor), layout=layout)
+
+    def _check_layout(self, layout: GradeLayout) -> None:
+        spec = layout.spec
+        if (spec.p, spec.q, spec.r) != (self.algebra.p, self.algebra.q, self.algebra.r):
+            raise ValueError(
+                f"Layout mismatch: Cl({spec.p},{spec.q},{spec.r}) vs "
+                f"Cl({self.algebra.p},{self.algebra.q},{self.algebra.r})"
+            )
 
     def _check_algebra(self, other: Multivector) -> None:
         s, o = self.algebra, other.algebra
@@ -56,6 +131,9 @@ class Multivector:
 
     def _wrap(self, tensor: torch.Tensor) -> Multivector:
         return Multivector(self.algebra, tensor)
+
+    def _wrap_compact(self, values: torch.Tensor, layout: GradeLayout) -> Multivector:
+        return Multivector(self.algebra, values=values, layout=layout)
 
     def __add__(self, other):
         if isinstance(other, Multivector):
@@ -154,6 +232,37 @@ class Multivector:
         self._check_algebra(other)
         return self._wrap(self.algebra.geometric_product(self.tensor, other.tensor))
 
+    def projected_product(
+        self,
+        other: Multivector,
+        *,
+        output_grades=None,
+        op: str = "gp",
+        left_grades=None,
+        right_grades=None,
+    ) -> Multivector:
+        """Grade-projected product using compact layouts when available."""
+        self._check_algebra(other)
+        left_layout = self.layout if self.is_compact else None
+        right_layout = other.layout if other.is_compact else None
+        left_grades = left_grades if left_grades is not None else _layout_grades(left_layout)
+        right_grades = right_grades if right_grades is not None else _layout_grades(right_layout)
+
+        values, layout = self.algebra.projected_product(
+            self.values if self.is_compact else self.tensor,
+            other.values if other.is_compact else other.tensor,
+            left_grades=left_grades,
+            right_grades=right_grades,
+            output_grades=output_grades,
+            left_layout=left_layout,
+            right_layout=right_layout,
+            op=op,
+            left_compact=self.is_compact,
+            right_compact=other.is_compact,
+            return_layout=True,
+        )
+        return self._wrap_compact(values, layout)
+
     def wedge(self, other: Multivector) -> Multivector:
         """Wedge (outer) product (same as ``self ^ other``)."""
         self._check_algebra(other)
@@ -186,7 +295,7 @@ class Multivector:
 
     def norm(self) -> torch.Tensor:
         """Induced metric norm (returns scalar tensor)."""
-        from core.metric import induced_norm
+        from core.runtime.metric import induced_norm
 
         return induced_norm(self.algebra, self.tensor)
 
@@ -239,19 +348,28 @@ class Multivector:
 
     def to(self, *args, **kwargs) -> Multivector:
         """Move/cast the underlying tensor (same API as ``torch.Tensor.to``)."""
+        if self.is_compact:
+            return Multivector(self.algebra, values=self.values.to(*args, **kwargs), layout=self.layout)
         return self._wrap(self.tensor.to(*args, **kwargs))
 
     def detach(self) -> Multivector:
         """Detach from computation graph."""
+        if self.is_compact:
+            return Multivector(self.algebra, values=self.values.detach(), layout=self.layout)
         return self._wrap(self.tensor.detach())
 
     def clone(self) -> Multivector:
         """Clone the underlying tensor."""
+        if self.is_compact:
+            return Multivector(self.algebra, values=self.values.clone(), layout=self.layout)
         return self._wrap(self.tensor.clone())
 
     def requires_grad_(self, requires_grad: bool = True) -> Multivector:
         """Set requires_grad in-place."""
-        self.tensor.requires_grad_(requires_grad)
+        if self.is_compact:
+            self.values.requires_grad_(requires_grad)
+        else:
+            self.tensor.requires_grad_(requires_grad)
         return self
 
     @property
@@ -260,8 +378,12 @@ class Multivector:
 
     @property
     def device(self) -> torch.device:
-        return self.tensor.device
+        return self.values.device if self.is_compact else self.tensor.device
 
     @property
     def dtype(self) -> torch.dtype:
-        return self.tensor.dtype
+        return self.values.dtype if self.is_compact else self.tensor.dtype
+
+
+def _layout_grades(layout: GradeLayout) -> tuple[int, ...] | None:
+    return None if layout is None else layout.grades

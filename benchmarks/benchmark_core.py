@@ -55,11 +55,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from core.config import DEFAULT_PARTITION_LEAF_N, PartitionConfig, make_algebra
-from core.decomposition import ExpPolicy, compiled_safe_decomposed_exp  # noqa: E402
-from core.device import FLOAT_DTYPES, optional_dtype, resolve_device
-from core.device import dtype_name as _format_dtype_name
-from core.module import AlgebraLike
+from core.config import make_algebra
+from core.runtime.decomposition import ExpPolicy, compiled_safe_decomposed_exp  # noqa: E402
+from core.foundation.device import FLOAT_DTYPES, resolve_device
+from core.foundation.device import dtype_name as _format_dtype_name
+from core.foundation.module import AlgebraLike
 
 DTYPES: dict[str, torch.dtype] = FLOAT_DTYPES
 
@@ -182,19 +182,12 @@ def setup_algebra(
     args: argparse.Namespace | None = None,
 ) -> AlgebraLike:
     """Construct benchmark algebras through the shared core factory."""
-    partition = PartitionConfig(
-        leaf_n=getattr(args, "partition_leaf_n", DEFAULT_PARTITION_LEAF_N),
-        product_chunk_size=getattr(args, "partition_product_chunk_size", None),
-        tree=getattr(args, "partition_tree", None),
-        accumulation_dtype=optional_dtype(getattr(args, "partition_accumulation_dtype", None)),
-    )
     return make_algebra(
         p=p,
         q=q,
         r=r,
         kernel=getattr(args, "algebra_kernel", "auto"),
-        partition_threshold=getattr(args, "partition_threshold", 8),
-        partition=partition,
+        dense_threshold=getattr(args, "dense_threshold", 8),
         device=device,
         dtype=dtype,
         exp_policy=exp_policy,
@@ -3491,12 +3484,8 @@ def _collect_runtime_metadata(device: str) -> dict[str, Any]:
 def make_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Benchmark the Versor core package.")
     parser.add_argument("--device", default="auto", help="cpu, cuda, mps, or auto")
-    parser.add_argument("--algebra-kernel", default="auto", choices=("auto", "dense", "partitioned"))
-    parser.add_argument("--partition-threshold", type=int, default=8)
-    parser.add_argument("--partition-leaf-n", type=int, default=DEFAULT_PARTITION_LEAF_N)
-    parser.add_argument("--partition-product-chunk-size", type=int, default=None)
-    parser.add_argument("--partition-tree", default=None)
-    parser.add_argument("--partition-accumulation-dtype", default=None)
+    parser.add_argument("--algebra-kernel", default="auto", choices=("auto", "dense", "context"))
+    parser.add_argument("--dense-threshold", type=int, default=8)
     parser.add_argument("--out", default="benchmarks/results", help="artifact root")
     parser.add_argument("--sections", default="speed,backward,fusion,nonsimple,cumulative,convergence,stability")
     parser.add_argument("--n-values", type=_parse_int_csv, default=_parse_int_csv("2,3,4,5,6"))

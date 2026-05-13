@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers import MultiRotorLayer, RotorGadget, RotorLayer
 from optimizers.riemannian import (
     MANIFOLD_EUCLIDEAN,

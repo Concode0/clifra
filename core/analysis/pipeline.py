@@ -14,7 +14,7 @@ from typing import Optional
 import torch
 
 from core.config import make_algebra
-from core.module import AlgebraLike
+from core.foundation.module import AlgebraLike
 
 from ._types import AnalysisConfig, AnalysisReport, SamplingConfig
 from .commutator import CommutatorAnalyzer

@@ -1,0 +1,20 @@
+# Versor: Universal Geometric Algebra Neural Network
+# Copyright (C) 2026 Eunkyum Kim <nemonanconcode@gmail.com>
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+#
+
+"""Runtime algebra hosts and dense reference operations."""
+
+from .algebra import CliffordAlgebra
+from .context import AlgebraContext
+from .multivector import Multivector
+from .projected import ProjectedProductMixin
+
+__all__ = [
+    "AlgebraContext",
+    "CliffordAlgebra",
+    "Multivector",
+    "ProjectedProductMixin",
+]

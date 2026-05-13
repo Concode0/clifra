@@ -24,8 +24,8 @@ real sequence structure to attend over:
 import torch
 import torch.nn as nn
 
-from core.algebra import CliffordAlgebra
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
+from core.runtime.algebra import CliffordAlgebra
 from layers.adapters.embedding import RotaryBivectorPE
 from layers.adapters.mother import MotherEmbedding
 from layers.blocks.transformer import GeometricTransformerBlock

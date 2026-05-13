@@ -83,7 +83,7 @@ uv sync --extra all           # everything
 
 ```python
 import torch
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers.primitives.rotor import RotorLayer
 from layers.linear import CliffordLinear
 from functional.activation import GeometricGELU

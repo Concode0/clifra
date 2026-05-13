@@ -21,7 +21,7 @@ import torch.optim as optim
 from omegaconf import DictConfig
 
 from core.config import make_algebra_from_config
-from core.module import AlgebraLike
+from core.foundation.module import AlgebraLike
 from datalib.symbolic_regression import _fetch_pmlb_data, get_dataset_ids, get_sr_loaders, get_sr_raw_splits
 from log import get_logger
 from models.sr import SRGBN

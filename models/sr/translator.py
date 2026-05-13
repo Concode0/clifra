@@ -30,7 +30,7 @@ import numpy as np
 import sympy
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from models.sr.utils import LAMBDIFY_MODULES, make_lambdify_fn
 
 logger = logging.getLogger(__name__)

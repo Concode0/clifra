@@ -15,7 +15,7 @@ import torch.nn as nn
 
 @runtime_checkable
 class AlgebraLike(Protocol):
-    """Protocol implemented by dense and partitioned Clifford kernels."""
+    """Protocol implemented by dense kernels and planned algebra contexts."""
 
     p: int
     q: int

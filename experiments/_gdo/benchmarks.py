@@ -31,7 +31,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
 from experiments._lib import setup_algebra
 from functional.activation import GeometricGELU
 from layers import (

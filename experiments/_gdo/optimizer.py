@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from optimizers.riemannian import (
     MANIFOLD_EUCLIDEAN,
     MANIFOLD_SPHERE,

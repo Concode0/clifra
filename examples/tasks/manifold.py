@@ -10,7 +10,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from core.config import make_algebra_from_config
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
 from core.visualizer import GeneralVisualizer
 from examples.datasets.synthetic import Figure8Dataset
 from functional.loss import SubspaceLoss

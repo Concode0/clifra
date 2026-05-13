@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers import MultiRotorLayer, RotorLayer
 from optimizers.riemannian import ExponentialSGD, RiemannianAdam
 

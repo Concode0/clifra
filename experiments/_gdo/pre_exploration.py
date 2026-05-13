@@ -42,7 +42,7 @@ from core.analysis._types import (
     SpectralResult,
     SymmetryResult,
 )
-from core.module import AlgebraLike
+from core.foundation.module import AlgebraLike
 from experiments._lib import setup_algebra
 
 from .config import GDOConfig

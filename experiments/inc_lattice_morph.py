@@ -48,9 +48,9 @@ import torch.nn as nn
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
-from core.decomposition import ExpPolicy
-from core.metric import induced_norm
-from core.module import AlgebraLike, CliffordModule
+from core.foundation.module import AlgebraLike, CliffordModule
+from core.runtime.decomposition import ExpPolicy
+from core.runtime.metric import induced_norm
 from experiments._lib import (
     build_visualization_metadata,
     ensure_output_dir,
@@ -212,7 +212,7 @@ class MorphStage(CliffordModule):
     When ``compound_blades >= 2`` and ``n >= 4`` the global and twist rotors
     learn a *sum* of independent simple bivectors per slot, producing
     non-simple bivectors that are handled by ``algebra.exp()`` via the active
-    :class:`~core.decomposition.ExpPolicy`.
+    :class:`~core.runtime.decomposition.ExpPolicy`.
     """
 
     def __init__(self, algebra: AlgebraLike, n: int, compound_blades: int = 1):

@@ -40,9 +40,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from core.config import DEFAULT_PARTITION_LEAF_N, PartitionConfig, make_algebra
-from core.metric import hermitian_grade_spectrum
-from core.module import AlgebraLike
+from core.config import make_algebra
+from core.foundation.module import AlgebraLike
+from core.runtime.metric import hermitian_grade_spectrum
 from functional.activation import GeometricGELU
 from layers import CliffordLayerNorm, CliffordLinear, RotorLayer
 
@@ -76,28 +76,17 @@ def setup_algebra(
     *,
     dtype: torch.dtype | str = torch.float32,
     kernel: str = "auto",
-    partition_threshold: int = 8,
-    leaf_n: int = DEFAULT_PARTITION_LEAF_N,
-    product_chunk_size: Optional[int] = None,
-    partition_tree: Optional[str] = None,
-    accumulation_dtype: torch.dtype | str | None = None,
+    dense_threshold: int = 8,
     exp_policy: str = "balanced",
     fixed_iterations: Optional[int] = None,
 ) -> AlgebraLike:
     """Construct the shared experiment algebra through the core factory."""
-    partition = PartitionConfig(
-        leaf_n=leaf_n,
-        product_chunk_size=product_chunk_size,
-        tree=partition_tree,
-        accumulation_dtype=accumulation_dtype,
-    )
     return make_algebra(
         p=p,
         q=q,
         r=r,
         kernel=kernel,
-        partition_threshold=partition_threshold,
-        partition=partition,
+        dense_threshold=dense_threshold,
         device=device,
         dtype=dtype,
         exp_policy=exp_policy,

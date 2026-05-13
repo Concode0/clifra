@@ -11,17 +11,37 @@ The ``core.analysis`` sub-package (``MetricSearch``, ``GeodesicFlow``,
 until first access, keeping ``import core`` lightweight.
 """
 
-from .algebra import CliffordAlgebra
-from .config import DEFAULT_PARTITION_LEAF_N, AlgebraConfig, PartitionConfig, make_algebra, make_algebra_from_config
-from .decomposition import (
+from .config import AlgebraConfig, make_algebra, make_algebra_from_config
+from .foundation.basis import (
+    GradeProductOp,
+    basis_indices_for_grades,
+    basis_product,
+    expand_output_grades,
+    geometric_product_output_grades,
+    normalize_grades,
+    operation_coefficient,
+    reverse_sign,
+)
+from .foundation.device import DeviceConfig, dtype_name, optional_dtype, resolve_device, resolve_dtype
+from .foundation.layout import AlgebraSpec, GradeLayout
+from .foundation.module import AlgebraLike, CliffordModule
+from .foundation.validation import check_channels, check_multivector
+from .planning.flow import GradeFlow
+from .planning.grade_plan import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
+from .planning.request import ProductRequest, build_product_request
+from .planning.translator import GradeTranslator
+from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
+from .planning.unary import GradeUnaryExecutor, GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
+from .runtime.algebra import CliffordAlgebra
+from .runtime.context import AlgebraContext
+from .runtime.decomposition import (
     ExpPolicy,
     compiled_safe_decomposed_exp,
     differentiable_invariant_decomposition,
     exp_simple_bivector,
     ga_power_iteration,
 )
-from .device import DeviceConfig, dtype_name, optional_dtype, resolve_device, resolve_dtype
-from .metric import (
+from .runtime.metric import (
     clifford_conjugate,
     geometric_distance,
     grade_hermitian_norm,
@@ -37,22 +57,19 @@ from .metric import (
     signature_norm_squared,
     signature_trace_form,
 )
-from .module import AlgebraLike, CliffordModule
-from .multivector import Multivector
-from .partitioned_algebra import MAX_PARTITIONED_DIMENSIONS, PartitionedCliffordAlgebra
-from .validation import check_channels, check_multivector
+from .runtime.multivector import Multivector
 
 __all__ = [
     # algebra
+    "AlgebraContext",
     "CliffordAlgebra",
     "AlgebraConfig",
     "AlgebraLike",
     "CliffordModule",
     "Multivector",
-    "DEFAULT_PARTITION_LEAF_N",
-    "MAX_PARTITIONED_DIMENSIONS",
-    "PartitionConfig",
-    "PartitionedCliffordAlgebra",
+    "AlgebraSpec",
+    "GradeLayout",
+    "GradeTranslator",
     "make_algebra",
     "make_algebra_from_config",
     # device / validation
@@ -84,6 +101,29 @@ __all__ = [
     "differentiable_invariant_decomposition",
     "exp_simple_bivector",
     "compiled_safe_decomposed_exp",
+    # static sparse grade planning
+    "GradeProductOp",
+    "GradeProductExecutor",
+    "GradeProductPlan",
+    "GradePathNode",
+    "GradePlanTree",
+    "GradeFlow",
+    "ProductRequest",
+    "GradeUnaryExecutor",
+    "GradeUnaryOp",
+    "GradeUnaryPlan",
+    "UnaryRequest",
+    "basis_indices_for_grades",
+    "basis_product",
+    "build_grade_product_plan",
+    "build_grade_plan_tree",
+    "build_product_request",
+    "build_unary_request",
+    "expand_output_grades",
+    "geometric_product_output_grades",
+    "normalize_grades",
+    "operation_coefficient",
+    "reverse_sign",
     # analysis (lazy)
     "MetricSearch",
     "GeodesicFlow",

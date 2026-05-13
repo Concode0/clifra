@@ -17,7 +17,7 @@ import torch
 
 pytestmark = pytest.mark.unit
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 DEVICE = "cpu"
 
@@ -234,7 +234,7 @@ class TestAdaptiveExp:
         B[0, bv_indices[0].item()] = 0.3  # e12
         B[0, bv_indices[5].item()] = 0.4  # e34
 
-        from core.decomposition import ExpPolicy
+        from core.runtime.decomposition import ExpPolicy
 
         alg.exp_policy = ExpPolicy.PRECISE
         with torch.no_grad():

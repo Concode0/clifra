@@ -12,7 +12,7 @@ Tests cover:
 import pytest
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers import CliffordLinear, RotorGadget
 
 pytestmark = pytest.mark.unit
@@ -286,7 +286,7 @@ class TestExpPolicy:
 
     def test_with_exact_policy(self, algebra_3d):
         """Test layer with EXACT exp policy."""
-        from core.decomposition import ExpPolicy
+        from core.runtime.decomposition import ExpPolicy
 
         algebra_3d.exp_policy = ExpPolicy.PRECISE
 
@@ -305,7 +305,7 @@ class TestExpPolicy:
 
     def test_policy_fast_vs_exact(self, algebra_3d):
         """Compare FAST and EXACT policies (n=3: should match)."""
-        from core.decomposition import ExpPolicy
+        from core.runtime.decomposition import ExpPolicy
 
         torch.manual_seed(42)
         layer_a = RotorGadget(

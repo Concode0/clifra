@@ -16,7 +16,7 @@ from typing import Dict
 
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 from ._types import CONSTANTS
 

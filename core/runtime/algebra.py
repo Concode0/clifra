@@ -17,10 +17,11 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from core.validation import check_multivector
+from core.foundation.validation import check_multivector
+from core.runtime.projected import ProjectedProductMixin
 
 
-class CliffordAlgebra(nn.Module):
+class CliffordAlgebra(ProjectedProductMixin, nn.Module):
     """Differentiable Clifford algebra kernel with memory-optimized blocked accumulation.
 
     Extends ``nn.Module`` so that all Cayley tables are registered as
@@ -50,6 +51,7 @@ class CliffordAlgebra(nn.Module):
         dtype: torch.dtype = torch.float32,
         exp_policy: str = "balanced",
         fixed_iterations: Optional[int] = None,
+        allow_large_dense: bool = False,
     ):
         """Initialize the algebra and cache the Cayley table.
 
@@ -64,11 +66,11 @@ class CliffordAlgebra(nn.Module):
                 precision (e.g. AMP on CUDA bfloat16 mode).
             exp_policy (str or ExpPolicy, optional): Bivector exp policy.
                 ``'balanced'`` (default) or ``'precise'``.
-                See :class:`core.decomposition.ExpPolicy`.
+                See :class:`core.runtime.decomposition.ExpPolicy`.
             fixed_iterations (int, optional): Power-iteration step count for
                 the compiled-safe decomposed exp path (used when n>=4).
                 ``None`` (default) auto-derives from ``(exp_policy, dtype, n)``
-                via :func:`core.decomposition.resolve_fixed_iterations`,
+                via :func:`core.runtime.decomposition.resolve_fixed_iterations`,
                 pinned statically at init.
         """
         super().__init__()
@@ -76,7 +78,11 @@ class CliffordAlgebra(nn.Module):
         assert p >= 0, f"p must be non-negative, got {p}"
         assert q >= 0, f"q must be non-negative, got {q}"
         assert r >= 0, f"r must be non-negative, got {r}"
-        assert p + q + r <= 12, f"p + q + r must be <= 12, got {p + q + r}"
+        max_dense_n = 12 if allow_large_dense else 8
+        assert p + q + r <= max_dense_n, (
+            f"p + q + r must be <= {max_dense_n} for dense CliffordAlgebra, got {p + q + r}. "
+            "Use make_algebra(..., kernel='auto') for AlgebraContext or kernel='dense' to explicitly allow Cl9-Cl12."
+        )
 
         self.p, self.q, self.r = p, q, r
         self.n = p + q + r
@@ -91,7 +97,7 @@ class CliffordAlgebra(nn.Module):
             self._exp_regime = "mixed"
 
         # Exp policy: controls decomposition iteration budget
-        from core.decomposition import ExpPolicy, resolve_fixed_iterations
+        from core.runtime.decomposition import ExpPolicy, resolve_fixed_iterations
 
         self._exp_policy = exp_policy if isinstance(exp_policy, ExpPolicy) else ExpPolicy(exp_policy)
 
@@ -163,6 +169,10 @@ class CliffordAlgebra(nn.Module):
         self.eps: float = float(_finfo.eps)
         self.eps_sq: float = float(_finfo.eps**2)
 
+        from core.planning.translator import GradeTranslator
+
+        self.translator = GradeTranslator(self)
+
     @property
     def device(self):
         """Return the device of the algebra tables."""
@@ -202,7 +212,7 @@ class CliffordAlgebra(nn.Module):
 
     @exp_policy.setter
     def exp_policy(self, value):
-        from core.decomposition import ExpPolicy, resolve_fixed_iterations
+        from core.runtime.decomposition import ExpPolicy, resolve_fixed_iterations
 
         self._exp_policy = value if isinstance(value, ExpPolicy) else ExpPolicy(value)
         self._exp_fixed_iterations = resolve_fixed_iterations(self._exp_policy, self.dtype, self.n)
@@ -1057,7 +1067,7 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Rotor exp(B) [..., dim].
         """
-        from core.decomposition import compiled_safe_decomposed_exp
+        from core.runtime.decomposition import compiled_safe_decomposed_exp
 
         R_closed = self._exp_bivector_closed(B)
         R_decomposed = compiled_safe_decomposed_exp(self, B, fixed_iterations=self._exp_fixed_iterations)

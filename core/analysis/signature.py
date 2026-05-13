@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 
 from core.config import make_algebra
-from core.module import AlgebraLike
+from core.foundation.module import AlgebraLike
 from layers import BladeSelector, CliffordLinear, RotorLayer
 
 from ._types import CONSTANTS, DimensionResult, SamplingConfig, SignatureResult

@@ -3,10 +3,10 @@
 import pytest
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 pytestmark = pytest.mark.unit
-from core.metric import (
+from core.runtime.metric import (
     _hermitian_signs,
     clifford_conjugate,
     geometric_distance,

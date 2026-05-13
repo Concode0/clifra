@@ -17,8 +17,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from core.algebra import CliffordAlgebra
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
+from core.runtime.algebra import CliffordAlgebra
 from functional.activation import GeometricGELU, GeometricSquare
 from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, RotorLayer
 

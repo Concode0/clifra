@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from core.config import make_algebra
-from core.module import AlgebraLike
+from core.foundation.module import AlgebraLike
 from models.sr.utils import safe_svd, standardize, subsample
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class VariableGroup:
         var_indices: Indices into original X columns.
         var_names: Human-readable variable names.
         signature: (p, q, r) from MetricSearch.
-        algebra: Shared dense or partitioned algebra for this group.
+        algebra: Shared dense algebra or planning context for this group.
         svd_Vt: SVD right-singular vectors for this group (or None).
         mother_offset: Bit offset in mother algebra basis.
         internal_edges: VariableEdge list within this group.

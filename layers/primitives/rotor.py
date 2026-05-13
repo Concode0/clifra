@@ -8,9 +8,9 @@
 import torch
 import torch.nn as nn
 
-from core.algebra import CliffordAlgebra
-from core.module import CliffordModule
-from core.validation import check_channels, check_multivector
+from core.foundation.module import CliffordModule
+from core.foundation.validation import check_channels, check_multivector
+from core.runtime.algebra import CliffordAlgebra
 
 
 class RotorLayer(CliffordModule):
@@ -23,7 +23,7 @@ class RotorLayer(CliffordModule):
     Preserves origin. For grade=2, also preserves lengths and angles (isometry).
 
     The exp strategy (closed-form vs decomposition) is controlled by
-    ``algebra.exp_policy`` -- see :class:`core.decomposition.ExpPolicy`.
+    ``algebra.exp_policy`` -- see :class:`core.runtime.decomposition.ExpPolicy`.
 
     Attributes:
         channels (int): Number of versors.

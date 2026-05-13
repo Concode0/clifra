@@ -18,7 +18,7 @@ from typing import Dict, Optional
 import torch
 
 from core.config import make_algebra
-from core.module import AlgebraLike
+from core.foundation.module import AlgebraLike
 
 from ._types import CONSTANTS, DimensionResult
 

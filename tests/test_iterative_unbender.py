@@ -11,7 +11,7 @@ import torch
 
 pytestmark = pytest.mark.slow
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from models.sr.unbender import (
     IterativeUnbender,
     OrthogonalEliminationResult,

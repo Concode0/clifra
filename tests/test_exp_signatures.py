@@ -11,7 +11,7 @@ import math
 import pytest
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 pytestmark = pytest.mark.unit
 
@@ -443,7 +443,7 @@ class TestExpDecomposedGradient:
 
     def test_decomposed_gradient_cl40(self):
         """EXACT policy should produce finite gradients in Cl(4,0)."""
-        from core.decomposition import ExpPolicy
+        from core.runtime.decomposition import ExpPolicy
 
         alg = CliffordAlgebra(4, 0, device=DEVICE)
         alg.exp_policy = ExpPolicy.PRECISE
@@ -461,7 +461,7 @@ class TestExpDecomposedGradient:
 
     def test_decomposed_gradient_cl15(self):
         """EXACT policy should produce finite gradients in Cl(1,5)."""
-        from core.decomposition import ExpPolicy
+        from core.runtime.decomposition import ExpPolicy
 
         alg = CliffordAlgebra(1, 5, device=DEVICE)
         alg.exp_policy = ExpPolicy.PRECISE
@@ -481,7 +481,7 @@ class TestExpDecomposedGradient:
 
     def test_decomposed_matches_inference(self):
         """EXACT exp with grad should approximate inference result."""
-        from core.decomposition import ExpPolicy
+        from core.runtime.decomposition import ExpPolicy
 
         alg = CliffordAlgebra(4, 0, device=DEVICE)
         alg.exp_policy = ExpPolicy.PRECISE
@@ -596,7 +596,7 @@ class TestDecompositionConvergence:
 
     def test_simple_bivector_converges_fast(self):
         """A simple bivector should decompose into 1 component."""
-        from core.decomposition import differentiable_invariant_decomposition
+        from core.runtime.decomposition import differentiable_invariant_decomposition
 
         alg = CliffordAlgebra(4, 0, device=DEVICE)
         bv_mask = alg.grade_masks[2]
@@ -615,7 +615,7 @@ class TestDecompositionConvergence:
 
     def test_non_simple_needs_two_components(self):
         """e12 + e34 in Cl(4,0) should decompose into 2 components."""
-        from core.decomposition import differentiable_invariant_decomposition
+        from core.runtime.decomposition import differentiable_invariant_decomposition
 
         alg = CliffordAlgebra(4, 0, device=DEVICE)
         bv_mask = alg.grade_masks[2]
@@ -633,7 +633,7 @@ class TestDecompositionConvergence:
 
     def test_residual_check_limits_components(self):
         """With tight threshold, simple bivector should yield exactly 1 component."""
-        from core.decomposition import differentiable_invariant_decomposition
+        from core.runtime.decomposition import differentiable_invariant_decomposition
 
         alg = CliffordAlgebra(4, 0, device=DEVICE)
         bv_mask = alg.grade_masks[2]

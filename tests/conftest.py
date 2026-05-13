@@ -1,8 +1,6 @@
 import pytest
-import torch
 
-from core.algebra import CliffordAlgebra
-from core.config import PartitionConfig, make_algebra
+from core.runtime.algebra import CliffordAlgebra
 
 DEVICE = "cpu"
 
@@ -36,60 +34,6 @@ def algebra_minkowski():
 @pytest.fixture
 def algebra_conformal():
     return CliffordAlgebra(p=4, q=1, device=DEVICE)
-
-
-# -- High-dimensional partitioned algebras ------------------------------
-@pytest.fixture
-def partitioned_algebra_8d():
-    return make_algebra(
-        p=8,
-        q=0,
-        r=0,
-        kernel="partitioned",
-        device=DEVICE,
-        dtype=torch.float64,
-        partition=PartitionConfig(leaf_n=6, product_chunk_size=32),
-    )
-
-
-@pytest.fixture
-def partitioned_algebra_12d():
-    return make_algebra(
-        p=12,
-        q=0,
-        r=0,
-        kernel="partitioned",
-        device=DEVICE,
-        dtype=torch.float64,
-        partition=PartitionConfig(leaf_n=6, product_chunk_size=64),
-    )
-
-
-@pytest.fixture
-def partitioned_algebra_12d_mixed():
-    return make_algebra(
-        p=8,
-        q=3,
-        r=1,
-        kernel="partitioned",
-        device=DEVICE,
-        dtype=torch.float64,
-        partition=PartitionConfig(leaf_n=6, product_chunk_size=32),
-    )
-
-
-@pytest.fixture
-def partitioned_algebra_16d():
-    return make_algebra(
-        p=10,
-        q=4,
-        r=2,
-        kernel="partitioned",
-        device=DEVICE,
-        dtype=torch.float32,
-        partition=PartitionConfig(leaf_n=6, product_chunk_size=8),
-    )
-
 
 # -- Module-scoped (used by test_geodesic.py - exact name match) ----------
 @pytest.fixture(scope="module")

@@ -15,9 +15,9 @@ from typing import List, Optional
 
 import torch
 
-from core.algebra import CliffordAlgebra
-from core.decomposition import differentiable_invariant_decomposition
-from core.metric import hermitian_grade_spectrum
+from core.runtime.algebra import CliffordAlgebra
+from core.runtime.decomposition import differentiable_invariant_decomposition
+from core.runtime.metric import hermitian_grade_spectrum
 
 from ._types import CONSTANTS, SpectralResult
 

@@ -3,7 +3,7 @@
 Organized into Primitives, Canonical Blocks, and Task-Specific Adapters.
 """
 
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
 
 from .adapters.embedding import MultivectorEmbedding, RotaryBivectorPE
 from .adapters.mother import EntropyGatedAttention, MotherEmbedding, PhaseShiftHead
