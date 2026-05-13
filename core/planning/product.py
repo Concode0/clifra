@@ -20,7 +20,14 @@ from typing import Iterable, Optional
 import torch
 import torch.nn as nn
 
-from core.foundation.basis import GradeProductOp, expand_output_grades, normalize_grades, operation_coefficient
+from core.foundation.basis import (
+    GradeProductOp,
+    basis_index_tuple_for_grades,
+    basis_indices_tensor,
+    expand_output_grades,
+    normalize_grades,
+    operation_coefficient,
+)
 from core.foundation.layout import AlgebraSpec, GradeLayout
 from core.planning.layouts import ProductRequest
 from core.planning.tree import GradePlanTree, build_grade_plan_tree
@@ -170,13 +177,9 @@ def build_grade_product_plan_from_tree(
     right_grade_tuple = tree.right_grades
     output_grade_tuple = tree.output_grades
 
-    left_basis_by_grade = {
-        grade: [index for index in range(1 << n) if index.bit_count() == grade] for grade in left_grade_tuple
-    }
-    right_basis_by_grade = {
-        grade: [index for index in range(1 << n) if index.bit_count() == grade] for grade in right_grade_tuple
-    }
-    active_outputs = [index for index in range(1 << n) if index.bit_count() in set(output_grade_tuple)]
+    left_basis_by_grade = {grade: basis_index_tuple_for_grades(n, (grade,)) for grade in left_grade_tuple}
+    right_basis_by_grade = {grade: basis_index_tuple_for_grades(n, (grade,)) for grade in right_grade_tuple}
+    active_outputs = basis_index_tuple_for_grades(n, output_grade_tuple)
     output_position_by_index = {index: position for position, index in enumerate(active_outputs)}
 
     plan_left: list[int] = []
@@ -209,12 +212,12 @@ def build_grade_product_plan_from_tree(
         left_grades=left_grade_tuple,
         right_grades=right_grade_tuple,
         output_grades=output_grade_tuple,
-        left_indices=torch.tensor(plan_left, dtype=torch.long, device=device),
-        right_indices=torch.tensor(plan_right, dtype=torch.long, device=device),
-        output_indices=torch.tensor(plan_output, dtype=torch.long, device=device),
+        left_indices=basis_indices_tensor(plan_left, n=n, role="left product basis indices", device=device),
+        right_indices=basis_indices_tensor(plan_right, n=n, role="right product basis indices", device=device),
+        output_indices=basis_indices_tensor(plan_output, n=n, role="output product basis indices", device=device),
         output_positions=torch.tensor(plan_positions, dtype=torch.long, device=device),
         coefficients=torch.tensor(plan_coefficients, dtype=dtype, device=device),
-        active_output_indices=torch.tensor(active_outputs, dtype=torch.long, device=device),
+        active_output_indices=basis_indices_tensor(active_outputs, n=n, role="active output basis indices", device=device),
         tree=tree,
     )
 

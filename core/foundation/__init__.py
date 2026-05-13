@@ -9,6 +9,7 @@
 
 from .basis import (
     GradeProductOp,
+    basis_count_for_grades,
     basis_index_tuple_for_grades,
     basis_indices_for_grades,
     basis_product,
@@ -30,6 +31,7 @@ __all__ = [
     "DeviceConfig",
     "GradeLayout",
     "GradeProductOp",
+    "basis_count_for_grades",
     "basis_index_tuple_for_grades",
     "basis_indices_for_grades",
     "basis_product",

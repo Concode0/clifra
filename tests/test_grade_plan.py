@@ -2,7 +2,13 @@ import pytest
 import torch
 
 from core.config import make_algebra
-from core.foundation.basis import basis_indices_for_grades, expand_output_grades, geometric_product_output_grades
+from core.foundation.basis import (
+    basis_count_for_grades,
+    basis_index_tuple_for_grades,
+    basis_indices_for_grades,
+    expand_output_grades,
+    geometric_product_output_grades,
+)
 from core.foundation.layout import AlgebraSpec
 from core.planning.flow import GradeFlow
 from core.planning.layouts import build_product_request
@@ -44,6 +50,21 @@ def test_grade_expansion_for_common_high_dim_paths():
     assert expand_output_grades((0, 2), (1,), 16, op="gp") == (1, 3)
     assert expand_output_grades((1,), (1,), 16, op="wedge") == (2,)
     assert expand_output_grades((1,), (1,), 16, op="gp", project_grades=(0,)) == (0,)
+
+
+def test_basis_indices_for_grades_are_combinatorial_and_high_dimensional():
+    assert basis_index_tuple_for_grades(4, (1, 2)) == tuple(
+        index for index in range(1 << 4) if index.bit_count() in {1, 2}
+    )
+    high = basis_index_tuple_for_grades(32, (1, 2))
+    assert len(high) == basis_count_for_grades(32, (1, 2))
+    assert high[0] == 1
+    assert high[-1] == (1 << 31) | (1 << 30)
+
+
+def test_basis_tensorization_reports_int64_bitmask_boundary():
+    with pytest.raises(ValueError, match="torch.long basis bitmasks"):
+        basis_indices_for_grades(64, (1,))
 
 
 def test_grade_plan_tree_groups_routes_without_runtime_partition_backend():
@@ -586,6 +607,74 @@ def test_context_static_product_cost_limits_raise_before_executor_build():
             left_layout=layout,
             right_layout=layout,
             compact_output=True,
+        )
+
+
+def test_direct_product_executor_obeys_static_pair_limits():
+    limits = PlanningLimits(warn_lanes=512, max_lanes=512, warn_pairs=512, max_pairs=64)
+    algebra = make_algebra(16, 0, 0, device=DEVICE, dtype=torch.float32, planning_limits=limits)
+
+    with pytest.raises(ValueError, match="basis interactions"):
+        algebra.planner.product_executor(
+            op="gp",
+            left_grades=(1,),
+            right_grades=(1,),
+            output_grades=(0, 2),
+            dtype=torch.float32,
+            device=DEVICE,
+        )
+
+
+def test_context_static_layout_cost_limit_raises_before_basis_materialization():
+    limits = PlanningLimits(warn_lanes=32, max_lanes=64, warn_pairs=512, max_pairs=1024)
+    algebra = make_algebra(32, 0, 0, device=DEVICE, dtype=torch.float32, planning_limits=limits)
+
+    with pytest.raises(ValueError, match="active lanes"):
+        algebra.layout((1, 2))
+
+
+def test_high_dimensional_vector_product_plan_avoids_full_basis_enumeration():
+    algebra = make_algebra(
+        32,
+        0,
+        0,
+        device=DEVICE,
+        dtype=torch.float32,
+        planning_limits=PlanningLimits(max_lanes=4096, max_pairs=100_000),
+    )
+    vector_layout = algebra.layout((1,))
+    executor = algebra.planner.product_executor(
+        op="gp",
+        left_grades=(1,),
+        right_grades=(1,),
+        output_grades=(0, 2),
+        dtype=torch.float32,
+        device=DEVICE,
+    )
+
+    assert vector_layout.dim == 32
+    assert executor.output_dim == 1 + 32 * 31 // 2
+    assert executor.pair_count == 32 * 32
+
+
+def test_high_dimensional_product_plan_reports_int64_bitmask_boundary():
+    algebra = make_algebra(
+        64,
+        0,
+        0,
+        device=DEVICE,
+        dtype=torch.float32,
+        planning_limits=PlanningLimits(max_lanes=4096, max_pairs=100_000),
+    )
+
+    with pytest.raises(ValueError, match="Current Torch-backed executors support bitmask tensorization up to n=63"):
+        algebra.planner.product_executor(
+            op="gp",
+            left_grades=(1,),
+            right_grades=(1,),
+            output_grades=(0, 2),
+            dtype=torch.float32,
+            device=DEVICE,
         )
 
 

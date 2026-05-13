@@ -14,7 +14,7 @@ from typing import Iterable
 
 import torch
 
-from core.foundation.basis import basis_index_tuple_for_grades, normalize_grades
+from core.foundation.basis import basis_index_tuple_for_grades, basis_indices_tensor, normalize_grades
 
 
 @dataclass(frozen=True)
@@ -83,7 +83,7 @@ class GradeLayout:
 
     def indices_tensor(self, *, device=None) -> torch.Tensor:
         """Return basis indices as a tensor on ``device``."""
-        return torch.tensor(self.basis_indices, dtype=torch.long, device=device)
+        return basis_indices_tensor(self.basis_indices, n=self.spec.n, role="layout basis indices", device=device)
 
     def convert(self, values: torch.Tensor, source: "GradeLayout") -> torch.Tensor:
         """Convert compact values from ``source`` into this layout.

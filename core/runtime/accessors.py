@@ -15,7 +15,12 @@ import torch
 
 from core.foundation.basis import normalize_grades, operation_coefficient, reverse_sign
 from core.foundation.layout import AlgebraSpec, GradeLayout
-from core.planning.policy import FULL_LAYOUT_MAX_N, validate_layout_cost, warn_full_layout_fallback
+from core.planning.policy import (
+    FULL_LAYOUT_MAX_N,
+    validate_grades_cost,
+    validate_layout_cost,
+    warn_full_layout_fallback,
+)
 
 
 def resolve_layout(
@@ -36,7 +41,7 @@ def resolve_layout(
         return validate_layout_cost(algebra, layout)
 
     if grades is not None:
-        return validate_layout_cost(algebra, spec.layout(grades))
+        return spec.layout(validate_grades_cost(algebra, spec, grades))
 
     if _is_multivector(mv) and getattr(mv, "layout", None) is not None:
         mv_layout = mv.layout
@@ -49,7 +54,7 @@ def resolve_layout(
         if cached is not None:
             _check_layout_spec(spec, cached, "default_layout")
             return validate_layout_cost(algebra, cached, role="default_layout")
-        resolved = spec.layout(default_grades)
+        resolved = spec.layout(validate_grades_cost(algebra, spec, default_grades, role="default_layout"))
         if hasattr(algebra, "_default_layout"):
             algebra._default_layout = resolved
         return validate_layout_cost(algebra, resolved, role="default_layout")
@@ -63,7 +68,7 @@ def resolve_layout(
         )
     if warn_full:
         warn_full_layout_fallback(algebra)
-    return validate_layout_cost(algebra, spec.layout(range(spec.n + 1)), role="full_layout")
+    return spec.layout(validate_grades_cost(algebra, spec, range(spec.n + 1), role="full_layout"))
 
 
 def default_layout(algebra) -> GradeLayout:

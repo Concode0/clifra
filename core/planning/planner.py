@@ -16,7 +16,9 @@ from core.foundation.layout import AlgebraSpec, GradeLayout
 from core.planning.layouts import ProductRequest, build_product_request, normalize_product_op
 from core.planning.policy import (
     full_layout_allowed,
+    validate_grades_cost,
     validate_layout_cost,
+    validate_product_grades_cost,
     validate_product_request,
     validate_unary_request,
     warn_full_layout_fallback,
@@ -48,7 +50,7 @@ class GradePlanner:
 
     def layout(self, grades):
         """Return the compact layout for ``grades``."""
-        return validate_layout_cost(self.algebra, self.spec.layout(grades))
+        return self.spec.layout(validate_grades_cost(self.algebra, self.spec, grades))
 
     def full_layout(self) -> GradeLayout:
         """Return the full dense basis layout."""
@@ -109,6 +111,14 @@ class GradePlanner:
         cache: bool = True,
     ):
         """Return a cached static executor for a projected bilinear product."""
+        left_grades, right_grades, output_grades = validate_product_grades_cost(
+            self.algebra,
+            self.spec,
+            op=op,
+            left_grades=left_grades,
+            right_grades=right_grades,
+            output_grades=output_grades,
+        )
         request = ProductRequest(
             spec=self.spec,
             op=normalize_product_op(op),
@@ -144,6 +154,15 @@ class GradePlanner:
             self._implicit_full_operand(right, grades=right_grades, layout=right_layout, compact=right_compact)
         ):
             warn_full_layout_fallback(self.algebra)
+        self._validate_product_grade_cost_before_layouts(
+            op=op,
+            left_grades=left_grades,
+            right_grades=right_grades,
+            output_grades=output_grades,
+            left_layout=left_layout,
+            right_layout=right_layout,
+            output_layout=output_layout,
+        )
         request = build_product_request(
             self.spec,
             left,
@@ -164,6 +183,7 @@ class GradePlanner:
 
     def product_executor_for_request(self, request: ProductRequest, *, cache: bool = True) -> GradeProductExecutor:
         """Return an executor for an already normalized product request."""
+        validate_product_request(self.algebra, request)
         key = request.cache_key
         executor = self._product_executors.get(key) if cache else None
         if executor is None:
@@ -288,3 +308,28 @@ class GradePlanner:
         if grades is not None or layout is not None:
             return grades
         return getattr(self.algebra, "_default_grades", None)
+
+    def _validate_product_grade_cost_before_layouts(
+        self,
+        *,
+        op: str,
+        left_grades,
+        right_grades,
+        output_grades,
+        left_layout: GradeLayout = None,
+        right_layout: GradeLayout = None,
+        output_layout: GradeLayout = None,
+    ) -> None:
+        left = left_layout.grades if left_layout is not None else left_grades
+        right = right_layout.grades if right_layout is not None else right_grades
+        if left is None or right is None:
+            return
+        output = output_layout.grades if output_layout is not None else output_grades
+        validate_product_grades_cost(
+            self.algebra,
+            self.spec,
+            op=op,
+            left_grades=left,
+            right_grades=right,
+            output_grades=output,
+        )

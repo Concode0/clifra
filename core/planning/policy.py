@@ -13,6 +13,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Optional
 
+from core.foundation.basis import basis_count_for_grades, expand_output_grades, normalize_grades
 from core.foundation.layout import AlgebraSpec, GradeLayout
 
 FULL_LAYOUT_WARN_N = 8
@@ -96,6 +97,58 @@ def validate_layout_cost(algebra, layout: GradeLayout, *, role: str = "layout") 
     )
     validate_plan_cost(algebra, cost)
     return layout
+
+
+def validate_grades_cost(algebra, spec: AlgebraSpec, grades, *, role: str = "layout") -> tuple[int, ...]:
+    """Validate a grade set before materializing its basis indices."""
+    normalized = normalize_grades(grades, spec.n)
+    cost = PlanCost(
+        spec=spec,
+        kind="layout",
+        op=role,
+        output_lanes=basis_count_for_grades(spec.n, normalized),
+        output_grades=normalized,
+    )
+    validate_plan_cost(algebra, cost)
+    return normalized
+
+
+def validate_product_grades_cost(
+    algebra,
+    spec: AlgebraSpec,
+    *,
+    op: str,
+    left_grades,
+    right_grades,
+    output_grades=None,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """Validate product grade sets before materializing layouts."""
+    left = normalize_grades(left_grades, spec.n, name="left_grades")
+    right = normalize_grades(right_grades, spec.n, name="right_grades")
+    output = (
+        expand_output_grades(left, right, spec.n, op=op)
+        if output_grades is None
+        else normalize_grades(output_grades, spec.n, name="output_grades")
+    )
+    left_lanes = basis_count_for_grades(spec.n, left)
+    right_lanes = basis_count_for_grades(spec.n, right)
+    output_lanes = basis_count_for_grades(spec.n, output)
+    validate_plan_cost(
+        algebra,
+        PlanCost(
+            spec=spec,
+            kind="product",
+            op=str(op),
+            left_lanes=left_lanes,
+            right_lanes=right_lanes,
+            output_lanes=output_lanes,
+            pair_count=left_lanes * right_lanes,
+            left_grades=left,
+            right_grades=right,
+            output_grades=output,
+        ),
+    )
+    return left, right, output
 
 
 def product_plan_cost(request) -> PlanCost:

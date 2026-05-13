@@ -9,11 +9,15 @@
 
 from __future__ import annotations
 
+from itertools import combinations
+from math import comb
 from typing import Iterable, Literal, Optional
 
 import torch
 
 GradeProductOp = Literal["gp", "wedge", "inner", "commutator", "anti_commutator"]
+TORCH_LONG_BASIS_MAX_N = 63
+_TORCH_LONG_MAX = (1 << TORCH_LONG_BASIS_MAX_N) - 1
 
 
 def normalize_grades(grades: Iterable[int], n: int, *, name: str = "grades") -> tuple[int, ...]:
@@ -29,13 +33,53 @@ def normalize_grades(grades: Iterable[int], n: int, *, name: str = "grades") -> 
 
 def basis_index_tuple_for_grades(n: int, grades: Iterable[int]) -> tuple[int, ...]:
     """Return canonical bitmask basis indices whose popcount is in ``grades``."""
-    grade_set = set(normalize_grades(grades, n))
-    return tuple(index for index in range(1 << n) if index.bit_count() in grade_set)
+    indices: list[int] = []
+    for grade in normalize_grades(grades, n):
+        indices.extend(_basis_indices_for_grade(n, grade))
+    return tuple(sorted(indices))
+
+
+def basis_count_for_grades(n: int, grades: Iterable[int]) -> int:
+    """Return the number of basis blades represented by ``grades``."""
+    return sum(comb(n, grade) for grade in normalize_grades(grades, n))
 
 
 def basis_indices_for_grades(n: int, grades: Iterable[int], *, device=None) -> torch.Tensor:
     """Return canonical bitmask basis indices as a tensor."""
-    return torch.tensor(basis_index_tuple_for_grades(n, grades), dtype=torch.long, device=device)
+    return basis_indices_tensor(basis_index_tuple_for_grades(n, grades), n=n, device=device)
+
+
+def basis_indices_tensor(
+    indices: Iterable[int],
+    *,
+    n: Optional[int] = None,
+    role: str = "basis indices",
+    device=None,
+) -> torch.Tensor:
+    """Tensorize canonical basis bitmasks with a clear signed-int64 boundary."""
+    values = tuple(int(index) for index in indices)
+    _validate_torch_long_basis_indices(values, n=n, role=role)
+    return torch.tensor(values, dtype=torch.long, device=device)
+
+
+def _basis_indices_for_grade(n: int, grade: int) -> tuple[int, ...]:
+    if grade == 0:
+        return (0,)
+    if grade == n:
+        return ((1 << n) - 1,)
+    return tuple(sum(1 << bit for bit in bits) for bits in combinations(range(n), grade))
+
+
+def _validate_torch_long_basis_indices(indices: tuple[int, ...], *, n: Optional[int], role: str) -> None:
+    if not indices:
+        return
+    if max(indices) <= _TORCH_LONG_MAX:
+        return
+    dimension = "" if n is None else f" for n={n}"
+    raise ValueError(
+        f"{role}{dimension} cannot be represented as torch.long basis bitmasks. "
+        f"Current Torch-backed executors support bitmask tensorization up to n={TORCH_LONG_BASIS_MAX_N}."
+    )
 
 
 def geometric_product_output_grades(left_grade: int, right_grade: int, n: int) -> tuple[int, ...]:
