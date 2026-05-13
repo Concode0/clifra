@@ -13,10 +13,10 @@ the metric signature.
 
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
+from core.foundation.module import AlgebraLike
 
 
-def _hermitian_signs(algebra: CliffordAlgebra) -> torch.Tensor:
+def _hermitian_signs(algebra: AlgebraLike) -> torch.Tensor:
     """Return the precomputed Hermitian sign tensor from the algebra.
 
     The Hermitian inner product on Cl(p,q) is:
@@ -28,10 +28,12 @@ def _hermitian_signs(algebra: CliffordAlgebra) -> torch.Tensor:
     Returns:
         Sign tensor [Dim] with values +1, -1, or 0 (null blades).
     """
+    if not hasattr(algebra, "_hermitian_signs"):
+        raise ValueError("Hermitian dense metrics require a dense algebra kernel.")
     return algebra._hermitian_signs
 
 
-def inner_product(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def inner_product(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """Compute the scalar product via projection onto grade 0.
 
     Computes <A B>_0.
@@ -44,13 +46,10 @@ def inner_product(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tensor) ->
     Returns:
         torch.Tensor: Scalar part [Batch, 1].
     """
-    # Optimized: A * B then extract grade 0
-    prod = algebra.geometric_product(A, B)
-    scalar_part = prod[..., 0:1]  # Grade 0
-    return scalar_part
+    return algebra.projected_geometric_product(A, B, output_grades=(0,), compact_output=True)
 
 
-def induced_norm(algebra: CliffordAlgebra, A: torch.Tensor) -> torch.Tensor:
+def induced_norm(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
     """Compute the induced norm respecting the metric signature.
 
     Computes ||A|| = sqrt(|<A ~A>_0|).
@@ -71,7 +70,7 @@ def induced_norm(algebra: CliffordAlgebra, A: torch.Tensor) -> torch.Tensor:
     return torch.sqrt(torch.abs(sq_norm))
 
 
-def geometric_distance(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def geometric_distance(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """Computes geometric distance.
 
     dist(A, B) = ||A - B||.
@@ -88,7 +87,7 @@ def geometric_distance(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tenso
     return induced_norm(algebra, diff)
 
 
-def grade_purity(algebra: CliffordAlgebra, A: torch.Tensor, grade: int) -> torch.Tensor:
+def grade_purity(algebra: AlgebraLike, A: torch.Tensor, grade: int) -> torch.Tensor:
     """Checks the purity of the grade by examining coefficient energy.
 
     Purity = ||<A>_k||^2 / ||A||^2.
@@ -111,7 +110,7 @@ def grade_purity(algebra: CliffordAlgebra, A: torch.Tensor, grade: int) -> torch
     return energy_k / energy_total
 
 
-def mean_active_grade(algebra: CliffordAlgebra, A: torch.Tensor) -> torch.Tensor:
+def mean_active_grade(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
     """Average grade. Identifies the grade where the majority of the energy resides.
 
     Mean Grade = Sum(k * ||<A>_k||^2) / ||A||^2.
@@ -153,7 +152,7 @@ def mean_active_grade(algebra: CliffordAlgebra, A: torch.Tensor) -> torch.Tensor
 # and the signature-aware trace form for algebraic computations.
 
 
-def clifford_conjugate(algebra: CliffordAlgebra, mv: torch.Tensor) -> torch.Tensor:
+def clifford_conjugate(algebra: AlgebraLike, mv: torch.Tensor) -> torch.Tensor:
     """Clifford conjugation (bar involution).
 
     Combines reversion with grade involution:
@@ -169,16 +168,10 @@ def clifford_conjugate(algebra: CliffordAlgebra, mv: torch.Tensor) -> torch.Tens
     Returns:
         Conjugated multivector [..., Dim].
     """
-    result = mv.clone()
-    for i in range(algebra.dim):
-        k = bin(i).count("1")
-        sign = ((-1) ** k) * ((-1) ** (k * (k - 1) // 2))
-        if sign == -1:
-            result[..., i] = -result[..., i]
-    return result
+    return algebra.clifford_conjugation(mv)
 
 
-def hermitian_inner_product(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def hermitian_inner_product(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """Hermitian inner product on Cl(p,q): <bar{A} B>_0.
 
     <A, B>_H = Sum_I (conj_sign_I * metric_sign_I) * a_I * b_I
@@ -202,7 +195,7 @@ def hermitian_inner_product(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.
     return (signs * A * B).sum(dim=-1, keepdim=True)
 
 
-def hermitian_norm(algebra: CliffordAlgebra, A: torch.Tensor) -> torch.Tensor:
+def hermitian_norm(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
     """Hermitian norm: ||A||_H = sqrt(|<A, A>_H|).
 
     Always real and non-negative for any signature.
@@ -220,7 +213,7 @@ def hermitian_norm(algebra: CliffordAlgebra, A: torch.Tensor) -> torch.Tensor:
     return torch.sqrt(torch.abs(sq))
 
 
-def hermitian_distance(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def hermitian_distance(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """Hermitian distance: d_H(A, B) = ||A - B||_H.
 
     Positive-definite metric distance for any signature.
@@ -237,7 +230,7 @@ def hermitian_distance(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tenso
     return hermitian_norm(algebra, A - B)
 
 
-def hermitian_angle(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def hermitian_angle(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """Hermitian angle between multivectors.
 
     cos(theta) = <A, B>_H / (||A||_H * ||B||_H)
@@ -264,7 +257,7 @@ def hermitian_angle(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tensor) 
     return torch.acos(cos_theta)
 
 
-def grade_hermitian_norm(algebra: CliffordAlgebra, A: torch.Tensor, grade: int) -> torch.Tensor:
+def grade_hermitian_norm(algebra: AlgebraLike, A: torch.Tensor, grade: int) -> torch.Tensor:
     """Hermitian norm restricted to a single grade.
 
     ||<A>_k||_H = sqrt(Sum_{I: |I|=k} a_I**2)
@@ -284,7 +277,7 @@ def grade_hermitian_norm(algebra: CliffordAlgebra, A: torch.Tensor, grade: int) 
     return hermitian_norm(algebra, A_k)
 
 
-def hermitian_grade_spectrum(algebra: CliffordAlgebra, A: torch.Tensor) -> torch.Tensor:
+def hermitian_grade_spectrum(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
     """Full Hermitian grade spectrum.
 
     Returns |<A_k, A_k>_H| for each grade k = 0, ..., n.
@@ -308,7 +301,7 @@ def hermitian_grade_spectrum(algebra: CliffordAlgebra, A: torch.Tensor) -> torch
     return torch.cat(spectrum, dim=-1)
 
 
-def signature_trace_form(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def signature_trace_form(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """Signature-aware trace form: <~A B>_0.
 
     The standard Clifford algebra scalar product. NOT positive-definite
@@ -332,7 +325,7 @@ def signature_trace_form(algebra: CliffordAlgebra, A: torch.Tensor, B: torch.Ten
     return prod[..., 0:1]
 
 
-def signature_norm_squared(algebra: CliffordAlgebra, A: torch.Tensor) -> torch.Tensor:
+def signature_norm_squared(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
     """Signature-aware squared norm: <A~A>_0.
 
     Can be negative in mixed-signature algebras. Returns the raw value

@@ -15,7 +15,7 @@ from typing import List, Optional
 
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
+from core.foundation.module import AlgebraLike
 from core.runtime.decomposition import differentiable_invariant_decomposition
 from core.runtime.metric import hermitian_grade_spectrum
 
@@ -35,14 +35,14 @@ class SpectralAnalyzer:
        operator :math:`L_x(y) = x \\cdot y` (only for small algebras).
 
     Args:
-        algebra: :class:`CliffordAlgebra` instance.
+        algebra: algebra kernel or planning context.
         max_simple_components: Maximum number of simple components to
             extract from the mean bivector.
     """
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         max_simple_components: int = 5,
     ):
         self.algebra = algebra

@@ -12,11 +12,12 @@ for arbitrary signatures Cl(p, q, r).
 """
 
 import math
-from typing import Optional
+from typing import Iterable, Optional
 
 import torch
 import torch.nn as nn
 
+from core.foundation.layout import GradeLayout
 from core.foundation.validation import check_multivector
 from core.runtime.projected import ProjectedProductMixin
 
@@ -87,6 +88,7 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         self.p, self.q, self.r = p, q, r
         self.n = p + q + r
         self.dim = 2**self.n
+        self.allow_full_layout_products = True
 
         # Exp regime: dispatch at init
         if p == 0 or q == 0:
@@ -186,6 +188,26 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         is moved via ``.to(dtype=...)``.
         """
         return self.cayley_signs.dtype
+
+    def layout(self, grades: Optional[Iterable[int]] = None) -> GradeLayout:
+        """Return a compact grade layout, or the full dense layout when omitted."""
+        if grades is None:
+            return self.planner.full_layout()
+        return self.planner.layout(grades)
+
+    def grade_indices(self, grades: Iterable[int], *, device=None) -> torch.Tensor:
+        """Return canonical dense basis indices for ``grades``."""
+        return self.planner.grade_indices(grades, device=self.device if device is None else device)
+
+    def bivector_squared_signs(self, *, device=None, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
+        """Return ``(e_ab)^2`` signs in canonical grade-2 layout order."""
+        signs = self.bv_sq_scalar
+        if device is not None or dtype is not None:
+            signs = signs.to(
+                device=self.device if device is None else device,
+                dtype=self.dtype if dtype is None else dtype,
+            )
+        return signs
 
     def _apply(self, fn):
         """Propagate device/dtype moves and keep eps tolerances in sync."""
@@ -477,7 +499,7 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
 
         return (commutator_sign * metric_sign).to(dtype=dtype)
 
-    def geometric_product(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the Geometric Product.
 
         Uses vectorized gather + broadcast multiply + sum.
@@ -489,6 +511,8 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: The product AB [..., Dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="gp", **kwargs)
         check_multivector(A, self, "geometric_product(A)")
         check_multivector(B, self, "geometric_product(B)")
 
@@ -498,7 +522,7 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         # result[..., k] = sum_i A[..., i] * B[..., cayley[i,k]] * signs[i,k]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.gp_signs).squeeze(-2)
 
-    def grade_projection(self, mv: torch.Tensor, grade: int) -> torch.Tensor:
+    def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
         """Isolates a specific grade.
 
         Uses multiplicative masking (mv * float_mask) instead of boolean
@@ -511,12 +535,15 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: Projected multivector [..., Dim].
         """
+        if kwargs:
+            kwargs.setdefault("output_grades", (int(grade),))
+            return self.planned_unary(mv, op="grade_projection", **kwargs)
         mask = self.grade_masks_float[grade]
         if mask.dtype != mv.dtype:
             mask = mask.to(dtype=mv.dtype)
         return mv * mask
 
-    def reverse(self, mv: torch.Tensor) -> torch.Tensor:
+    def reverse(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the reversion. The Clifford conjugate.
 
         Args:
@@ -525,12 +552,14 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: Reversed multivector [..., Dim].
         """
+        if kwargs:
+            return self.planned_unary(mv, op="reverse", **kwargs)
         rev = self.rev_signs
         if rev.dtype != mv.dtype:
             rev = rev.to(dtype=mv.dtype)
         return mv * rev
 
-    def wedge(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def wedge(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the wedge (outer) product: A ^ B = (AB - BA)/2.
 
         Single-pass implementation using precomputed antisymmetric signs.
@@ -546,6 +575,8 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: Wedge product A ^ B [..., dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="wedge", **kwargs)
         B_gathered = B[..., self.cayley_indices]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.wedge_gp_signs).squeeze(-2)
 
@@ -588,7 +619,7 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         result.scatter_(-1, g1_idx_exp, result_v)
         return result
 
-    def inner_product(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the inner product: A . B = (AB + BA)/2.
 
         Single-pass implementation using precomputed symmetric signs.
@@ -604,10 +635,12 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: Inner product A . B [..., dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="inner", **kwargs)
         B_gathered = B[..., self.cayley_indices]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.inner_gp_signs).squeeze(-2)
 
-    def commutator(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the commutator (Lie bracket): [A, B] = AB - BA.
 
         Single-pass implementation using precomputed antisymmetric signs
@@ -620,10 +653,12 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: Commutator [A, B] [..., dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="commutator", **kwargs)
         B_gathered = B[..., self.cayley_indices]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.comm_gp_signs).squeeze(-2)
 
-    def anti_commutator(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the anti-commutator: {A, B} = AB + BA.
 
         Single-pass implementation using precomputed symmetric signs
@@ -636,8 +671,42 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: Anti-commutator {A, B} [..., dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="anti_commutator", **kwargs)
         B_gathered = B[..., self.cayley_indices]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.anti_comm_gp_signs).squeeze(-2)
+
+    def planned_unary(
+        self,
+        values: torch.Tensor,
+        *,
+        op: str,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        input_compact: bool = False,
+        compact_output: bool = False,
+        return_layout: bool = False,
+    ):
+        """Execute a unary operation through the shared static grade planner."""
+        request = self.planner.unary_request(
+            values,
+            op=op,
+            input_grades=input_grades,
+            output_grades=output_grades,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            input_compact=input_compact,
+        )
+        executor = self.planner.unary_executor_for_request(request)
+        output = executor.forward_compact(values) if request.input_compact else executor(values)
+
+        if return_layout:
+            return output, executor.output_layout
+        if compact_output:
+            return output
+        return executor.output_layout.dense(output)
 
     def blade_inverse(self, blade: torch.Tensor) -> torch.Tensor:
         """Compute the inverse of a blade: B^{-1} = B_rev / <B * B_rev>_0.
@@ -810,7 +879,7 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         """
         return mv - self.blade_project(mv, blade)
 
-    def grade_involution(self, mv: torch.Tensor) -> torch.Tensor:
+    def grade_involution(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Grade involution (main involution): x_hat = sum (-1)^k <x>_k.
 
         Flips sign of all odd-grade components, preserves even-grade.
@@ -822,12 +891,14 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: Involuted multivector [..., dim].
         """
+        if kwargs:
+            return self.planned_unary(mv, op="grade_involution", **kwargs)
         signs = self._involution_signs
         if signs.dtype != mv.dtype:
             signs = signs.to(dtype=mv.dtype)
         return mv * signs
 
-    def clifford_conjugation(self, mv: torch.Tensor) -> torch.Tensor:
+    def clifford_conjugation(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Clifford conjugation: bar{x} = grade_involution(reverse(x)).
 
         Combines reversion and grade involution. For a k-blade:
@@ -841,6 +912,8 @@ class CliffordAlgebra(ProjectedProductMixin, nn.Module):
         Returns:
             torch.Tensor: Conjugated multivector [..., dim].
         """
+        if kwargs:
+            return self.planned_unary(mv, op="clifford_conjugation", **kwargs)
         cs = self.conj_signs
         if cs.dtype != mv.dtype:
             cs = cs.to(dtype=mv.dtype)

@@ -223,7 +223,8 @@ class GradeProductExecutor(nn.Module):
     """Compile-friendly grade-restricted product using a static interaction plan.
 
     ``forward`` returns compact output lanes ordered by ``active_output_indices``.
-    ``forward_dense`` is a compatibility helper for tests and dense callers.
+    ``forward_dense`` is an explicit materialization helper for parity checks and
+    dense callers.
     """
 
     def __init__(self, plan: GradeProductPlan):

@@ -22,17 +22,73 @@ import torch
 import torch.nn as nn
 
 from core.config import make_algebra
-from core.foundation.module import AlgebraLike
-from layers import BladeSelector, CliffordLinear, RotorLayer
+from core.foundation.module import AlgebraLike, CliffordModule
 
 from ._types import CONSTANTS, DimensionResult, SamplingConfig, SignatureResult
 from .geodesic import GeodesicFlow
 
 
+class _ProbeLinear(CliffordModule):
+    """Core-local channel mixer used by metric-search probes."""
+
+    def __init__(self, algebra: AlgebraLike, in_channels: int, out_channels: int):
+        super().__init__(algebra)
+        self.weight = nn.Parameter(torch.empty(out_channels, in_channels))
+        self.bias = nn.Parameter(torch.empty(out_channels, algebra.dim))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.xavier_uniform_(self.weight)
+        nn.init.zeros_(self.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.einsum("oi,...id->...od", self.weight, x) + self.bias
+
+
+class _ProbeRotor(CliffordModule):
+    """Core-local dense rotor used only for signature search analysis."""
+
+    def __init__(self, algebra: AlgebraLike, channels: int):
+        super().__init__(algebra)
+        self.channels = channels
+        self.register_buffer("bivector_indices", algebra.grade_indices((2,), device=algebra.device))
+        self.bivector_weights = nn.Parameter(torch.empty(channels, self.bivector_indices.numel()))
+        self.bivector_weights._manifold = "spin"
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.normal_(self.bivector_weights, std=0.01)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not hasattr(self.algebra, "exp") or not hasattr(self.algebra, "per_channel_sandwich"):
+            raise ValueError(
+                "Signature probes require dense rotor execution; reduce dimensions or request dense kernel."
+            )
+        bivectors = x.new_zeros(self.channels, self.algebra.dim)
+        indices = self.bivector_indices.unsqueeze(0).expand(self.channels, -1)
+        bivectors.scatter_(1, indices, self.bivector_weights.to(dtype=x.dtype))
+        rotor = self.algebra.exp(-0.5 * bivectors)
+        return self.algebra.per_channel_sandwich(rotor, x, self.algebra.reverse(rotor))
+
+    def sparsity_loss(self) -> torch.Tensor:
+        return torch.norm(self.bivector_weights, p=1)
+
+
+class _ProbeBladeSelector(CliffordModule):
+    """Core-local blade gate for metric-search probes."""
+
+    def __init__(self, algebra: AlgebraLike, channels: int):
+        super().__init__(algebra)
+        self.weights = nn.Parameter(torch.ones(channels, algebra.dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * torch.sigmoid(self.weights).unsqueeze(0)
+
+
 class _SignatureProbe(nn.Module):
     """Minimal single-rotor probe for bivector energy analysis.
 
-    Architecture: CliffordLinear(1, C) -> RotorLayer(C) -> BladeSelector(C).
+    Architecture: channel mixer -> rotor -> channel mixer -> blade selector.
     Only one linear layer for channel expansion; the rotor bivector energy
     is the primary signal for signature discovery.
     """
@@ -40,10 +96,10 @@ class _SignatureProbe(nn.Module):
     def __init__(self, algebra: AlgebraLike, channels: int = 4):
         super().__init__()
         self.algebra = algebra
-        self.linear_in = CliffordLinear(algebra, 1, channels)
-        self.rotor = RotorLayer(algebra, channels)
-        self.linear_out = CliffordLinear(algebra, channels, 1)
-        self.selector = BladeSelector(algebra, 1)
+        self.linear_in = _ProbeLinear(algebra, 1, channels)
+        self.rotor = _ProbeRotor(algebra, channels)
+        self.linear_out = _ProbeLinear(algebra, channels, 1)
+        self.selector = _ProbeBladeSelector(algebra, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.linear_in(x)
@@ -52,8 +108,8 @@ class _SignatureProbe(nn.Module):
         x = self.selector(x)
         return x
 
-    def get_rotor_layers(self) -> List[RotorLayer]:
-        return [m for m in self.modules() if isinstance(m, RotorLayer)]
+    def get_rotor_layers(self) -> List[_ProbeRotor]:
+        return [m for m in self.modules() if isinstance(m, _ProbeRotor)]
 
 
 def _apply_biased_init(
@@ -63,24 +119,24 @@ def _apply_biased_init(
 ) -> None:
     """Biases RotorLayer bivector weights based on signature type.
 
-    Uses ``algebra.bv_sq_scalar`` to classify each basis bivector:
+    Uses ``algebra.bivector_squared_signs()`` to classify each basis bivector:
     - bv_sq = -1: elliptic (positive-signature base vectors)
     - bv_sq = +1: hyperbolic (mixed-signature base vectors)
     - bv_sq =  0: null (degenerate base vectors)
     """
-    bv_sq = algebra.bv_sq_scalar
+    bv_sq = algebra.bivector_squared_signs(device=algebra.device, dtype=algebra.dtype)
     ell = CONSTANTS.bv_sq_elliptic_bound
     hyp = CONSTANTS.bv_sq_hyperbolic_bound
     for rotor in probe.get_rotor_layers():
         with torch.no_grad():
             if bias_type == "euclidean":
-                weights = torch.where(bv_sq < ell, torch.tensor(1.0), torch.tensor(0.1))
+                weights = torch.where(bv_sq < ell, torch.ones_like(bv_sq), torch.full_like(bv_sq, 0.1))
                 rotor.bivector_weights.copy_(
                     weights.unsqueeze(0).expand_as(rotor.bivector_weights)
                     + torch.randn_like(rotor.bivector_weights) * 0.05
                 )
             elif bias_type == "minkowski":
-                weights = torch.where(bv_sq.abs() > hyp, torch.tensor(1.0), torch.tensor(0.1))
+                weights = torch.where(bv_sq.abs() > hyp, torch.ones_like(bv_sq), torch.full_like(bv_sq, 0.1))
                 rotor.bivector_weights.copy_(
                     weights.unsqueeze(0).expand_as(rotor.bivector_weights)
                     + torch.randn_like(rotor.bivector_weights) * 0.05
@@ -138,14 +194,16 @@ class MetricSearch:
         if X + 2 > 12:
             warnings.warn(
                 f"Data dimension {X} yields algebra dim 2^{X + 2}={2 ** (X + 2)}. "
-                f"Consider PCA pre-reduction to X <= 10 for tractable computation."
+                "MetricSearch probes require dense rotor execution; use SignatureSearchAnalyzer PCA "
+                "pre-reduction to X <= 10."
             )
+            raise ValueError("MetricSearch requires X <= 10 so the conformal probe algebra stays within Cl12.")
 
         norm_sq = 0.5 * (data**2).sum(dim=-1, keepdim=True)
         ones = torch.ones(N, 1, device=self.device, dtype=data.dtype)
         lifted = torch.cat([data, norm_sq, ones], dim=-1)
 
-        algebra = make_algebra(X + 1, 1, 0, device=self.device)
+        algebra = make_algebra(X + 1, 1, 0, kernel="dense", device=self.device)
         mv = algebra.embed_vector(lifted)
         mv = mv.unsqueeze(1)
         return mv, algebra
@@ -222,9 +280,8 @@ class MetricSearch:
         original_dim: int,
     ) -> Tuple[Tuple[int, int, int], Dict]:
         """Maps learned bivector energy to (p, q, r) signature."""
-        bv_sq = algebra.bv_sq_scalar
-        bv_mask = algebra.grade_masks[2]
-        bv_indices = bv_mask.nonzero(as_tuple=False).squeeze(-1)
+        bv_sq = algebra.bivector_squared_signs(device=self.device, dtype=algebra.dtype)
+        bv_indices = algebra.grade_indices((2,), device=self.device)
 
         total_energy = torch.zeros(len(bv_indices), device=self.device)
         n_layers = 0

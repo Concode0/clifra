@@ -7,10 +7,12 @@
 
 """Base PyTorch module for components that share a Clifford algebra."""
 
-from typing import Protocol, runtime_checkable
+from typing import Iterable, Optional, Protocol, runtime_checkable
 
 import torch
 import torch.nn as nn
+
+from core.foundation.layout import GradeLayout
 
 
 @runtime_checkable
@@ -22,6 +24,7 @@ class AlgebraLike(Protocol):
     r: int
     n: int
     dim: int
+    num_grades: int
     eps: float
     eps_sq: float
     planner: object
@@ -38,6 +41,14 @@ class AlgebraLike(Protocol):
 
     def _apply(self, fn):
         """Move/cast algebra-owned buffers."""
+        ...
+
+    def layout(self, grades: Optional[Iterable[int]] = None) -> GradeLayout:
+        """Return a compact grade layout or the algebra's default layout."""
+        ...
+
+    def grade_indices(self, grades: Iterable[int], *, device=None) -> torch.Tensor:
+        """Return canonical dense basis indices for ``grades``."""
         ...
 
 

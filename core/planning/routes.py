@@ -112,7 +112,13 @@ def module_optimization_plan(module: nn.Module, *, path: str = "") -> Optional[M
     parameter_grades = _parameter_grades(module)
     score_grades = _score_grades(module)
     dense_only_reason = getattr(module, "optimization_dense_only_reason", None)
-    if layout is None and not operators and parameter_grades is None and score_grades is None and dense_only_reason is None:
+    if (
+        layout is None
+        and not operators
+        and parameter_grades is None
+        and score_grades is None
+        and dense_only_reason is None
+    ):
         return None
 
     default_grades = _grades_from_layout(layout)

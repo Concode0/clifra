@@ -16,7 +16,7 @@ from typing import Dict
 
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
+from core.foundation.module import AlgebraLike
 
 from ._types import CONSTANTS, CommutatorResult
 
@@ -29,14 +29,14 @@ class CommutatorAnalyzer:
     elements (bivectors), directly related to rotation planes.
 
     Args:
-        algebra: :class:`CliffordAlgebra` instance.
+        algebra: algebra kernel or planning context.
         max_bivectors: Maximum number of bivectors for Lie-bracket
             closure analysis (guards combinatorial cost).
     """
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         max_bivectors: int = 15,
     ):
         self.algebra = algebra
@@ -91,7 +91,7 @@ class CommutatorAnalyzer:
         dtype = mv_data.dtype
 
         # Build per-direction projections: keep only the e_i component
-        g1_idx = (1 << torch.arange(n, device=device)).long()
+        g1_idx = self.algebra.grade_indices((1,), device=device)
 
         N = mv_data.shape[0]
 
@@ -107,7 +107,13 @@ class CommutatorAnalyzer:
         i_idx, j_idx = torch.triu_indices(n, n, offset=1, device=device)
 
         # Batched commutator: [n_pairs, N, dim]
-        comm = self.algebra.commutator(xi_all[i_idx], xi_all[j_idx])
+        comm = self.algebra.commutator(
+            xi_all[i_idx],
+            xi_all[j_idx],
+            left_grades=(1,),
+            right_grades=(1,),
+            output_grades=(2,),
+        )
         vals = comm.norm(dim=-1).mean(dim=-1)  # [n_pairs]
 
         matrix = torch.zeros(n, n, device=device, dtype=dtype)
@@ -194,9 +200,7 @@ class CommutatorAnalyzer:
         bv_data = self.algebra.grade_projection(mv_data, 2)  # [N, dim]
         mean_bv = bv_data.mean(dim=0)  # [dim]
 
-        # Identify bivector basis indices
-        ii, jj = torch.triu_indices(n, n, offset=1)
-        bv_blade_indices = ((1 << ii) | (1 << jj)).tolist()
+        bv_blade_indices = self.algebra.grade_indices((2,), device=device).tolist()
 
         if not bv_blade_indices:
             return {
@@ -222,8 +226,13 @@ class CommutatorAnalyzer:
         a_idx, b_idx = torch.triu_indices(k, k, offset=1, device=device)
 
         # Batched commutator and grade-2 projection
-        brackets = self.algebra.commutator(B[a_idx], B[b_idx])  # [n_pairs, dim]
-        brackets_bv = self.algebra.grade_projection(brackets, 2)  # [n_pairs, dim]
+        brackets_bv = self.algebra.commutator(
+            B[a_idx],
+            B[b_idx],
+            left_grades=(2,),
+            right_grades=(2,),
+            output_grades=(2,),
+        )  # [n_pairs, dim]
 
         # Project onto basis: coeffs[p, c] = <bracket_bv_p, B_c>
         coeffs = brackets_bv @ B.T  # [n_pairs, k]
@@ -251,14 +260,14 @@ class CommutatorAnalyzer:
         }
 
 
-def compute_uncertainty_and_alignment(algebra: CliffordAlgebra, data_tensor: torch.Tensor):
+def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.Tensor):
     """Compute Geometric Uncertainty Index (U) and Procrustes Alignment (V).
 
     Used by :class:`~layers.adapters.mother.MotherEmbedding` to initialise
     per-group / per-subject alignment rotors.
 
     Args:
-        algebra: CliffordAlgebra instance.
+        algebra: algebra kernel or planning context.
         data_tensor: ``[N, D]`` tensor of raw features.
 
     Returns:
@@ -279,7 +288,7 @@ def compute_uncertainty_and_alignment(algebra: CliffordAlgebra, data_tensor: tor
 
     # 2. Mean multivector and commutator [x_i, mu]
     mu = x.mean(dim=0, keepdim=True)  # [1, dim]
-    comm = algebra.commutator(x, mu.expand_as(x))
+    comm = algebra.commutator(x, mu.expand_as(x), left_grades=(1,), right_grades=(1,), output_grades=(2,))
 
     U = torch.norm(comm, p=2, dim=-1).mean().item()
 

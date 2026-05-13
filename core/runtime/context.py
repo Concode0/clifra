@@ -46,8 +46,8 @@ class AlgebraContext(ProjectedProductMixin):
         self.spec = AlgebraSpec(self.p, self.q, self.r)
         self._device = torch.device(resolve_device(device) if str(device) == "auto" else device)
         self._dtype = resolve_dtype(dtype)
-        self.allow_full_layout_products = self.n <= 8 if allow_full_layout_products is None else bool(
-            allow_full_layout_products
+        self.allow_full_layout_products = (
+            self.n <= 8 if allow_full_layout_products is None else bool(allow_full_layout_products)
         )
         self._default_grades = None if default_grades is None else normalize_grades(default_grades, self.n)
         self._default_layout: Optional[GradeLayout] = None
@@ -79,6 +79,17 @@ class AlgebraContext(ProjectedProductMixin):
                 self._default_layout = self.planner.layout(grades)
             return self._default_layout
         return self.planner.layout(grades)
+
+    def grade_indices(self, grades: Iterable[int], *, device=None) -> torch.Tensor:
+        """Return canonical dense basis indices for ``grades`` without dense tables."""
+        return self.planner.grade_indices(grades, device=self.device if device is None else device)
+
+    def bivector_squared_signs(self, *, device=None, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
+        """Return ``(e_ab)^2`` signs in canonical grade-2 layout order."""
+        return self.planner.bivector_squared_signs(
+            device=self.device if device is None else device,
+            dtype=self.dtype if dtype is None else dtype,
+        )
 
     def _apply(self, fn):
         """Apply a PyTorch module-style device/dtype transform to cached executors."""

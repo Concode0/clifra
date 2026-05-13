@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import torch
 
+from core.foundation.basis import operation_coefficient
 from core.foundation.layout import AlgebraSpec, GradeLayout
 from core.planning.layouts import ProductRequest, build_product_request, normalize_product_op
 from core.planning.product import GradeProductExecutor, build_grade_product_plan_from_request
@@ -45,6 +46,29 @@ class GradePlanner:
     def full_layout(self) -> GradeLayout:
         """Return the full dense basis layout."""
         return self.layout(range(self.spec.n + 1))
+
+    def grade_indices(self, grades, *, device=None) -> torch.Tensor:
+        """Return canonical dense basis indices for ``grades``."""
+        if device is None:
+            device = getattr(self.algebra, "device", None)
+        return self.layout(grades).indices_tensor(device=device)
+
+    def convert_values(self, values: torch.Tensor, *, source_layout: GradeLayout, target_layout: GradeLayout):
+        """Convert compact values between layouts without full dense materialization."""
+        return target_layout.convert(values, source_layout)
+
+    def bivector_squared_signs(self, *, device=None, dtype: torch.dtype = None) -> torch.Tensor:
+        """Return ``(e_ab)^2`` signs in canonical grade-2 layout order."""
+        if device is None:
+            device = getattr(self.algebra, "device", None)
+        if dtype is None:
+            dtype = getattr(self.algebra, "dtype", torch.float32)
+        layout = self.layout((2,))
+        signs = [
+            operation_coefficient(index, index, self.spec.p, self.spec.q, self.spec.r, "gp")
+            for index in layout.basis_indices
+        ]
+        return torch.tensor(signs, dtype=dtype, device=device)
 
     def clear_cache(self) -> None:
         """Drop cached executor modules."""

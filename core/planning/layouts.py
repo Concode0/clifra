@@ -168,7 +168,7 @@ def resolve_operand_layout(
     if not full_layout_allowed:
         raise ValueError(
             f"{side} input would require a full Cl({spec.p},{spec.q},{spec.r}) layout. "
-            "Declare active grades or use a dense CliffordAlgebra reference kernel."
+            "Declare active grades or enable an explicit low-dimensional full-layout fallback."
         )
     return spec.layout(range(spec.n + 1))
 

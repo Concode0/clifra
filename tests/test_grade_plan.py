@@ -309,6 +309,39 @@ def test_dense_policy_uses_context_by_default_and_explicit_dense_up_to_twelve():
         make_algebra(13, 0, 0, kernel="dense", device=DEVICE, dtype=torch.float32)
 
 
+def test_dense_kernel_accepts_shared_planned_operation_kwargs():
+    algebra = CliffordAlgebra(4, 1, 1, device=DEVICE, dtype=torch.float64)
+    A = _grade_only_input(algebra, 2, (1,), seed=191)
+    B = _grade_only_input(algebra, 2, (1,), seed=193)
+
+    actual = algebra.geometric_product(
+        A,
+        B,
+        left_grades=(1,),
+        right_grades=(1,),
+        output_grades=(0, 2),
+        compact_output=True,
+    )
+    expected = algebra.projected_geometric_product(
+        A,
+        B,
+        left_grades=(1,),
+        right_grades=(1,),
+        output_grades=(0, 2),
+        compact_output=True,
+    )
+
+    assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
+
+
+def test_dense_and_context_share_layout_indices_and_bivector_metric_signs():
+    dense = CliffordAlgebra(3, 1, 0, device=DEVICE, dtype=torch.float64)
+    context = make_algebra(3, 1, 0, kernel="context", device=DEVICE, dtype=torch.float64)
+
+    assert torch.equal(dense.grade_indices((2,)), context.grade_indices((2,)))
+    assert torch.allclose(dense.bivector_squared_signs(), context.bivector_squared_signs())
+
+
 def test_context_projected_product_handles_high_dim_vector_product():
     algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32)
     A = torch.zeros(1, algebra.dim)
@@ -369,6 +402,59 @@ def test_context_planned_unary_compact_reverse():
 
     assert output_layout == layout
     assert torch.allclose(actual, -values)
+
+
+def test_dense_kernel_planned_unary_handles_compact_layouts():
+    algebra = CliffordAlgebra(6, 0, 0, device=DEVICE, dtype=torch.float32)
+    layout = algebra.layout((2,))
+    values = torch.arange(layout.dim, dtype=torch.float32).unsqueeze(0)
+
+    actual, output_layout = algebra.reverse(
+        values,
+        input_layout=layout,
+        input_compact=True,
+        compact_output=True,
+        return_layout=True,
+    )
+
+    assert output_layout == layout
+    assert torch.allclose(actual, -values)
+
+
+def test_multivector_compact_geometric_product_stays_compact_in_high_dimensions():
+    algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32)
+    vector_layout = algebra.layout((1,))
+    left = torch.zeros(1, vector_layout.dim)
+    right = torch.zeros(1, vector_layout.dim)
+    left[0, 0] = 1.0
+    right[0, 0] = 1.0
+
+    result = Multivector(algebra, values=left, layout=vector_layout) * Multivector(
+        algebra,
+        values=right,
+        layout=vector_layout,
+    )
+
+    assert result.is_compact
+    assert result.layout.grades == (0, 2)
+    scalar_pos = result.layout.basis_indices.index(0)
+    assert torch.allclose(result.values[0, scalar_pos], torch.tensor(1.0))
+
+
+def test_multivector_compact_addition_merges_layouts_without_dense_materialization():
+    algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32)
+    vector_layout = algebra.layout((1,))
+    bivector_layout = algebra.layout((2,))
+    vector = Multivector(algebra, values=torch.ones(1, vector_layout.dim), layout=vector_layout)
+    bivector = Multivector(algebra, values=2.0 * torch.ones(1, bivector_layout.dim), layout=bivector_layout)
+
+    result = vector + bivector
+
+    assert result.is_compact
+    assert result.layout.grades == (1, 2)
+    vector_values = vector.with_layout(result.layout).values
+    bivector_values = bivector.with_layout(result.layout).values
+    assert torch.allclose(result.values, vector_values + bivector_values)
 
 
 def test_high_dim_context_requires_declared_layout_for_products():
