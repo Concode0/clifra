@@ -5,11 +5,15 @@
 # you may not use this file except in compliance with the License.
 #
 
+from typing import Iterable, Optional
+
 import torch
 import torch.nn as nn
 
 from core.foundation.module import CliffordModule
 from core.runtime.algebra import CliffordAlgebra
+
+from ..grade import lane_count, resolve_layer_layout
 
 
 class MultivectorEmbedding(CliffordModule):
@@ -25,33 +29,42 @@ class MultivectorEmbedding(CliffordModule):
         embedding (nn.Embedding): Underlying embedding table.
     """
 
-    def __init__(self, algebra: CliffordAlgebra, vocab_size: int, channels: int):
+    def __init__(
+        self,
+        algebra,
+        vocab_size: int,
+        channels: int,
+        grades: Optional[Iterable[int]] = None,
+    ):
         """Sets up the multivector embedding.
 
         Args:
             algebra: Clifford algebra instance.
             vocab_size: Vocabulary size.
             channels: Number of multivector channels per token.
+            grades: Optional layer-owned active output grades. When set, the
+                embedding table stores compact lanes only.
         """
         super().__init__(algebra)
         self.vocab_size = vocab_size
         self.channels = channels
+        self.layout = resolve_layer_layout(algebra, grades)
+        self.basis_dim = lane_count(algebra, self.layout)
 
-        # Single flat embedding: vocab_size -> channels * dim
-        self.embedding = nn.Embedding(vocab_size, channels * algebra.dim)
+        # Single flat embedding: vocab_size -> channels * active basis lanes
+        self.embedding = nn.Embedding(vocab_size, channels * self.basis_dim)
         self._init_grade1()
 
     def _init_grade1(self):
         """Initializes only grade-1 components; zeros out all others."""
         with torch.no_grad():
-            dim = self.algebra.dim
             channels = self.channels
+            dim = self.basis_dim
 
-            # Build grade-1 mask (indices with exactly 1 bit set)
-            grade1_flat = []
-            for i in range(dim):
-                if bin(i).count("1") == 1:
-                    grade1_flat.append(i)
+            if self.layout is None:
+                grade1_flat = [i for i in range(dim) if bin(i).count("1") == 1]
+            else:
+                grade1_flat = [pos for pos, index in enumerate(self.layout.basis_indices) if bin(index).count("1") == 1]
 
             # Zero everything
             self.embedding.weight.zero_()
@@ -73,7 +86,7 @@ class MultivectorEmbedding(CliffordModule):
         """
         B, L = token_ids.shape
         flat = self.embedding(token_ids)  # [B, L, channels * dim]
-        return flat.reshape(B, L, self.channels, self.algebra.dim)
+        return flat.reshape(B, L, self.channels, self.basis_dim)
 
 
 class RotaryBivectorPE(CliffordModule):

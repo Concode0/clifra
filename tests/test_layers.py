@@ -11,7 +11,7 @@ import torch
 from core.config import make_algebra
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.decomposition import ExpPolicy
-from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, MultiRotorLayer, RotorLayer
+from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, MultiRotorLayer, MultivectorEmbedding, RotorLayer
 from layers.blocks.multi_rotor_ffn import MultiRotorFFN
 from layers.blocks.transformer import GeometricTransformerBlock
 from layers.primitives.reflection import ReflectionLayer
@@ -100,6 +100,33 @@ class TestLayers:
         y = block(x)
 
         assert y.shape == x.shape
+
+    def test_multivector_embedding_declared_grades_start_compact_high_dim_pipeline(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+        embedding = MultivectorEmbedding(algebra, vocab_size=11, channels=4, grades=(1,))
+        token_ids = torch.randint(0, 11, (2, 5))
+
+        x = embedding(token_ids)
+
+        assert embedding.layout.grades == (1,)
+        assert embedding.embedding.weight.shape == (11, 4 * algebra.n)
+        assert x.shape == (2, 5, 4, algebra.n)
+
+    def test_compact_embedding_transformer_pipeline_runs_high_dim_context(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+        embedding = MultivectorEmbedding(algebra, vocab_size=11, channels=4, grades=(1,))
+        block = GeometricTransformerBlock(
+            algebra,
+            channels=4,
+            num_heads=2,
+            feature_grades=(1,),
+            use_ffn_rotor_toolbox=False,
+        )
+        token_ids = torch.randint(0, 11, (2, 5))
+
+        output = block(embedding(token_ids))
+
+        assert output.shape == (2, 5, 4, algebra.n)
 
     def test_rotor_shape(self, algebra_3d):
         # Batch=4, Channels=5
