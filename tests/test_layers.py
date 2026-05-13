@@ -11,7 +11,7 @@ import torch
 from core.config import make_algebra
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.decomposition import ExpPolicy
-from layers import CliffordLayerNorm, CliffordLinear, MultiRotorLayer, RotorLayer
+from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, MultiRotorLayer, RotorLayer
 from layers.primitives.reflection import ReflectionLayer
 
 pytestmark = pytest.mark.unit
@@ -55,6 +55,18 @@ class TestLayers:
         assert y.shape == x.shape
         assert layer._scalar_lane_mask.shape[-1] == layout.dim
         assert layer._scalar_lane_mask[scalar_pos].item() == 1.0
+
+    def test_blade_selector_declared_grades_use_compact_lanes_in_high_dimensions(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+        layer = BladeSelector(algebra, channels=2, grades=(1, 2))
+        layout = algebra.layout((1, 2))
+        x = torch.randn(3, 2, layout.dim)
+
+        y = layer(x)
+
+        assert layer.layout == layout
+        assert layer.weights.shape == (2, layout.dim)
+        assert y.shape == x.shape
 
     def test_rotor_shape(self, algebra_3d):
         # Batch=4, Channels=5

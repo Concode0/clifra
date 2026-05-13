@@ -5,12 +5,15 @@
 # you may not use this file except in compliance with the License.
 #
 
+from typing import Iterable, Optional
+
 import torch
 import torch.nn as nn
 
 from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
 from utils.compat import safe_linalg_solve
+
+from ..grade import check_multivector_lanes, lane_count, resolve_layer_layout
 
 
 class BladeSelector(CliffordModule):
@@ -22,16 +25,19 @@ class BladeSelector(CliffordModule):
         weights (nn.Parameter): Soft gates [Channels, Dim].
     """
 
-    def __init__(self, algebra: CliffordAlgebra, channels: int):
+    def __init__(self, algebra, channels: int, grades: Optional[Iterable[int]] = None):
         """Sets up the selector.
 
         Args:
             algebra (CliffordAlgebra): The algebra instance.
             channels (int): Input features.
+            grades: Optional layer-owned active grades for compact lane execution.
         """
         super().__init__(algebra)
+        self.layout = resolve_layer_layout(algebra, grades)
+        self.basis_dim = lane_count(algebra, self.layout)
 
-        self.weights = nn.Parameter(torch.Tensor(channels, algebra.dim))
+        self.weights = nn.Parameter(torch.Tensor(channels, self.basis_dim))
 
         self.reset_parameters()
 
@@ -48,6 +54,7 @@ class BladeSelector(CliffordModule):
         Returns:
             torch.Tensor: Filtered input.
         """
+        check_multivector_lanes(x, self.algebra, self.layout, "BladeSelector input")
         # Sigmoid gate
         w = torch.sigmoid(self.weights).unsqueeze(0)
         return x * w
@@ -67,7 +74,7 @@ class GeometricNeutralizer(CliffordModule):
         momentum (float): EMA momentum.
     """
 
-    def __init__(self, algebra: CliffordAlgebra, channels: int, momentum: float = 0.1):
+    def __init__(self, algebra, channels: int, momentum: float = 0.1):
         """Initialize the neutralizer.
 
         Args:
