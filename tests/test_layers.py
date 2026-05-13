@@ -12,6 +12,8 @@ from core.config import make_algebra
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.decomposition import ExpPolicy
 from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, MultiRotorLayer, RotorLayer
+from layers.blocks.multi_rotor_ffn import MultiRotorFFN
+from layers.blocks.transformer import GeometricTransformerBlock
 from layers.primitives.reflection import ReflectionLayer
 
 pytestmark = pytest.mark.unit
@@ -66,6 +68,37 @@ class TestLayers:
 
         assert layer.layout == layout
         assert layer.weights.shape == (2, layout.dim)
+        assert y.shape == x.shape
+
+    def test_compact_multirotor_ffn_uses_linear_toolbox_in_high_dimensions(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+        layer = MultiRotorFFN(algebra, channels=4, ffn_mult=2, feature_grades=(1,), use_rotor_toolbox=False)
+        x = torch.randn(3, 4, algebra.n)
+
+        y = layer(x)
+
+        assert not layer.use_rotor_toolbox
+        assert y.shape == x.shape
+
+    def test_compact_multirotor_ffn_rejects_dense_rotor_toolbox(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+
+        with pytest.raises(ValueError, match="dense feature lanes"):
+            MultiRotorFFN(algebra, channels=4, feature_grades=(1,), use_rotor_toolbox=True)
+
+    def test_compact_transformer_block_runs_high_dim_pipeline(self):
+        algebra = make_algebra(10, 4, 2, device="cpu", dtype=torch.float32)
+        block = GeometricTransformerBlock(
+            algebra,
+            channels=4,
+            num_heads=2,
+            feature_grades=(1,),
+            use_ffn_rotor_toolbox=False,
+        )
+        x = torch.randn(2, 5, 4, algebra.n)
+
+        y = block(x)
+
         assert y.shape == x.shape
 
     def test_rotor_shape(self, algebra_3d):
