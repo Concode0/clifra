@@ -110,11 +110,16 @@ def grade_purity(algebra: AlgebraLike, A: torch.Tensor, grade: int) -> torch.Ten
     Returns:
         torch.Tensor: Purity score [0, 1].
     """
-    # Project to grade
-    A_k = algebra.grade_projection(A, grade)
-
     # Compute energies (using standard squared norm of coefficients for stability)
-    energy_k = (A_k**2).sum(dim=-1)
+    grade_masks = getattr(algebra, "grade_masks_float", None)
+    if grade_masks is not None and A.shape[-1] == getattr(algebra, "dim"):
+        mask = grade_masks[int(grade)]
+        if mask.device != A.device or mask.dtype != A.dtype:
+            mask = mask.to(device=A.device, dtype=A.dtype)
+        energy_k = (A * A * mask).sum(dim=-1)
+    else:
+        A_k = algebra.grade_projection(A, grade)
+        energy_k = (A_k**2).sum(dim=-1)
     energy_total = (A**2).sum(dim=-1).clamp(min=algebra.eps)
 
     return energy_k / energy_total
@@ -132,14 +137,19 @@ def mean_active_grade(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor: Average grade index.
     """
-    energy_total = (A**2).sum(dim=-1).clamp(min=algebra.eps)
-    weighted_sum = torch.zeros_like(energy_total)
+    grade_energies = _dense_grade_energies(algebra, A)
+    if grade_energies is None:
+        energy_total = (A**2).sum(dim=-1).clamp(min=algebra.eps)
+        weighted_sum = torch.zeros_like(energy_total)
+        for k in range(algebra.n + 1):
+            A_k = algebra.grade_projection(A, k)
+            energy_k = (A_k**2).sum(dim=-1)
+            weighted_sum += k * energy_k
+        return weighted_sum / energy_total
 
-    for k in range(algebra.n + 1):
-        A_k = algebra.grade_projection(A, k)
-        energy_k = (A_k**2).sum(dim=-1)
-        weighted_sum += k * energy_k
-
+    weights = torch.arange(algebra.n + 1, device=A.device, dtype=grade_energies.dtype)
+    weighted_sum = (grade_energies * weights).sum(dim=-1)
+    energy_total = grade_energies.sum(dim=-1).clamp(min=algebra.eps)
     return weighted_sum / energy_total
 
 
@@ -387,13 +397,13 @@ def hermitian_grade_spectrum(
         Grade energies [..., n+1]. Each entry >= 0.
     """
     values, source_layout = compact_values(algebra, A, layout=layout, grades=grades)
-    spectrum = []
-    for k in range(algebra.n + 1):
-        grade_layout = algebra.layout((k,))
-        grade_values = grade_layout.convert(values, source_layout)
-        sq = _hermitian_inner_values(algebra, grade_values, grade_values, grade_layout)
-        spectrum.append(torch.abs(sq))
-    return torch.cat(spectrum, dim=-1)
+    signs = _signs_like(algebra, source_layout, values, values)
+    signed_energy = signs * values * values
+    flat = signed_energy.reshape(-1, source_layout.dim)
+    grade_ids = source_layout.grade_indices_tensor(device=values.device).unsqueeze(0).expand_as(flat)
+    spectrum = signed_energy.new_zeros(flat.shape[0], algebra.n + 1)
+    spectrum.scatter_add_(1, grade_ids, flat)
+    return spectrum.reshape(*values.shape[:-1], algebra.n + 1).abs()
 
 
 def _aligned_pair_values(
@@ -448,6 +458,20 @@ def _signs_like(
 ) -> torch.Tensor:
     dtype = torch.promote_types(A_values.dtype, B_values.dtype)
     return _hermitian_signs(algebra, layout=layout, device=A_values.device, dtype=dtype)
+
+
+def _dense_grade_energies(algebra: AlgebraLike, A: torch.Tensor) -> Optional[torch.Tensor]:
+    grade_index = getattr(algebra, "grade_index", None)
+    if grade_index is None or A.shape[-1] != getattr(algebra, "dim"):
+        return None
+    if grade_index.device != A.device:
+        grade_index = grade_index.to(device=A.device)
+
+    flat = (A * A).reshape(-1, algebra.dim)
+    idx = grade_index.unsqueeze(0).expand_as(flat)
+    energies = flat.new_zeros(flat.shape[0], algebra.n + 1)
+    energies.scatter_add_(1, idx, flat)
+    return energies.reshape(*A.shape[:-1], algebra.n + 1)
 
 
 def signature_trace_form(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:

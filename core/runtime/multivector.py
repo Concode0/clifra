@@ -474,11 +474,11 @@ class Multivector:
     def get_grade_norms(self) -> torch.Tensor:
         """Per-grade L2 norms."""
         if self.is_compact:
-            result = self.values.new_zeros(*self.values.shape[:-1], self.algebra.num_grades)
-            for position, index in enumerate(self.layout.basis_indices):
-                grade = index.bit_count()
-                result[..., grade] = result[..., grade] + self.values[..., position].pow(2)
-            return result.clamp(min=self.algebra.eps).sqrt()
+            flat = self.values.pow(2).reshape(-1, self.layout.dim)
+            grade_ids = self.layout.grade_indices_tensor(device=self.values.device).unsqueeze(0).expand_as(flat)
+            result = flat.new_zeros(flat.shape[0], self.algebra.num_grades)
+            result.scatter_add_(1, grade_ids, flat)
+            return result.reshape(*self.values.shape[:-1], self.algebra.num_grades).clamp(min=self.algebra.eps).sqrt()
         return self.algebra.get_grade_norms(self.tensor)
 
     def exp(self) -> Multivector:
