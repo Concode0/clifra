@@ -53,6 +53,7 @@ class AlgebraContext(AlgebraRuntimeMixin):
         self.planning_limits = DEFAULT_PLANNING_LIMITS if planning_limits is None else planning_limits
         self._default_grades = None if default_grades is None else normalize_grades(default_grades, self.n)
         self._default_layout: Optional[GradeLayout] = None
+        self._g1_indices_cache: dict[str, torch.Tensor] = {}
         self.planner = GradePlanner(self)
         self._sync_eps()
 
@@ -80,6 +81,7 @@ class AlgebraContext(AlgebraRuntimeMixin):
         if probe.dtype.is_floating_point:
             self._dtype = probe.dtype
         self._sync_eps()
+        self._g1_indices_cache.clear()
         self.planner._apply(fn)
         return self
 
@@ -90,6 +92,7 @@ class AlgebraContext(AlgebraRuntimeMixin):
         if dtype is not None:
             self._dtype = resolve_dtype(dtype)
         self._sync_eps()
+        self._g1_indices_cache.clear()
         self.planner.clear_cache()
         return self
 
@@ -123,8 +126,16 @@ class AlgebraContext(AlgebraRuntimeMixin):
         if vectors.shape[-1] != self.n:
             raise ValueError(f"vectors last dimension must be {self.n}, got {vectors.shape[-1]}")
         output = vectors.new_zeros(*vectors.shape[:-1], self.dim)
-        basis_indices = [1 << bit for bit in range(self.n)]
-        return output.index_copy(-1, torch.tensor(basis_indices, dtype=torch.long, device=vectors.device), vectors)
+        return output.index_copy(-1, self._basis_vector_indices(vectors.device), vectors)
+
+    def _basis_vector_indices(self, device) -> torch.Tensor:
+        resolved = torch.device(device)
+        key = str(resolved)
+        cached = self._g1_indices_cache.get(key)
+        if cached is None:
+            cached = torch.tensor([1 << bit for bit in range(self.n)], dtype=torch.long, device=resolved)
+            self._g1_indices_cache[key] = cached
+        return cached
 
     def reverse(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Reverse dense or compact multivector coefficients."""

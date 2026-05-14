@@ -289,8 +289,7 @@ class GradeProductExecutor(nn.Module):
         left_b, right_b = torch.broadcast_tensors(left, right)
         left_terms = torch.index_select(left_b, -1, self.left_indices)
         right_terms = torch.index_select(right_b, -1, self.right_indices)
-        coefficients = self.coefficients.to(dtype=torch.promote_types(left_terms.dtype, right_terms.dtype))
-        terms = left_terms * right_terms * coefficients
+        terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
 
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
         return output.index_add(-1, self.output_positions, terms)
@@ -305,8 +304,7 @@ class GradeProductExecutor(nn.Module):
         left_b, right_b = torch.broadcast_tensors(left, right)
         left_terms = torch.index_select(left_b, -1, self.left_compact_positions)
         right_terms = torch.index_select(right_b, -1, self.right_compact_positions)
-        coefficients = self.coefficients.to(dtype=torch.promote_types(left_terms.dtype, right_terms.dtype))
-        terms = left_terms * right_terms * coefficients
+        terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
 
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
         return output.index_add(-1, self.output_positions, terms)
@@ -329,8 +327,7 @@ class GradeProductExecutor(nn.Module):
 
         left_terms = torch.index_select(left, -1, self.left_compact_positions)
         right_terms = torch.index_select(right, -1, self.right_compact_positions)
-        coefficients = self.coefficients.to(dtype=torch.promote_types(left_terms.dtype, right_terms.dtype))
-        terms = left_terms.unsqueeze(-2) * right_terms.unsqueeze(-3) * coefficients
+        terms = left_terms.unsqueeze(-2) * right_terms.unsqueeze(-3) * self._coefficients_for(left_terms, right_terms)
 
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
         return output.index_add(-1, self.output_positions, terms)
@@ -340,3 +337,10 @@ class GradeProductExecutor(nn.Module):
         compact = self.forward(left, right)
         output = compact.new_zeros(*compact.shape[:-1], self.dim)
         return output.index_copy(-1, self.active_output_indices, compact)
+
+    def _coefficients_for(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+        dtype = torch.promote_types(left.dtype, right.dtype)
+        coefficients = self.coefficients
+        if coefficients.dtype == dtype and coefficients.device == left.device:
+            return coefficients
+        return coefficients.to(device=left.device, dtype=dtype)

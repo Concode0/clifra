@@ -56,6 +56,14 @@ class GradeLayout:
     spec: AlgebraSpec
     grades: tuple[int, ...]
     _basis_indices: tuple[int, ...] = field(init=False, repr=False)
+    _indices_cache: dict[str, torch.Tensor] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _grade_index_cache: dict[str, torch.Tensor] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _conversion_cache: dict[tuple[AlgebraSpec, tuple[int, ...], str], tuple[torch.Tensor, torch.Tensor]] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         grades = normalize_grades(self.grades, self.spec.n)
@@ -83,7 +91,22 @@ class GradeLayout:
 
     def indices_tensor(self, *, device=None) -> torch.Tensor:
         """Return basis indices as a tensor on ``device``."""
-        return basis_indices_tensor(self.basis_indices, n=self.spec.n, role="layout basis indices", device=device)
+        key = _device_cache_key(device)
+        cached = self._indices_cache.get(key)
+        if cached is None:
+            cached = basis_indices_tensor(self.basis_indices, n=self.spec.n, role="layout basis indices", device=device)
+            self._indices_cache[key] = cached
+        return cached
+
+    def grade_indices_tensor(self, *, device=None) -> torch.Tensor:
+        """Return per-lane grade ids on ``device``."""
+        key = _device_cache_key(device)
+        cached = self._grade_index_cache.get(key)
+        if cached is None:
+            grades = tuple(index.bit_count() for index in self.basis_indices)
+            cached = torch.tensor(grades, dtype=torch.long, device=device)
+            self._grade_index_cache[key] = cached
+        return cached
 
     def convert(self, values: torch.Tensor, source: "GradeLayout") -> torch.Tensor:
         """Convert compact values from ``source`` into this layout.
@@ -100,22 +123,11 @@ class GradeLayout:
         if source == self:
             return values
 
-        source_positions = {index: position for position, index in enumerate(source.basis_indices)}
-        gather_positions: list[int] = []
-        scatter_positions: list[int] = []
-        for target_position, index in enumerate(self.basis_indices):
-            source_position = source_positions.get(index)
-            if source_position is None:
-                continue
-            gather_positions.append(source_position)
-            scatter_positions.append(target_position)
-
         output = values.new_zeros(*values.shape[:-1], self.dim)
-        if not gather_positions:
+        gather, scatter = self._conversion_tensors(source, device=values.device)
+        if gather.numel() == 0:
             return output
 
-        gather = torch.tensor(gather_positions, dtype=torch.long, device=values.device)
-        scatter = torch.tensor(scatter_positions, dtype=torch.long, device=values.device)
         copied = torch.index_select(values, -1, gather)
         return output.index_copy(-1, scatter, copied)
 
@@ -131,3 +143,31 @@ class GradeLayout:
             raise ValueError(f"values last dimension must be {self.dim}, got {values.shape[-1]}")
         output = values.new_zeros(*values.shape[:-1], self.dense_dim)
         return output.index_copy(-1, self.indices_tensor(device=values.device), values)
+
+    def _conversion_tensors(self, source: "GradeLayout", *, device=None) -> tuple[torch.Tensor, torch.Tensor]:
+        key = (source.spec, source.grades, _device_cache_key(device))
+        cached = self._conversion_cache.get(key)
+        if cached is not None:
+            return cached
+
+        source_positions = {index: position for position, index in enumerate(source.basis_indices)}
+        gather_positions: list[int] = []
+        scatter_positions: list[int] = []
+        for target_position, index in enumerate(self.basis_indices):
+            source_position = source_positions.get(index)
+            if source_position is None:
+                continue
+            gather_positions.append(source_position)
+            scatter_positions.append(target_position)
+
+        gather = torch.tensor(gather_positions, dtype=torch.long, device=device)
+        scatter = torch.tensor(scatter_positions, dtype=torch.long, device=device)
+        cached = (gather, scatter)
+        self._conversion_cache[key] = cached
+        return cached
+
+
+def _device_cache_key(device) -> str:
+    if device is None:
+        return "cpu"
+    return str(torch.device(device))

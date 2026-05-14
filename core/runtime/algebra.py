@@ -156,6 +156,7 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         stacked = torch.stack(grade_masks_list)  # [n+1, dim]
         self.register_buffer("_grade_masks", stacked, persistent=False)
         self.register_buffer("_grade_masks_float", stacked.to(dtype=cayley_signs.dtype), persistent=False)
+        self.register_buffer("_g1_indices", stacked[1].nonzero(as_tuple=False).squeeze(-1), persistent=False)
 
         # Bivector indices
         if self.n >= 2:
@@ -279,10 +280,9 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         Returns:
             torch.Tensor: Multivector coefficients [..., dim].
         """
-        g1_idx = (1 << torch.arange(self.n, device=vectors.device)).long()
-        mv = torch.zeros(*vectors.shape[:-1], self.dim, device=vectors.device, dtype=vectors.dtype)
-        mv.scatter_(-1, g1_idx.expand_as(vectors), vectors)
-        return mv
+        g1_idx = self._basis_vector_indices(vectors.device)
+        mv = vectors.new_zeros(*vectors.shape[:-1], self.dim)
+        return mv.index_copy(-1, g1_idx, vectors)
 
     def get_grade_norms(self, mv: torch.Tensor) -> torch.Tensor:
         """Calculates norms per grade. Useful for invariant features.
@@ -593,9 +593,7 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         bv_idx_exp = self._bv_indices.expand(*A.shape[:-1], -1)
         bv_coeffs = torch.gather(A, -1, bv_idx_exp)  # [..., num_bv]
 
-        # Grade-1 indices: powers of 2 for basis vectors
-        g1_idx = torch.arange(self.n, device=A.device)
-        g1_idx = (1 << g1_idx).long()  # [n]
+        g1_idx = self._basis_vector_indices(A.device)
         g1_idx_exp = g1_idx.expand(*B.shape[:-1], -1)
         v_coeffs = torch.gather(B, -1, g1_idx_exp)  # [..., n]
 
@@ -610,6 +608,12 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         result = torch.zeros_like(A)
         result.scatter_(-1, g1_idx_exp, result_v)
         return result
+
+    def _basis_vector_indices(self, device) -> torch.Tensor:
+        indices = self._g1_indices
+        if indices.device != torch.device(device):
+            indices = indices.to(device=device)
+        return indices
 
     def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the inner product: A . B = (AB + BA)/2.
