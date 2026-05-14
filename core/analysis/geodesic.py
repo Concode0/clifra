@@ -86,8 +86,7 @@ class GeodesicFlow:
         """
         N = mv.shape[0]
         k = min(self.k, N - 1)
-        diff = mv.unsqueeze(1) - mv.unsqueeze(0)  # [N, N, dim]
-        dists = diff.norm(dim=-1)  # [N, N]
+        dists = torch.cdist(mv, mv)  # [N, N]
         dists.fill_diagonal_(float("inf"))
         _, idx = dists.topk(k, dim=-1, largest=False)
         return idx  # [N, k]

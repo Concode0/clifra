@@ -86,33 +86,33 @@ class CommutatorAnalyzer:
             ``[n, n]`` symmetric matrix of commutativity indices.
         """
         n = self.algebra.n
-        dim = self.algebra.dim
         device = mv_data.device
         dtype = mv_data.dtype
 
-        # Build per-direction projections: keep only the e_i component
         g1_idx = self.algebra.grade_indices((1,), device=device)
-
         N = mv_data.shape[0]
-
-        # Build all n projected multivectors: [n, N, dim]
-        xi_all = torch.zeros(n, N, dim, device=device, dtype=dtype)
-        coeffs = mv_data[:, g1_idx]  # [N, n]
-        row_idx = torch.arange(n, device=device).unsqueeze(1).expand(n, N)
-        batch_idx = torch.arange(N, device=device).unsqueeze(0).expand(n, N)
-        col_idx = g1_idx.unsqueeze(1).expand(n, N)
-        xi_all[row_idx, batch_idx, col_idx] = coeffs.T
 
         # All (i, j) pairs with i < j
         i_idx, j_idx = torch.triu_indices(n, n, offset=1, device=device)
+        if i_idx.numel() == 0:
+            return torch.zeros(n, n, device=device, dtype=dtype)
 
-        # Batched commutator: [n_pairs, N, dim]
+        coeffs = mv_data[:, g1_idx]  # [N, n]
+        left = torch.zeros(i_idx.numel(), N, n, device=device, dtype=dtype)
+        right = torch.zeros_like(left)
+        left.scatter_(-1, i_idx.view(-1, 1, 1).expand(-1, N, 1), coeffs[:, i_idx].T.unsqueeze(-1))
+        right.scatter_(-1, j_idx.view(-1, 1, 1).expand(-1, N, 1), coeffs[:, j_idx].T.unsqueeze(-1))
+
+        # Batched compact commutator: [n_pairs, N, grade2_dim]
         comm = self.algebra.commutator(
-            xi_all[i_idx],
-            xi_all[j_idx],
+            left,
+            right,
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(2,),
+            left_compact=True,
+            right_compact=True,
+            compact_output=True,
         )
         vals = comm.norm(dim=-1).mean(dim=-1)  # [n_pairs]
 
@@ -184,7 +184,6 @@ class CommutatorAnalyzer:
             ``"closure_error"`` (scalar), and ``"basis_indices"`` (list
             of multivector-coefficient indices of the chosen bivectors).
         """
-        dim = self.algebra.dim
         n = self.algebra.n
         device = mv_data.device
         dtype = mv_data.dtype
@@ -196,13 +195,13 @@ class CommutatorAnalyzer:
                 "basis_indices": [],
             }
 
-        # Extract grade-2 part of mean per-sample
-        bv_data = self.algebra.grade_projection(mv_data, 2)  # [N, dim]
-        mean_bv = bv_data.mean(dim=0)  # [dim]
+        # Extract compact grade-2 part of mean per-sample
+        bv_data = self.algebra.grade_projection(mv_data, 2, compact_output=True)  # [N, grade2_dim]
+        mean_bv = bv_data.mean(dim=0)  # [grade2_dim]
 
-        bv_blade_indices = self.algebra.grade_indices((2,), device=device).tolist()
+        bv_blade_indices = self.algebra.grade_indices((2,), device=device)
 
-        if not bv_blade_indices:
+        if bv_blade_indices.numel() == 0:
             return {
                 "structure_constants": torch.zeros(0, 0, 0, device=device),
                 "closure_error": 0.0,
@@ -210,29 +209,29 @@ class CommutatorAnalyzer:
             }
 
         # Pick top-k by energy in the mean bivector
-        bv_idx_tensor = torch.tensor(bv_blade_indices, dtype=torch.long, device=device)
-        energies = mean_bv[bv_idx_tensor].abs()
-        k = min(self.max_bivectors, len(bv_blade_indices))
-        topk_pos = energies.topk(k).indices.tolist()
+        energies = mean_bv.abs()
+        k = min(self.max_bivectors, int(bv_blade_indices.numel()))
+        topk_pos = energies.topk(k).indices
+        selected_indices = bv_blade_indices[topk_pos].tolist()
 
-        selected_indices = [bv_blade_indices[p] for p in topk_pos]
-
-        # Build basis bivector multivectors
-        B = torch.zeros(k, dim, device=device, dtype=dtype)
-        sel_tensor = torch.tensor(selected_indices, dtype=torch.long, device=device)
-        B[torch.arange(k, device=device), sel_tensor] = 1.0
+        # Build compact basis bivectors.
+        B = torch.zeros(k, bv_blade_indices.numel(), device=device, dtype=dtype)
+        B[torch.arange(k, device=device), topk_pos] = 1.0
 
         # Compute structure constants c_{a,b,c} such that [B_a, B_b] ~= Sum_c c_{abc} B_c
         a_idx, b_idx = torch.triu_indices(k, k, offset=1, device=device)
 
-        # Batched commutator and grade-2 projection
+        # Batched compact commutator and grade-2 projection.
         brackets_bv = self.algebra.commutator(
             B[a_idx],
             B[b_idx],
             left_grades=(2,),
             right_grades=(2,),
             output_grades=(2,),
-        )  # [n_pairs, dim]
+            left_compact=True,
+            right_compact=True,
+            compact_output=True,
+        )  # [n_pairs, grade2_dim]
 
         # Project onto basis: coeffs[p, c] = <bracket_bv_p, B_c>
         coeffs = brackets_bv @ B.T  # [n_pairs, k]
@@ -242,7 +241,7 @@ class CommutatorAnalyzer:
         structure[b_idx, a_idx, :] = -coeffs  # antisymmetry
 
         # Closure errors: residual norm / bracket norm
-        projected = coeffs @ B  # [n_pairs, dim]
+        projected = coeffs @ B  # [n_pairs, grade2_dim]
         residuals = brackets_bv - projected
         res_norms = residuals.norm(dim=-1)  # [n_pairs]
         bracket_norms = brackets_bv.norm(dim=-1)  # [n_pairs]
@@ -284,11 +283,18 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
     else:
         x_n = data_tensor[:, :n]
 
-    x = algebra.embed_vector(x_n)  # [N, dim]
-
-    # 2. Mean multivector and commutator [x_i, mu]
-    mu = x.mean(dim=0, keepdim=True)  # [1, dim]
-    comm = algebra.commutator(x, mu.expand_as(x), left_grades=(1,), right_grades=(1,), output_grades=(2,))
+    # 2. Mean grade-1 vector and compact commutator [x_i, mu]
+    mu = x_n.mean(dim=0, keepdim=True)  # [1, n]
+    comm = algebra.commutator(
+        x_n,
+        mu.expand_as(x_n),
+        left_grades=(1,),
+        right_grades=(1,),
+        output_grades=(2,),
+        left_compact=True,
+        right_compact=True,
+        compact_output=True,
+    )
 
     U = torch.norm(comm, p=2, dim=-1).mean().item()
 

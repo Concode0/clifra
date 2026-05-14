@@ -198,16 +198,14 @@ class SymmetryDetector:
         dim = self.algebra.dim
         N = mv_data.shape[0]
 
-        ii, jj = torch.triu_indices(n, n, offset=1)
-        bv_indices = ((1 << ii) | (1 << jj)).tolist()
+        bv_idx_tensor = self.algebra.grade_indices((2,), device=mv_data.device)
 
-        if not bv_indices:
+        if bv_idx_tensor.numel() == 0:
             return 0
 
-        n_bv = len(bv_indices)
+        n_bv = int(bv_idx_tensor.numel())
         # Build all bivector bases: [n_bv, dim]
         bv_bases = torch.zeros(n_bv, dim, device=mv_data.device, dtype=mv_data.dtype)
-        bv_idx_tensor = torch.tensor(bv_indices, dtype=torch.long, device=mv_data.device)
         bv_bases[torch.arange(n_bv, device=mv_data.device), bv_idx_tensor] = 1.0
 
         # Batch commutator: [n_bv, N, dim]
