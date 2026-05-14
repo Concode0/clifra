@@ -16,6 +16,13 @@ from typing import Iterable, Literal, Optional
 import torch
 
 GradeProductOp = Literal["gp", "wedge", "inner", "commutator", "anti_commutator"]
+
+# NOTE: Torch-backed executors currently store canonical basis blades as signed
+# int64 bitmasks. That makes n=63 the largest supported dimension: the highest
+# usable basis bit is 1 << 62, while n=64 would require 1 << 63, which is outside
+# torch.long's positive range. Supporting n>=64 requires kernel-level storage
+# engineering, for example compact-position-only kernels, declared blade objects,
+# multi-limb or variable-length bitsets, or another non-int64 basis identifier.
 TORCH_LONG_BASIS_MAX_N = 63
 _TORCH_LONG_MAX = (1 << TORCH_LONG_BASIS_MAX_N) - 1
 
