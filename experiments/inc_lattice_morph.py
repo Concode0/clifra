@@ -122,10 +122,7 @@ class StructureTracker:
         self.algebra = algebra
 
     def compute_volume(self, basis_mvs: torch.Tensor) -> torch.Tensor:
-        """det(L) = ||b_1 ^ b_2 ^ ... ^ b_n|| via iterative outer product.
-
-        Uses grade_projection(GP(blade, b_i), k+1) instead of wedge(),
-        because wedge() is (AB-BA)/2 which only works for two vectors.
+        """det(L) = ||b_1 ^ b_2 ^ ... ^ b_n|| via iterative exterior product.
 
         Args:
             basis_mvs: [n, D] grade-1 multivectors.
@@ -135,9 +132,15 @@ class StructureTracker:
         blade = basis_mvs[0]
         current_grade = 1
         for i in range(1, basis_mvs.shape[0]):
-            product = self.algebra.geometric_product(blade, basis_mvs[i])
-            current_grade += 1
-            blade = self.algebra.grade_projection(product, current_grade)
+            next_grade = current_grade + 1
+            blade = self.algebra.wedge(
+                blade,
+                basis_mvs[i],
+                left_grades=(current_grade,),
+                right_grades=(1,),
+                output_grades=(next_grade,),
+            )
+            current_grade = next_grade
         return induced_norm(self.algebra, blade).squeeze(-1)
 
     def compute_gram_matrix(self, basis_mvs: torch.Tensor) -> torch.Tensor:

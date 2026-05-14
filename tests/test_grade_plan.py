@@ -251,6 +251,23 @@ def test_wedge_dense_and_planned_paths_are_exterior_product_for_higher_grades():
     assert torch.allclose(compact, layout_3.compact(expected), atol=1e-12, rtol=1e-12)
 
 
+def test_wedge_chains_as_iterative_exterior_product():
+    algebra = CliffordAlgebra(4, 0, 0, device=DEVICE, dtype=torch.float64)
+    e1 = torch.zeros(1, algebra.dim, dtype=torch.float64)
+    e2 = torch.zeros(1, algebra.dim, dtype=torch.float64)
+    e3 = torch.zeros(1, algebra.dim, dtype=torch.float64)
+    e1[0, 1] = 1.0
+    e2[0, 2] = 1.0
+    e3[0, 4] = 1.0
+    expected = torch.zeros_like(e1)
+    expected[0, 7] = 1.0
+
+    e12 = algebra.wedge(e1, e2, left_grades=(1,), right_grades=(1,), output_grades=(2,))
+    actual = algebra.wedge(e12, e3, left_grades=(2,), right_grades=(1,), output_grades=(3,))
+
+    assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
+
+
 def test_wedge_plan_prunes_grade_route_pairs_before_coefficients():
     algebra = CliffordAlgebra(6, 0, 0, device=DEVICE, dtype=torch.float64)
     broad = build_grade_product_plan(
