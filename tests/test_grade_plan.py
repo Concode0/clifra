@@ -240,6 +240,30 @@ def test_product_plan_owns_compact_position_buffers():
     )
 
 
+def test_product_executor_compact_forward_supports_different_layout_widths():
+    algebra = CliffordAlgebra(4, 1, 0, device=DEVICE, dtype=torch.float64)
+    plan = build_grade_product_plan(
+        algebra.p,
+        algebra.q,
+        algebra.r,
+        left_grades=(1,),
+        right_grades=(1, 2),
+        output_grades=(0, 1, 2, 3),
+        op="gp",
+        device=DEVICE,
+        dtype=torch.float64,
+    )
+    product = GradeProductExecutor(plan)
+    A = _grade_only_input(algebra, 2, (1,), seed=115)
+    B = _grade_only_input(algebra, 2, (1, 2), seed=117)
+
+    compact = product.forward_compact(plan.left_layout.compact(A), plan.right_layout.compact(B))
+    dense = product(A, B)
+
+    assert plan.left_layout.dim != plan.right_layout.dim
+    assert torch.allclose(compact, dense, atol=1e-12, rtol=1e-12)
+
+
 def test_algebra_projected_product_matches_dense_kernel_and_compact_output():
     algebra = CliffordAlgebra(4, 1, 1, device=DEVICE, dtype=torch.float64)
     A = _grade_only_input(algebra, 2, (1,), seed=113)

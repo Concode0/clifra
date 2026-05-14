@@ -286,9 +286,9 @@ class GradeProductExecutor(nn.Module):
         if right.shape[-1] != self.dim:
             raise ValueError(f"right last dimension must be {self.dim}, got {right.shape[-1]}")
 
-        left_b, right_b = torch.broadcast_tensors(left, right)
-        left_terms = torch.index_select(left_b, -1, self.left_indices)
-        right_terms = torch.index_select(right_b, -1, self.right_indices)
+        left_terms = torch.index_select(left, -1, self.left_indices)
+        right_terms = torch.index_select(right, -1, self.right_indices)
+        left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
         terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
 
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
@@ -301,9 +301,9 @@ class GradeProductExecutor(nn.Module):
         if right.shape[-1] != self.right_layout.dim:
             raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
 
-        left_b, right_b = torch.broadcast_tensors(left, right)
-        left_terms = torch.index_select(left_b, -1, self.left_compact_positions)
-        right_terms = torch.index_select(right_b, -1, self.right_compact_positions)
+        left_terms = torch.index_select(left, -1, self.left_compact_positions)
+        right_terms = torch.index_select(right, -1, self.right_compact_positions)
+        left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
         terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
 
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
