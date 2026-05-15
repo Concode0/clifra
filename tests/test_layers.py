@@ -9,9 +9,7 @@ import pytest
 import torch
 
 from core.runtime.algebra import CliffordAlgebra
-from core.runtime.decomposition import ExpPolicy
-from layers import CliffordLinear, MultiRotorLayer, RotorLayer
-from layers.primitives.reflection import ReflectionLayer
+from layers import CliffordLinear, MultiRotorLayer, ReflectionLayer, RotorLayer
 
 pytestmark = pytest.mark.unit
 
