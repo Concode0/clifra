@@ -436,6 +436,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../Architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../philosophy/" class="md-nav__link">
         
   
@@ -1251,7 +1279,7 @@
 <p>A step-by-step guide to using Versor's geometric layers in your own models.</p>
 <h2 id="1-create-a-clifford-algebra">1. Create a Clifford Algebra<a class="headerlink" href="#1-create-a-clifford-algebra" title="Permanent link">&para;</a></h2>
 <p>Everything starts with a <code>CliffordAlgebra</code> instance. The signature <span class="arithmatex">\((p, q, r)\)</span> determines the geometry:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">core.algebra</span><span class="w"> </span><span class="kn">import</span> <span class="n">CliffordAlgebra</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">core.runtime.algebra</span><span class="w"> </span><span class="kn">import</span> <span class="n">CliffordAlgebra</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># 3D Euclidean (rotations in 3-space)</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">algebra</span> <span class="o">=</span> <span class="n">CliffordAlgebra</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">r</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cpu&#39;</span><span class="p">)</span>
@@ -1392,7 +1420,7 @@
 <h2 id="6-creating-a-task">6. Creating a Task<a class="headerlink" href="#6-creating-a-task" title="Permanent link">&para;</a></h2>
 <p>All tasks inherit from <code>BaseTask</code> and implement 7 methods:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">tasks.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseTask</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">core.algebra</span><span class="w"> </span><span class="kn">import</span> <span class="n">CliffordAlgebra</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">core.runtime.algebra</span><span class="w"> </span><span class="kn">import</span> <span class="n">CliffordAlgebra</span>
 <a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">functional.loss</span><span class="w"> </span><span class="kn">import</span> <span class="n">GeometricMSELoss</span>
 <a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
 <a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyTask</span><span class="p">(</span><span class="n">BaseTask</span><span class="p">):</span>
