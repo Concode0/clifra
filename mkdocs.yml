@@ -37,6 +37,7 @@ nav:
   - Home: index.md
   - Guide:
       - Design Guide: design_guide.md
+      - Architecture: Architecture.md
       - Philosophy: philosophy.md
       - Mathematics: mathematical.md
       - Innovations: innovations.md
