@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from core.runtime.algebra import CliffordAlgebra
+from core.runtime.context import AlgebraContext
 from layers import CliffordLinear, RotorGadget
 
 pytestmark = pytest.mark.unit
@@ -698,13 +699,20 @@ class TestCliffordLinearBackend:
 
     def test_invalid_backend_raises(self, algebra_3d):
         """Test that invalid backend raises error."""
-        with pytest.raises(ValueError, match="Unknown backend"):
+        with pytest.raises(ValueError, match="backend"):
             CliffordLinear(
                 algebra=algebra_3d,
                 in_channels=4,
                 out_channels=8,
                 backend="invalid",
             )
+
+    def test_rotor_backend_rejects_compact_context(self):
+        """RotorGadget backend is dense-only until compact aggregation semantics are explicit."""
+        context = AlgebraContext(4, 0, device="cpu", default_grades=(1,))
+
+        with pytest.raises(ValueError, match="dense-only"):
+            CliffordLinear(context, in_channels=4, out_channels=4, backend="rotor")
 
     def test_backward_compatibility(self, algebra_3d):
         """Test that default behavior is unchanged (traditional)."""

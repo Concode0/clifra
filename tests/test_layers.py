@@ -9,7 +9,16 @@ import pytest
 import torch
 
 from core.runtime.algebra import CliffordAlgebra
-from layers import CliffordLinear, MultiRotorLayer, ReflectionLayer, RotorLayer
+from core.runtime.context import AlgebraContext
+from layers import (
+    BladeSelector,
+    CliffordLayerNorm,
+    CliffordLinear,
+    MultiRotorLayer,
+    ReflectionLayer,
+    RotorGadget,
+    RotorLayer,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -22,6 +31,45 @@ class TestLayers:
         layer = CliffordLinear(algebra_3d, 2, 3)
         y = layer(x)
         assert y.shape == (4, 3, 8)
+
+    def test_linear_accepts_extra_leading_dimensions(self, algebra_3d):
+        x = torch.randn(2, 3, 4, algebra_3d.dim)
+        layer = CliffordLinear(algebra_3d, 4, 5)
+
+        y = layer(x)
+        expected = torch.einsum("oi,...id->...od", layer.weight, x) + layer.bias.view(1, 1, 5, algebra_3d.dim)
+
+        assert y.shape == (2, 3, 5, algebra_3d.dim)
+        assert torch.allclose(y, expected)
+
+    def test_layer_norm_accepts_extra_leading_dimensions(self, algebra_3d):
+        x = torch.randn(2, 3, 4, algebra_3d.dim)
+        layer = CliffordLayerNorm(algebra_3d, 4)
+
+        y = layer(x)
+
+        assert y.shape == x.shape
+
+    def test_blade_selector_starts_as_pass_through(self, algebra_3d):
+        x = torch.randn(2, 3, 4, algebra_3d.dim)
+        layer = BladeSelector(algebra_3d, 4)
+
+        y = layer(x)
+
+        assert torch.allclose(y, x)
+
+    def test_compact_layout_preserving_primitives_with_context(self):
+        context = AlgebraContext(5, 0, device="cpu", default_grades=(1,))
+        layout = context.layout((1,))
+        x = torch.randn(2, 3, 4, layout.dim)
+
+        linear = CliffordLinear(context, 4, 2, layout=layout)
+        norm = CliffordLayerNorm(context, 2, layout=layout)
+        selector = BladeSelector(context, 2, layout=layout)
+
+        y = selector(norm(linear(x)))
+
+        assert y.shape == (2, 3, 2, layout.dim)
 
     def test_rotor_shape(self, algebra_3d):
         # Batch=4, Channels=5
@@ -51,11 +99,79 @@ class TestLayers:
 
         assert torch.allclose(x_norm, y_norm, atol=1e-5)
 
+    def test_rotor_accepts_extra_leading_dimensions(self, algebra_3d):
+        x = torch.randn(2, 3, 4, algebra_3d.dim)
+        layer = RotorLayer(algebra_3d, 4)
+
+        y = layer(x)
+
+        assert y.shape == x.shape
+
+    def test_compact_rotor_matches_dense_reference(self):
+        context = AlgebraContext(3, 0, device="cpu", default_grades=(1,))
+        dense = CliffordAlgebra(3, 0, device="cpu")
+        layout = context.layout((1,))
+        x = torch.randn(2, 4, layout.dim)
+
+        compact_layer = RotorLayer(context, 4, input_layout=layout)
+        dense_layer = RotorLayer(dense, 4)
+        dense_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
+
+        actual = compact_layer(x)
+        expected = layout.compact(dense_layer(layout.dense(x)))
+
+        assert actual.shape == x.shape
+        assert torch.allclose(actual, expected, atol=1e-4)
+
+    def test_compact_rotor_multigrade_matches_dense_reference(self):
+        context = AlgebraContext(3, 0, device="cpu")
+        dense = CliffordAlgebra(3, 0, device="cpu")
+        layout = context.layout((0, 1, 2))
+        dense_x = torch.randn(2, 3, dense.dim)
+        x = layout.compact(dense_x)
+
+        compact_layer = RotorLayer(context, 3, input_layout=layout)
+        dense_layer = RotorLayer(dense, 3)
+        dense_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
+
+        actual = compact_layer(x)
+        expected = layout.compact(dense_layer(dense_x))
+
+        assert actual.shape == x.shape
+        assert torch.allclose(actual, expected, atol=1e-4)
+
     def test_multi_rotor_shape(self, algebra_3d):
         x = torch.randn(4, 5, 8)
         layer = MultiRotorLayer(algebra_3d, 5, num_rotors=4)
         y = layer(x)
         assert y.shape == (4, 5, 8)
+
+    def test_multi_rotor_accepts_extra_leading_dimensions(self, algebra_3d):
+        x = torch.randn(2, 3, 4, algebra_3d.dim)
+        layer = MultiRotorLayer(algebra_3d, 4, num_rotors=3)
+
+        y = layer(x)
+        inv = layer(x, return_invariants=True)
+
+        assert y.shape == x.shape
+        assert inv.shape == (2, 3, 4, algebra_3d.num_grades)
+
+    def test_compact_multi_rotor_matches_dense_reference(self):
+        context = AlgebraContext(3, 0, device="cpu", default_grades=(1,))
+        dense = CliffordAlgebra(3, 0, device="cpu")
+        layout = context.layout((1,))
+        x = torch.randn(2, 3, layout.dim)
+
+        compact_layer = MultiRotorLayer(context, 3, num_rotors=2, input_layout=layout)
+        dense_layer = MultiRotorLayer(dense, 3, num_rotors=2)
+        dense_layer.rotor_grade_weights.data.copy_(compact_layer.rotor_grade_weights.data)
+        dense_layer.weights.data.copy_(compact_layer.weights.data)
+
+        actual = compact_layer(x)
+        expected = layout.compact(dense_layer(layout.dense(x)))
+
+        assert actual.shape == x.shape
+        assert torch.allclose(actual, expected, atol=1e-4)
 
     def test_multi_rotor_invariants(self, algebra_3d):
         x = torch.randn(4, 5, 8)
@@ -193,6 +309,30 @@ class TestLayers:
         y = layer(x)
         assert y.shape == (B, C, 8)
 
+    def test_reflection_accepts_extra_leading_dimensions(self, algebra_3d):
+        x = torch.randn(2, 3, 4, algebra_3d.dim)
+        layer = ReflectionLayer(algebra_3d, channels=4)
+
+        y = layer(x)
+
+        assert y.shape == x.shape
+
+    def test_compact_reflection_matches_dense_reference(self):
+        context = AlgebraContext(3, 0, device="cpu", default_grades=(1,))
+        dense = CliffordAlgebra(3, 0, device="cpu")
+        layout = context.layout((1,))
+        x = torch.randn(2, 4, layout.dim)
+
+        compact_layer = ReflectionLayer(context, channels=4, input_layout=layout)
+        dense_layer = ReflectionLayer(dense, channels=4)
+        dense_layer.vector_weights.data.copy_(compact_layer.vector_weights.data)
+
+        actual = compact_layer(x)
+        expected = layout.compact(dense_layer(layout.dense(x)))
+
+        assert actual.shape == x.shape
+        assert torch.allclose(actual, expected, atol=1e-4)
+
     def test_reflection_preserves_norm(self, algebra_3d):
         C = 3
         layer = ReflectionLayer(algebra_3d, channels=C)
@@ -260,6 +400,27 @@ class TestLayers:
         y_gp = algebra_3d.geometric_product(Vx, VR)  # [B, C, K, D]
 
         assert torch.allclose(y_action, y_gp, atol=1e-5), f"Max diff: {(y_action - y_gp).abs().max().item():.2e}"
+
+    def test_rotor_gadget_mean_routing_keeps_remainder_channels(self, algebra_3d):
+        layer = RotorGadget(algebra_3d, in_channels=5, out_channels=3, num_rotor_pairs=2, aggregation="mean")
+        with torch.no_grad():
+            layer.bivector_left.zero_()
+            layer.bivector_right.zero_()
+
+        x = torch.zeros(1, 5, algebra_3d.dim)
+        x[0, :, 0] = torch.arange(1, 6, dtype=x.dtype)
+
+        y = layer(x)
+
+        assert torch.allclose(y[0, :, 0], torch.tensor([1.5, 3.5, 5.0]))
+
+    def test_rotor_gadget_accepts_extra_leading_dimensions(self, algebra_3d):
+        x = torch.randn(2, 3, 4, algebra_3d.dim)
+        layer = RotorGadget(algebra_3d, in_channels=4, out_channels=6, num_rotor_pairs=2)
+
+        y = layer(x)
+
+        assert y.shape == (2, 3, 6, algebra_3d.dim)
 
 
 # --- torch.compile smoke tests ---
