@@ -14,6 +14,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
+from core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from core.foundation.module import CliffordModule
 from core.foundation.validation import check_channels, check_multivector
 from core.runtime.algebra import CliffordAlgebra
@@ -89,10 +90,10 @@ class RotorGadget(CliffordModule):
         # Rotor parameters: bivector coefficients for exponential map
         # Left rotors: [num_rotor_pairs, num_bivectors]
         self.bivector_left = nn.Parameter(torch.randn(num_rotor_pairs, self.num_bivectors) * 0.1)
-        self.bivector_left._manifold = "spin"
+        tag_manifold(self.bivector_left, MANIFOLD_SPIN)
         # Right rotors: [num_rotor_pairs, num_bivectors]
         self.bivector_right = nn.Parameter(torch.randn(num_rotor_pairs, self.num_bivectors) * 0.1)
-        self.bivector_right._manifold = "spin"
+        tag_manifold(self.bivector_right, MANIFOLD_SPIN)
 
         # Channel routing: block diagonal partitioning (paper style)
         # Each rotor pair processes a subset of input channels

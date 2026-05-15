@@ -80,6 +80,46 @@ class AlgebraLike(Protocol):
         """Return Hermitian signs for a dense or compact layout."""
         ...
 
+    def projected_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply a declared grade-restricted binary product."""
+        ...
+
+    def geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the geometric product."""
+        ...
+
+    def wedge(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the exterior product."""
+        ...
+
+    def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the inner product."""
+        ...
+
+    def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the commutator product."""
+        ...
+
+    def anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the anti-commutator product."""
+        ...
+
+    def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
+        """Project to a single grade."""
+        ...
+
+    def reverse(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply reversion."""
+        ...
+
+    def grade_involution(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply grade involution."""
+        ...
+
+    def clifford_conjugation(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply Clifford conjugation."""
+        ...
+
 
 class CliffordModule(nn.Module):
     """Base module for Clifford algebra-aware components.

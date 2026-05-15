@@ -8,6 +8,7 @@
 import torch
 import torch.nn as nn
 
+from core.foundation.manifold import MANIFOLD_SPHERE, tag_manifold
 from core.foundation.module import CliffordModule
 from core.foundation.validation import check_channels, check_multivector
 from core.runtime.algebra import CliffordAlgebra
@@ -46,7 +47,7 @@ class ReflectionLayer(CliffordModule):
         self.num_vectors = algebra.n
 
         self.vector_weights = nn.Parameter(torch.Tensor(channels, self.num_vectors))
-        self.vector_weights._manifold = "sphere"
+        tag_manifold(self.vector_weights, MANIFOLD_SPHERE)
 
         # Cache for eval mode
         self._cached_n = None

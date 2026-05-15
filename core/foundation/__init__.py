@@ -23,6 +23,16 @@ from .basis import (
 )
 from .device import DeviceConfig, dtype_name, optional_dtype, resolve_device, resolve_dtype
 from .layout import AlgebraSpec, GradeLayout
+from .manifold import (
+    MANIFOLD_EUCLIDEAN,
+    MANIFOLD_ORDER,
+    MANIFOLD_SPHERE,
+    MANIFOLD_SPIN,
+    VALID_MANIFOLDS,
+    format_valid_manifolds,
+    tag_manifold,
+    validate_manifold,
+)
 from .module import AlgebraLike, CliffordModule
 from .validation import check_channels, check_multivector
 
@@ -33,6 +43,11 @@ __all__ = [
     "DeviceConfig",
     "GradeLayout",
     "GradeProductOp",
+    "MANIFOLD_EUCLIDEAN",
+    "MANIFOLD_ORDER",
+    "MANIFOLD_SPHERE",
+    "MANIFOLD_SPIN",
+    "VALID_MANIFOLDS",
     "basis_count_for_grades",
     "basis_index_tuple_for_grades",
     "basis_indices_for_grades",
@@ -41,6 +56,7 @@ __all__ = [
     "check_multivector",
     "dtype_name",
     "expand_output_grades",
+    "format_valid_manifolds",
     "geometric_product_output_grades",
     "normalize_grades",
     "operation_coefficient",
@@ -50,4 +66,6 @@ __all__ = [
     "reverse_sign",
     "resolve_device",
     "resolve_dtype",
+    "tag_manifold",
+    "validate_manifold",
 ]

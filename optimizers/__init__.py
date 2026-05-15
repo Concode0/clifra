@@ -12,6 +12,7 @@ from .riemannian import (
     RiemannianAdam,
     exponential_retraction,
     group_parameters_by_manifold,
+    make_riemannian_optimizer,
     project_to_tangent_space,
     tag_manifold,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "exponential_retraction",
     "tag_manifold",
     "group_parameters_by_manifold",
+    "make_riemannian_optimizer",
     "MANIFOLD_SPIN",
     "MANIFOLD_SPHERE",
     "MANIFOLD_EUCLIDEAN",
