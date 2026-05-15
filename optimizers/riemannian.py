@@ -24,31 +24,14 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
-MANIFOLD_SPIN = "spin"
-MANIFOLD_SPHERE = "sphere"
-MANIFOLD_EUCLIDEAN = "euclidean"
-
-_VALID_MANIFOLDS = {MANIFOLD_SPIN, MANIFOLD_SPHERE, MANIFOLD_EUCLIDEAN}
-
-
-def tag_manifold(param: nn.Parameter, manifold: str) -> nn.Parameter:
-    """Tag a parameter with its Riemannian manifold type.
-
-    Layers should call this (or set ``param._manifold`` directly) in their
-    ``__init__`` so that :meth:`RiemannianAdam.from_model` can auto-group
-    parameters for correct per-manifold retraction.
-
-    Args:
-        param: The parameter to tag.
-        manifold: One of ``'spin'``, ``'sphere'``, ``'euclidean'``.
-
-    Returns:
-        The same parameter (for chaining).
-    """
-    if manifold not in _VALID_MANIFOLDS:
-        raise ValueError(f"Unknown manifold '{manifold}'. Must be one of {_VALID_MANIFOLDS}")
-    param._manifold = manifold
-    return param
+from core.foundation.manifold import (
+    MANIFOLD_EUCLIDEAN,
+    MANIFOLD_ORDER,
+    MANIFOLD_SPHERE,
+    MANIFOLD_SPIN,
+    tag_manifold,
+    validate_manifold,
+)
 
 
 def group_parameters_by_manifold(
@@ -71,9 +54,48 @@ def group_parameters_by_manifold(
         MANIFOLD_EUCLIDEAN: [],
     }
     for p in model.parameters():
-        manifold = getattr(p, "_manifold", MANIFOLD_EUCLIDEAN)
+        manifold = validate_manifold(getattr(p, "_manifold", MANIFOLD_EUCLIDEAN))
         groups[manifold].append(p)
     return groups
+
+
+def _parameter_groups_for_model(model: nn.Module) -> list[dict]:
+    grouped = group_parameters_by_manifold(model)
+    param_groups = []
+    for manifold in MANIFOLD_ORDER:
+        params = grouped[manifold]
+        if params:
+            param_groups.append({"params": params, "manifold": manifold})
+    if not param_groups:
+        raise ValueError("Model has no parameters")
+    return param_groups
+
+
+def make_riemannian_optimizer(
+    model: nn.Module,
+    algebra,
+    *,
+    optimizer: str = "adam",
+    **kwargs,
+) -> Optimizer:
+    """Create a manifold-aware optimizer from a tagged model.
+
+    Args:
+        model: Model whose parameters may be tagged with ``_manifold``.
+        algebra: Clifford algebra instance used by the optimizer.
+        optimizer: ``"adam"``/``"riemannian_adam"`` or
+            ``"sgd"``/``"exponential_sgd"``.
+        **kwargs: Optimizer-specific keyword arguments.
+
+    Returns:
+        ``RiemannianAdam`` or ``ExponentialSGD`` with per-manifold groups.
+    """
+    key = optimizer.lower().replace("-", "_")
+    if key in {"adam", "riemannian_adam"}:
+        return RiemannianAdam.from_model(model, algebra=algebra, **kwargs)
+    if key in {"sgd", "exponential_sgd"}:
+        return ExponentialSGD.from_model(model, algebra=algebra, **kwargs)
+    raise ValueError("optimizer must be one of 'adam', 'riemannian_adam', 'sgd', or 'exponential_sgd'")
 
 
 class ExponentialSGD(Optimizer):
@@ -154,14 +176,7 @@ class ExponentialSGD(Optimizer):
         Returns:
             ExponentialSGD instance with per-manifold parameter groups.
         """
-        grouped = group_parameters_by_manifold(model)
-        param_groups = []
-        for manifold in (MANIFOLD_SPIN, MANIFOLD_SPHERE, MANIFOLD_EUCLIDEAN):
-            params = grouped[manifold]
-            if params:
-                param_groups.append({"params": params, "manifold": manifold})
-        if not param_groups:
-            raise ValueError("Model has no parameters")
+        param_groups = _parameter_groups_for_model(model)
         return cls(param_groups, lr=lr, momentum=momentum, algebra=algebra, max_bivector_norm=max_bivector_norm)
 
     @torch.no_grad()
@@ -294,14 +309,7 @@ class RiemannianAdam(Optimizer):
         Returns:
             RiemannianAdam instance with per-manifold parameter groups.
         """
-        grouped = group_parameters_by_manifold(model)
-        param_groups = []
-        for manifold in (MANIFOLD_SPIN, MANIFOLD_SPHERE, MANIFOLD_EUCLIDEAN):
-            params = grouped[manifold]
-            if params:
-                param_groups.append({"params": params, "manifold": manifold})
-        if not param_groups:
-            raise ValueError("Model has no parameters")
+        param_groups = _parameter_groups_for_model(model)
         return cls(param_groups, lr=lr, betas=betas, eps=eps, algebra=algebra, max_bivector_norm=max_bivector_norm)
 
     @torch.no_grad()

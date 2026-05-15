@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
 
 
 class GeometricGELU(CliffordModule):

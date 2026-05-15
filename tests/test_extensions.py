@@ -8,7 +8,7 @@
 import pytest
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers import CliffordGraphConv
 from layers.adapters.conformal import ConformalEmbedding
 from layers.adapters.projective import ProjectiveEmbedding

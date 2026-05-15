@@ -12,8 +12,8 @@ import math
 import pytest
 import torch
 
-from core.algebra import CliffordAlgebra
 from core.analysis import DimensionLifter, GeodesicFlow, MetricSearch
+from core.runtime.algebra import CliffordAlgebra
 
 pytestmark = pytest.mark.unit
 

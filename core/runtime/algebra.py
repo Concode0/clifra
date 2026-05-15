@@ -17,10 +17,12 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from core.validation import check_multivector
+from core.foundation.validation import check_multivector
+from core.planning.policy import DEFAULT_PLANNING_LIMITS, PlanningLimits
+from core.runtime.projected import AlgebraRuntimeMixin
 
 
-class CliffordAlgebra(nn.Module):
+class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
     """Differentiable Clifford algebra kernel with memory-optimized blocked accumulation.
 
     Extends ``nn.Module`` so that all Cayley tables are registered as
@@ -50,6 +52,8 @@ class CliffordAlgebra(nn.Module):
         dtype: torch.dtype = torch.float32,
         exp_policy: str = "balanced",
         fixed_iterations: Optional[int] = None,
+        allow_large_dense: bool = False,
+        planning_limits: Optional[PlanningLimits] = None,
     ):
         """Initialize the algebra and cache the Cayley table.
 
@@ -64,11 +68,11 @@ class CliffordAlgebra(nn.Module):
                 precision (e.g. AMP on CUDA bfloat16 mode).
             exp_policy (str or ExpPolicy, optional): Bivector exp policy.
                 ``'balanced'`` (default) or ``'precise'``.
-                See :class:`core.decomposition.ExpPolicy`.
+                See :class:`core.runtime.decomposition.ExpPolicy`.
             fixed_iterations (int, optional): Power-iteration step count for
                 the compiled-safe decomposed exp path (used when n>=4).
                 ``None`` (default) auto-derives from ``(exp_policy, dtype, n)``
-                via :func:`core.decomposition.resolve_fixed_iterations`,
+                via :func:`core.runtime.decomposition.resolve_fixed_iterations`,
                 pinned statically at init.
         """
         super().__init__()
@@ -76,11 +80,17 @@ class CliffordAlgebra(nn.Module):
         assert p >= 0, f"p must be non-negative, got {p}"
         assert q >= 0, f"q must be non-negative, got {q}"
         assert r >= 0, f"r must be non-negative, got {r}"
-        assert p + q + r <= 12, f"p + q + r must be <= 12, got {p + q + r}"
+        max_dense_n = 12 if allow_large_dense else 8
+        assert p + q + r <= max_dense_n, (
+            f"p + q + r must be <= {max_dense_n} for dense CliffordAlgebra, got {p + q + r}. "
+            "Use make_algebra(..., kernel='auto') for AlgebraContext or kernel='dense' to explicitly allow Cl9-Cl12."
+        )
 
         self.p, self.q, self.r = p, q, r
         self.n = p + q + r
         self.dim = 2**self.n
+        self.allow_full_layout_products = True
+        self.planning_limits = DEFAULT_PLANNING_LIMITS if planning_limits is None else planning_limits
 
         # Exp regime: dispatch at init
         if p == 0 or q == 0:
@@ -91,7 +101,7 @@ class CliffordAlgebra(nn.Module):
             self._exp_regime = "mixed"
 
         # Exp policy: controls decomposition iteration budget
-        from core.decomposition import ExpPolicy, resolve_fixed_iterations
+        from core.runtime.decomposition import ExpPolicy, resolve_fixed_iterations
 
         self._exp_policy = exp_policy if isinstance(exp_policy, ExpPolicy) else ExpPolicy(exp_policy)
 
@@ -146,6 +156,7 @@ class CliffordAlgebra(nn.Module):
         stacked = torch.stack(grade_masks_list)  # [n+1, dim]
         self.register_buffer("_grade_masks", stacked, persistent=False)
         self.register_buffer("_grade_masks_float", stacked.to(dtype=cayley_signs.dtype), persistent=False)
+        self.register_buffer("_g1_indices", stacked[1].nonzero(as_tuple=False).squeeze(-1), persistent=False)
 
         # Bivector indices
         if self.n >= 2:
@@ -163,6 +174,10 @@ class CliffordAlgebra(nn.Module):
         self.eps: float = float(_finfo.eps)
         self.eps_sq: float = float(_finfo.eps**2)
 
+        from core.planning.planner import GradePlanner
+
+        self.planner = GradePlanner(self)
+
     @property
     def device(self):
         """Return the device of the algebra tables."""
@@ -177,12 +192,23 @@ class CliffordAlgebra(nn.Module):
         """
         return self.cayley_signs.dtype
 
+    def bivector_squared_signs(self, *, device=None, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
+        """Return ``(e_ab)^2`` signs in canonical grade-2 layout order."""
+        signs = self.bv_sq_scalar
+        if device is not None or dtype is not None:
+            signs = signs.to(
+                device=self.device if device is None else device,
+                dtype=self.dtype if dtype is None else dtype,
+            )
+        return signs
+
     def _apply(self, fn):
         """Propagate device/dtype moves and keep eps tolerances in sync."""
         result = super()._apply(fn)
         _finfo = torch.finfo(self.cayley_signs.dtype)
         self.eps = float(_finfo.eps)
         self.eps_sq = float(_finfo.eps**2)
+        self.planner._apply(fn)
         return result
 
     @property
@@ -202,7 +228,7 @@ class CliffordAlgebra(nn.Module):
 
     @exp_policy.setter
     def exp_policy(self, value):
-        from core.decomposition import ExpPolicy, resolve_fixed_iterations
+        from core.runtime.decomposition import ExpPolicy, resolve_fixed_iterations
 
         self._exp_policy = value if isinstance(value, ExpPolicy) else ExpPolicy(value)
         self._exp_fixed_iterations = resolve_fixed_iterations(self._exp_policy, self.dtype, self.n)
@@ -254,10 +280,9 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Multivector coefficients [..., dim].
         """
-        g1_idx = (1 << torch.arange(self.n, device=vectors.device)).long()
-        mv = torch.zeros(*vectors.shape[:-1], self.dim, device=vectors.device, dtype=vectors.dtype)
-        mv.scatter_(-1, g1_idx.expand_as(vectors), vectors)
-        return mv
+        g1_idx = self._basis_vector_indices(vectors.device)
+        mv = vectors.new_zeros(*vectors.shape[:-1], self.dim)
+        return mv.index_copy(-1, g1_idx, vectors)
 
     def get_grade_norms(self, mv: torch.Tensor) -> torch.Tensor:
         """Calculates norms per grade. Useful for invariant features.
@@ -329,12 +354,16 @@ class CliffordAlgebra(nn.Module):
         else:
             bv_sq_scalar = torch.zeros(0, dtype=cayley_signs.dtype, device=device)
 
-        # Precomputed signs for single-pass wedge and inner product
-        # wedge(A,B) = (AB - BA)/2 uses antisymmetric part of signs
+        # Precomputed signs for single-pass exterior and symmetric products.
+        # wedge(A,B) is the exterior product: the grade-sum part of AB.
+        gi = grade_index.unsqueeze(1)  # [D, 1] - left summation index grade
+        gj_for_result = grade_index[cayley_indices]  # [D, D] - right index j = i^k grade
+        gk = grade_index.unsqueeze(0)  # [1, D] - output index k grade
+        exterior_valid = gk == gi + gj_for_result
+        wedge_gp_signs = gp_signs * exterior_valid.to(dtype=gp_signs.dtype)
+
         # inner(A,B) = (AB + BA)/2 uses symmetric part of signs
-        wedge_cayley_signs = (cayley_signs - cayley_signs.T) / 2.0
         inner_cayley_signs = (cayley_signs + cayley_signs.T) / 2.0
-        wedge_gp_signs = torch.gather(wedge_cayley_signs, 1, cayley_indices)
         inner_gp_signs = torch.gather(inner_cayley_signs, 1, cayley_indices)
 
         # Precomputed signs for commutator [A,B] = AB - BA and
@@ -466,7 +495,7 @@ class CliffordAlgebra(nn.Module):
 
         return (commutator_sign * metric_sign).to(dtype=dtype)
 
-    def geometric_product(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the Geometric Product.
 
         Uses vectorized gather + broadcast multiply + sum.
@@ -478,6 +507,8 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: The product AB [..., Dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="gp", **kwargs)
         check_multivector(A, self, "geometric_product(A)")
         check_multivector(B, self, "geometric_product(B)")
 
@@ -487,7 +518,7 @@ class CliffordAlgebra(nn.Module):
         # result[..., k] = sum_i A[..., i] * B[..., cayley[i,k]] * signs[i,k]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.gp_signs).squeeze(-2)
 
-    def grade_projection(self, mv: torch.Tensor, grade: int) -> torch.Tensor:
+    def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
         """Isolates a specific grade.
 
         Uses multiplicative masking (mv * float_mask) instead of boolean
@@ -500,12 +531,15 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Projected multivector [..., Dim].
         """
+        if kwargs:
+            kwargs.setdefault("output_grades", (int(grade),))
+            return self.planned_unary(mv, op="grade_projection", **kwargs)
         mask = self.grade_masks_float[grade]
         if mask.dtype != mv.dtype:
             mask = mask.to(dtype=mv.dtype)
         return mv * mask
 
-    def reverse(self, mv: torch.Tensor) -> torch.Tensor:
+    def reverse(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the reversion. The Clifford conjugate.
 
         Args:
@@ -514,15 +548,19 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Reversed multivector [..., Dim].
         """
+        if kwargs:
+            return self.planned_unary(mv, op="reverse", **kwargs)
         rev = self.rev_signs
         if rev.dtype != mv.dtype:
             rev = rev.to(dtype=mv.dtype)
         return mv * rev
 
-    def wedge(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-        """Computes the wedge (outer) product: A ^ B = (AB - BA)/2.
+    def wedge(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Computes the wedge/exterior product ``A ^ B``.
 
-        Single-pass implementation using precomputed antisymmetric signs.
+        For homogeneous inputs this is the grade-sum part of the
+        geometric product, ``<AB>_{grade(A)+grade(B)}``.  For vectors this
+        coincides with ``(AB - BA) / 2``.
 
         Reference:
             Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers
@@ -535,6 +573,8 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Wedge product A ^ B [..., dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="wedge", **kwargs)
         B_gathered = B[..., self.cayley_indices]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.wedge_gp_signs).squeeze(-2)
 
@@ -559,9 +599,7 @@ class CliffordAlgebra(nn.Module):
         bv_idx_exp = self._bv_indices.expand(*A.shape[:-1], -1)
         bv_coeffs = torch.gather(A, -1, bv_idx_exp)  # [..., num_bv]
 
-        # Grade-1 indices: powers of 2 for basis vectors
-        g1_idx = torch.arange(self.n, device=A.device)
-        g1_idx = (1 << g1_idx).long()  # [n]
+        g1_idx = self._basis_vector_indices(A.device)
         g1_idx_exp = g1_idx.expand(*B.shape[:-1], -1)
         v_coeffs = torch.gather(B, -1, g1_idx_exp)  # [..., n]
 
@@ -577,7 +615,19 @@ class CliffordAlgebra(nn.Module):
         result.scatter_(-1, g1_idx_exp, result_v)
         return result
 
-    def inner_product(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def _basis_vector_indices(self, device) -> torch.Tensor:
+        indices = self._g1_indices
+        if indices.device != torch.device(device):
+            indices = indices.to(device=device)
+        return indices
+
+    def _bivector_indices_for(self, device) -> torch.Tensor:
+        indices = self._bv_indices
+        if indices.device != torch.device(device):
+            indices = indices.to(device=device)
+        return indices
+
+    def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the inner product: A . B = (AB + BA)/2.
 
         Single-pass implementation using precomputed symmetric signs.
@@ -593,14 +643,15 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Inner product A . B [..., dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="inner", **kwargs)
         B_gathered = B[..., self.cayley_indices]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.inner_gp_signs).squeeze(-2)
 
-    def commutator(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the commutator (Lie bracket): [A, B] = AB - BA.
 
-        Single-pass implementation using precomputed antisymmetric signs
-        (same structure as :meth:`wedge` but without the 1/2 factor).
+        Single-pass implementation using precomputed antisymmetric signs.
 
         Args:
             A (torch.Tensor): Left operand [..., dim].
@@ -609,10 +660,12 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Commutator [A, B] [..., dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="commutator", **kwargs)
         B_gathered = B[..., self.cayley_indices]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.comm_gp_signs).squeeze(-2)
 
-    def anti_commutator(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    def anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Computes the anti-commutator: {A, B} = AB + BA.
 
         Single-pass implementation using precomputed symmetric signs
@@ -625,6 +678,8 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Anti-commutator {A, B} [..., dim].
         """
+        if kwargs:
+            return self.projected_product(A, B, op="anti_commutator", **kwargs)
         B_gathered = B[..., self.cayley_indices]
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.anti_comm_gp_signs).squeeze(-2)
 
@@ -799,7 +854,7 @@ class CliffordAlgebra(nn.Module):
         """
         return mv - self.blade_project(mv, blade)
 
-    def grade_involution(self, mv: torch.Tensor) -> torch.Tensor:
+    def grade_involution(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Grade involution (main involution): x_hat = sum (-1)^k <x>_k.
 
         Flips sign of all odd-grade components, preserves even-grade.
@@ -811,12 +866,14 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Involuted multivector [..., dim].
         """
+        if kwargs:
+            return self.planned_unary(mv, op="grade_involution", **kwargs)
         signs = self._involution_signs
         if signs.dtype != mv.dtype:
             signs = signs.to(dtype=mv.dtype)
         return mv * signs
 
-    def clifford_conjugation(self, mv: torch.Tensor) -> torch.Tensor:
+    def clifford_conjugation(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Clifford conjugation: bar{x} = grade_involution(reverse(x)).
 
         Combines reversion and grade involution. For a k-blade:
@@ -830,6 +887,8 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Conjugated multivector [..., dim].
         """
+        if kwargs:
+            return self.planned_unary(mv, op="clifford_conjugation", **kwargs)
         cs = self.conj_signs
         if cs.dtype != mv.dtype:
             cs = cs.to(dtype=mv.dtype)
@@ -1057,15 +1116,23 @@ class CliffordAlgebra(nn.Module):
         Returns:
             torch.Tensor: Rotor exp(B) [..., dim].
         """
-        from core.decomposition import compiled_safe_decomposed_exp
+        from core.runtime.decomposition import compiled_safe_decomposed_exp
 
         R_closed = self._exp_bivector_closed(B)
         R_decomposed = compiled_safe_decomposed_exp(self, B, fixed_iterations=self._exp_fixed_iterations)
 
-        BB = self.geometric_product(B, B)
-        # Subtract scalar part, check if residual is negligible
-        scalar_part = self.grade_projection(BB, 0)
-        non_scalar_energy = (BB - scalar_part).norm(dim=-1, keepdim=True)
+        # For bivectors, B*B has only scalar and grade-4 components; the
+        # grade-4 energy is therefore the simplicity residual.
+        grade4 = self.projected_product(
+            B,
+            B,
+            op="gp",
+            left_grades=(2,),
+            right_grades=(2,),
+            output_grades=(4,),
+            compact_output=True,
+        )
+        non_scalar_energy = grade4.norm(dim=-1, keepdim=True)
         is_simple = non_scalar_energy < self.eps * 100
 
         return torch.where(is_simple, R_closed, R_decomposed)

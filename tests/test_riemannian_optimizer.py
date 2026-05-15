@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers import MultiRotorLayer, RotorGadget, RotorLayer
 from optimizers.riemannian import (
     MANIFOLD_EUCLIDEAN,
@@ -23,6 +23,7 @@ from optimizers.riemannian import (
     ExponentialSGD,
     RiemannianAdam,
     group_parameters_by_manifold,
+    make_riemannian_optimizer,
     tag_manifold,
 )
 
@@ -556,18 +557,18 @@ def test_manifold_tagging(algebra_3d):
     from layers.primitives.reflection import ReflectionLayer
 
     rotor = RotorLayer(algebra_3d, channels=4)
-    assert getattr(rotor.bivector_weights, "_manifold", None) == "spin"
+    assert getattr(rotor.bivector_weights, "_manifold", None) == MANIFOLD_SPIN
 
     reflection = ReflectionLayer(algebra_3d, channels=4)
-    assert getattr(reflection.vector_weights, "_manifold", None) == "sphere"
+    assert getattr(reflection.vector_weights, "_manifold", None) == MANIFOLD_SPHERE
 
     multi = MultiRotorLayer(algebra_3d, channels=4, num_rotors=2)
-    assert getattr(multi.rotor_bivectors, "_manifold", None) == "spin"
+    assert getattr(multi.rotor_bivectors, "_manifold", None) == MANIFOLD_SPIN
     assert not hasattr(multi.weights, "_manifold")  # Euclidean, untagged
 
     gadget = RotorGadget(algebra_3d, in_channels=4, out_channels=8)
-    assert getattr(gadget.bivector_left, "_manifold", None) == "spin"
-    assert getattr(gadget.bivector_right, "_manifold", None) == "spin"
+    assert getattr(gadget.bivector_left, "_manifold", None) == MANIFOLD_SPIN
+    assert getattr(gadget.bivector_right, "_manifold", None) == MANIFOLD_SPIN
 
 
 def test_tag_manifold_helper():
@@ -582,6 +583,17 @@ def test_tag_manifold_helper():
 
     with pytest.raises(ValueError, match="Unknown manifold"):
         tag_manifold(p, "invalid")
+
+
+def test_group_parameters_rejects_unknown_manifold():
+    class BadModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.randn(2, 3))
+            self.weight._manifold = "bad"
+
+    with pytest.raises(ValueError, match="Unknown manifold"):
+        group_parameters_by_manifold(BadModel())
 
 
 def test_from_model_groups(algebra_3d):
@@ -610,6 +622,19 @@ def test_from_model_groups(algebra_3d):
     assert "spin" in manifolds
     assert "sphere" in manifolds
     assert "euclidean" in manifolds
+
+
+def test_make_riemannian_optimizer_factory(algebra_3d):
+    layer = RotorLayer(algebra_3d, channels=4)
+
+    adam = make_riemannian_optimizer(layer, algebra_3d, optimizer="adam", lr=0.001)
+    sgd = make_riemannian_optimizer(layer, algebra_3d, optimizer="exponential_sgd", lr=0.01)
+
+    assert isinstance(adam, RiemannianAdam)
+    assert isinstance(sgd, ExponentialSGD)
+
+    with pytest.raises(ValueError, match="optimizer must be"):
+        make_riemannian_optimizer(layer, algebra_3d, optimizer="rmsprop")
 
 
 def test_sphere_retraction(algebra_3d):

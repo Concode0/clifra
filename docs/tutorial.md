@@ -7,7 +7,7 @@ A step-by-step guide to using Versor's geometric layers in your own models.
 Everything starts with a `CliffordAlgebra` instance. The signature $(p, q, r)$ determines the geometry:
 
 ```python
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 # 3D Euclidean (rotations in 3-space)
 algebra = CliffordAlgebra(p=3, q=0, r=0, device='cpu')
@@ -183,7 +183,7 @@ All tasks inherit from `BaseTask` and implement 7 methods:
 
 ```python
 from tasks.base import BaseTask
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from functional.loss import GeometricMSELoss
 
 class MyTask(BaseTask):

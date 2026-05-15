@@ -3,7 +3,7 @@
 Organized into Primitives, Canonical Blocks, and Task-Specific Adapters.
 """
 
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
 
 from .adapters.embedding import MultivectorEmbedding, RotaryBivectorPE
 from .adapters.mother import EntropyGatedAttention, MotherEmbedding, PhaseShiftHead
@@ -13,7 +13,16 @@ from .blocks.transformer import GeometricTransformerBlock
 from .primitives.linear import CliffordLinear
 from .primitives.multi_rotor import MultiRotorLayer
 from .primitives.normalization import CliffordLayerNorm
+from .primitives.product import (
+    AntiCommutatorLayer,
+    CommutatorLayer,
+    GeometricProductLayer,
+    InnerProductLayer,
+    ProductLayer,
+    WedgeLayer,
+)
 from .primitives.projection import BladeSelector, GeometricNeutralizer
+from .primitives.reflection import ReflectionLayer
 from .primitives.rotor import RotorLayer
 from .primitives.rotor_gadget import RotorGadget
 
@@ -30,8 +39,15 @@ __all__ = [
     "CliffordLinear",
     "RotorGadget",
     "CliffordLayerNorm",
+    "ProductLayer",
+    "GeometricProductLayer",
+    "WedgeLayer",
+    "InnerProductLayer",
+    "CommutatorLayer",
+    "AntiCommutatorLayer",
     "BladeSelector",
     "GeometricNeutralizer",
+    "ReflectionLayer",
     "MultivectorEmbedding",
     "RotaryBivectorPE",
     "MotherEmbedding",

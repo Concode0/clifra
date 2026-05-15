@@ -10,7 +10,7 @@
 import pytest
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 pytestmark = pytest.mark.slow
 from core.analysis import GeodesicFlow, MetricSearch

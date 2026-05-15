@@ -8,8 +8,9 @@
 import torch
 import torch.nn as nn
 
-from core.algebra import CliffordAlgebra
-from core.module import CliffordModule
+from core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
+from core.foundation.module import CliffordModule
+from core.runtime.algebra import CliffordAlgebra
 
 
 class MultivectorEmbedding(CliffordModule):
@@ -122,7 +123,7 @@ class RotaryBivectorPE(CliffordModule):
 
         if learnable:
             self.bivector_weights = nn.Parameter(init)
-            self.bivector_weights._manifold = "spin"
+            tag_manifold(self.bivector_weights, MANIFOLD_SPIN)
         else:
             self.register_buffer("bivector_weights", init)
 

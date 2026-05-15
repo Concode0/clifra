@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.foundation.module import AlgebraLike
 
 from ._types import CONSTANTS, CommutatorResult, SymmetryResult
 
@@ -24,14 +24,14 @@ class SymmetryDetector:
     """Detect symmetries, null directions, and invariances.
 
     Args:
-        algebra: :class:`CliffordAlgebra` instance.
+        algebra: algebra kernel or planning context.
         null_threshold: Energy threshold below which a direction is
             considered effectively null.
     """
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         null_threshold: float = 0.01,
     ):
         self.algebra = algebra
@@ -90,7 +90,7 @@ class SymmetryDetector:
             *null_indices* lists those with score < threshold.
         """
         n = self.algebra.n
-        g1_idx = (1 << torch.arange(n, device=mv_data.device)).long()
+        g1_idx = self.algebra.grade_indices((1,), device=mv_data.device)
 
         # Energy on each grade-1 component
         g1_coeffs = mv_data[:, g1_idx]  # [N, n]
@@ -141,7 +141,7 @@ class SymmetryDetector:
 
         # Build all n basis vectors: [n, dim]
         basis_vecs = torch.zeros(n, dim, device=mv_data.device, dtype=mv_data.dtype)
-        blade_indices = (1 << torch.arange(n, device=mv_data.device)).long()
+        blade_indices = self.algebra.grade_indices((1,), device=mv_data.device)
         basis_vecs[torch.arange(n, device=mv_data.device), blade_indices] = 1.0
 
         # Batch reflect: [n, N, dim]
@@ -198,16 +198,14 @@ class SymmetryDetector:
         dim = self.algebra.dim
         N = mv_data.shape[0]
 
-        ii, jj = torch.triu_indices(n, n, offset=1)
-        bv_indices = ((1 << ii) | (1 << jj)).tolist()
+        bv_idx_tensor = self.algebra.grade_indices((2,), device=mv_data.device)
 
-        if not bv_indices:
+        if bv_idx_tensor.numel() == 0:
             return 0
 
-        n_bv = len(bv_indices)
+        n_bv = int(bv_idx_tensor.numel())
         # Build all bivector bases: [n_bv, dim]
         bv_bases = torch.zeros(n_bv, dim, device=mv_data.device, dtype=mv_data.dtype)
-        bv_idx_tensor = torch.tensor(bv_indices, dtype=torch.long, device=mv_data.device)
         bv_bases[torch.arange(n_bv, device=mv_data.device), bv_idx_tensor] = 1.0
 
         # Batch commutator: [n_bv, N, dim]

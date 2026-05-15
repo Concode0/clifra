@@ -8,7 +8,6 @@ algebra:
   p: 4
   q: 1
   r: 0
-  device: auto
 
 model:
   channels: 16
@@ -33,7 +32,6 @@ training:
   epochs: 50
   lr: 0.001
   batch_size: 64
-  optimizer_type: riemannian_adam
   # Auxiliary loss weights
   isometry_weight: 0.01
   asymmetry_weight: 0.1

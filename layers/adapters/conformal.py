@@ -7,8 +7,8 @@
 
 import torch
 
-from core.algebra import CliffordAlgebra
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
+from core.runtime.algebra import CliffordAlgebra
 
 
 class ConformalEmbedding(CliffordModule):

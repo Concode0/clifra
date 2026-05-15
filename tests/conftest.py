@@ -1,6 +1,6 @@
 import pytest
 
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 
 DEVICE = "cpu"
 
@@ -34,7 +34,6 @@ def algebra_minkowski():
 @pytest.fixture
 def algebra_conformal():
     return CliffordAlgebra(p=4, q=1, device=DEVICE)
-
 
 # -- Module-scoped (used by test_geodesic.py - exact name match) ----------
 @pytest.fixture(scope="module")

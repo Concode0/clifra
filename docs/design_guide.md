@@ -75,7 +75,7 @@ The canonical Geometric Blade Network block, annotated:
 
 ```python
 import torch.nn as nn
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers.primitives.linear import CliffordLinear
 from layers.primitives.rotor import RotorLayer
 from layers.primitives.normalization import CliffordLayerNorm
@@ -147,7 +147,7 @@ Versor models are intentionally hybrid. Standard `nn.Linear` and `CliffordLinear
 ```python
 import torch
 import torch.nn as nn
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers.primitives.linear import CliffordLinear
 from layers.primitives.rotor import RotorLayer
 from layers.primitives.normalization import CliffordLayerNorm
@@ -237,7 +237,7 @@ End-to-end: choose algebra, build a 3-layer GBN, train, evaluate. Runs in under 
 ```python
 import torch
 import torch.nn as nn
-from core.algebra import CliffordAlgebra
+from core.runtime.algebra import CliffordAlgebra
 from layers.primitives.linear import CliffordLinear
 from layers.primitives.rotor import RotorLayer
 from layers.primitives.normalization import CliffordLayerNorm

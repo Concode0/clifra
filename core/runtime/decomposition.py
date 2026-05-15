@@ -313,7 +313,7 @@ def compiled_safe_decomposed_exp(
     with torch.no_grad():
         decomp = _decompose_compiled_safe(algebra, b.detach(), k=k_actual, fixed_iterations=fixed_iterations)
 
-    bv_mask = algebra.grade_masks[2]
+    bv_indices = _bivector_indices(algebra, b.device)
 
     # Re-project live bivector and compose rotors
     result = identity
@@ -322,8 +322,8 @@ def compiled_safe_decomposed_exp(
         plane_norm = b_i_detached.norm(dim=-1, keepdim=True).clamp(min=algebra.eps_sq)
         plane_dir = b_i_detached / plane_norm
 
-        bv_live = residual[..., bv_mask]
-        plane_bv = plane_dir[..., bv_mask]
+        bv_live = torch.index_select(residual, -1, bv_indices)
+        plane_bv = torch.index_select(plane_dir, -1, bv_indices)
         coeff = (bv_live * plane_bv).sum(dim=-1, keepdim=True)
 
         b_i_live = coeff * plane_dir
@@ -333,3 +333,14 @@ def compiled_safe_decomposed_exp(
         result = algebra.geometric_product(result, R_i)
 
     return result
+
+
+def _bivector_indices(algebra, device) -> torch.Tensor:
+    if hasattr(algebra, "_bivector_indices_for"):
+        return algebra._bivector_indices_for(device)
+    indices = getattr(algebra, "_bv_indices", None)
+    if indices is not None:
+        if indices.device != torch.device(device):
+            indices = indices.to(device=device)
+        return indices
+    return algebra.grade_indices((2,), device=device)

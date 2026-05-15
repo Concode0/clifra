@@ -3,19 +3,22 @@
 The mathematical kernel of Versor.
 
 ## Algebra
-::: core.algebra.CliffordAlgebra
+::: core.runtime.algebra.CliffordAlgebra
+
+## Algebra Config
+::: core.config
 
 ## Module
-::: core.module.CliffordModule
+::: core.foundation.module.CliffordModule
 
 ## Multivector
-::: core.multivector.Multivector
+::: core.runtime.multivector.Multivector
 
 ## Metric
-::: core.metric
+::: core.runtime.metric
 
 ## Decomposition
-::: core.decomposition
+::: core.runtime.decomposition
 
 ## Analysis
 ::: core.analysis.MetricSearch

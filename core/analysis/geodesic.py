@@ -16,7 +16,7 @@ from typing import Dict
 
 import torch
 
-from core.algebra import CliffordAlgebra
+from core.foundation.module import AlgebraLike
 
 from ._types import CONSTANTS
 
@@ -44,7 +44,7 @@ class GeodesicFlow:
       collides with itself.  The signal is dominated by noise.
     """
 
-    def __init__(self, algebra: CliffordAlgebra, k: int = 8):
+    def __init__(self, algebra: AlgebraLike, k: int = 8):
         """Initialize Geodesic Flow.
 
         Args:
@@ -86,8 +86,7 @@ class GeodesicFlow:
         """
         N = mv.shape[0]
         k = min(self.k, N - 1)
-        diff = mv.unsqueeze(1) - mv.unsqueeze(0)  # [N, N, dim]
-        dists = diff.norm(dim=-1)  # [N, N]
+        dists = torch.cdist(mv, mv)  # [N, N]
         dists.fill_diagonal_(float("inf"))
         _, idx = dists.topk(k, dim=-1, largest=False)
         return idx  # [N, k]
@@ -112,10 +111,16 @@ class GeodesicFlow:
 
         neighbors = mv[nn_idx]  # [N, k, dim]
         xi = mv.unsqueeze(1).expand(N, k, D).reshape(N * k, D)
-        xj_rev = self.algebra.reverse(neighbors.reshape(N * k, D))
+        xj_rev = self.algebra.reverse(neighbors.reshape(N * k, D), input_grades=(1,))
 
         # For grade-1 inputs, <xi * ~xj>_2 = wedge(xi, xj_rev) -- single pass
-        bv_raw = self.algebra.wedge(xi, xj_rev)  # [N*k, dim]
+        bv_raw = self.algebra.wedge(
+            xi,
+            xj_rev,
+            left_grades=(1,),
+            right_grades=(1,),
+            output_grades=(2,),
+        )  # [N*k, dim]
         bv_norm = bv_raw.norm(dim=-1, keepdim=True).clamp(min=self.algebra.eps)
         return (bv_raw / bv_norm).reshape(N, k, D)  # [N, k, dim]
 

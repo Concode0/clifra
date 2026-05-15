@@ -13,9 +13,10 @@ Implements versor-based transformations using weighted sums of sandwich products
 import torch
 import torch.nn as nn
 
-from core.algebra import CliffordAlgebra
-from core.module import CliffordModule
-from core.validation import check_channels, check_multivector
+from core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
+from core.foundation.module import CliffordModule
+from core.foundation.validation import check_channels, check_multivector
+from core.runtime.algebra import CliffordAlgebra
 
 
 class MultiRotorLayer(CliffordModule):
@@ -63,7 +64,7 @@ class MultiRotorLayer(CliffordModule):
 
         self.rotor_grade_weights = nn.Parameter(torch.Tensor(num_rotors, self.num_grade_elements))
         if grade == 2:
-            self.rotor_grade_weights._manifold = "spin"
+            tag_manifold(self.rotor_grade_weights, MANIFOLD_SPIN)
 
         # Mixing weights (Euclidean — intentionally untagged)
         self.weights = nn.Parameter(torch.Tensor(channels, num_rotors))

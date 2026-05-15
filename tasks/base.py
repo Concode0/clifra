@@ -13,7 +13,7 @@ import torch.optim as optim
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from core.device import DeviceConfig, resolve_device
+from core.foundation.device import DeviceConfig, resolve_device
 from log import get_logger
 
 logger = get_logger(__name__)
@@ -50,6 +50,7 @@ class BaseTask(ABC):
             compile_model=cfg.training.get("compile", False),
             compile_backend=cfg.training.get("compile_backend", None),
             amp=cfg.training.get("amp", False),
+            amp_dtype=cfg.training.get("amp_dtype", None),
             cudnn_benchmark=cfg.training.get("cudnn_benchmark", None),
         )
         self.device = self.device_config.device
@@ -82,7 +83,7 @@ class BaseTask(ABC):
         Priority: cuda > mps > cpu.
 
         .. deprecated::
-            Use :func:`core.device.resolve_device` instead.
+            Use :func:`core.foundation.device.resolve_device` instead.
         """
         return resolve_device(device)
 

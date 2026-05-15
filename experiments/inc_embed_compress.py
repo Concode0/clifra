@@ -61,11 +61,11 @@ import matplotlib
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
 
-from core.algebra import CliffordAlgebra
 from core.analysis._types import DimensionResult
 from core.analysis.dimension import DimensionLifter, EffectiveDimensionAnalyzer
 from core.analysis.spectral import SpectralAnalyzer
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
+from core.runtime.algebra import CliffordAlgebra
 from experiments._lib import (
     build_visualization_metadata,
     ensure_output_dir,

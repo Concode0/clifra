@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 
-from core.algebra import CliffordAlgebra
-from core.module import CliffordModule
+from core.config import make_algebra_from_config
+from core.foundation.module import CliffordModule
 from core.visualizer import GeneralVisualizer
 from functional.loss import GeometricMSELoss
 from layers import RotorLayer
@@ -44,7 +44,7 @@ class HyperbolicTask(BaseTask):
 
     def setup_algebra(self):
         """2D Spacetime Cl(1, 1)."""
-        return CliffordAlgebra(p=1, q=1, device=self.device)
+        return make_algebra_from_config(self.cfg.algebra, p=1, q=1, r=0, device=self.device)
 
     def setup_model(self):
         """The Booster."""

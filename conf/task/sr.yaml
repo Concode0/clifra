@@ -6,7 +6,7 @@ algebra:
   q: 0
   r: 0
   device: "cpu"
-  auto: true
+  metric_search: true
 
 dataset:
   name: "sr"
@@ -21,16 +21,12 @@ dataset:
 
 model:
   auto_capacity: true
-  exp_policy: "balanced"
 
 training:
   epochs: 200
   lr: 0.003
   batch_size: 128
-  optimizer_type: "riemannian_adam"
-  max_bivector_norm: 10.0
   sparsity_weight: 0.01
-  scheduler_patience: 10
 
 iterative:
   max_stages: 5

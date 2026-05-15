@@ -11,13 +11,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.algebra import CliffordAlgebra
-from core.module import CliffordModule
+from core.foundation.module import CliffordModule
+from core.runtime.algebra import CliffordAlgebra
 
 from ..primitives.linear import CliffordLinear
 
 # Memory-bounded block size for chunked attention computation
 _BLOCK_SIZE = 64
+_G2_BLADE_CHUNK_SIZE = 16
+_SCORE_PRECOMPUTE_LIMIT = 8_000_000
 
 
 class GeometricProductAttention(CliffordModule):
@@ -50,6 +52,8 @@ class GeometricProductAttention(CliffordModule):
         causal: bool = True,
         bivector_weight: float = 0.5,
         dropout: float = 0.0,
+        score_blade_chunk_size: int = _G2_BLADE_CHUNK_SIZE,
+        score_precompute_limit: int = _SCORE_PRECOMPUTE_LIMIT,
     ):
         """Sets up geometric product attention.
 
@@ -60,6 +64,10 @@ class GeometricProductAttention(CliffordModule):
             causal: Apply causal mask for autoregressive generation.
             bivector_weight: lambda_ weight on bivector score component.
             dropout: Dropout rate on attention weights.
+            score_blade_chunk_size: Grade-2 output blades processed per dense
+                chunk when exact dense scoring is used.
+            score_precompute_limit: Maximum temporary ``K_g2`` elements allowed
+                before exact dense scoring switches to chunked grade-2 blades.
         """
         super().__init__(algebra)
         assert channels % num_heads == 0, f"channels ({channels}) must be divisible by num_heads ({num_heads})"
@@ -69,6 +77,8 @@ class GeometricProductAttention(CliffordModule):
         self.head_channels = channels // num_heads
         self.causal = causal
         self.bivector_weight = bivector_weight
+        self.score_blade_chunk_size = max(1, int(score_blade_chunk_size))
+        self.score_precompute_limit = max(0, int(score_precompute_limit))
 
         # Q, K, V projections operate on [B*L, channels, dim]
         self.q_proj = CliffordLinear(algebra, channels, channels)
@@ -78,83 +88,37 @@ class GeometricProductAttention(CliffordModule):
 
         self.attn_dropout = nn.Dropout(dropout) if dropout > 0.0 else None
 
-        # Precompute bilinear score tables (replaces pairwise geometric product)
+        # Precompute bilinear score routes (replaces pairwise geometric product)
         self._precompute_score_tables()
 
     def _precompute_score_tables(self):
-        """Precomputes lookup tables for efficient attention scoring.
-
-        Replaces the O(L**2) full pairwise geometric product with direct bilinear
-        forms for grade-0 and grade-2 components of Q * reverse(K):
-
-        Grade-0:  <Q * rev(K)>_0 = Sum_a Q[a] * K[a] * metric_rev[a]
-                  -> simple weighted dot product, no pairwise expansion needed.
-
-        Grade-2:  <Q * rev(K)>_r = Sum_a Q[a] * K[a^r] * g2_sign[r, a]
-                  -> precompute K_g2 once, then batched matmul.
-
-        Memory: ~4 MB peak vs ~256 MB for the naive B_gathered approach.
-        """
+        """Precompute exact dense attention score routes."""
         alg = self.algebra
         D = alg.dim
+
+        if not hasattr(alg, "gp_signs") or not hasattr(alg, "rev_signs"):
+            raise ValueError("GeometricProductAttention currently requires dense CliffordAlgebra inputs.")
 
         # Grade-0 metric: metric_rev[a] = gp_signs[a, 0] * rev_signs[a]
         # gp_signs[a, 0] is the sign when A[a] * B[a] contributes to output blade 0
         metric_rev = alg.gp_signs[:, 0].float() * alg.rev_signs.float()
         self.register_buffer("_metric_rev", metric_rev)  # [D]
 
-        # Grade-2 tables: for each grade-2 blade r, for each A-blade a:
-        #   B-blade  = a XOR r
-        #   sign     = rev_sign[a^r] * gp_signs[a, r]
         g2_blades = [i for i in range(D) if bin(i).count("1") == 2]
-        n_g2 = len(g2_blades)
-        self.n_g2 = n_g2
-
-        if n_g2 > 0:
-            a_idx = torch.arange(D, device=alg.device)
-            r_vals = torch.tensor(g2_blades, dtype=torch.long, device=alg.device)  # [n_g2]
-
-            # b_idx[r, a] = a XOR r_vals[r]
-            b_idx = a_idx.unsqueeze(0) ^ r_vals.unsqueeze(1)  # [n_g2, D]
-
-            # rev_sign at the B-blade position
-            rev_b = alg.rev_signs.float()[b_idx]  # [n_g2, D]
-
-            # gp_signs[a, r_val]: sign when A[a] pairs with B[a^r] to give output r
-            # alg.gp_signs[:, r_vals] -> [D, n_g2]; transpose -> [n_g2, D]
-            gp_ar = alg.gp_signs[:, r_vals].float().T  # [n_g2, D]
-
-            g2_sign = rev_b * gp_ar  # [n_g2, D]
-        else:
-            b_idx = torch.zeros(0, D, dtype=torch.long, device=alg.device)
-            g2_sign = torch.zeros(0, D, device=alg.device)
-
-        self.register_buffer("_g2_b_idx", b_idx)  # [n_g2, D] long
-        self.register_buffer("_g2_sign", g2_sign)  # [n_g2, D] float
+        self.n_g2 = len(g2_blades)
+        self.register_buffer("_g2_blades", torch.tensor(g2_blades, dtype=torch.long, device=alg.device))
+        self.register_buffer("_basis_indices", torch.arange(D, dtype=torch.long, device=alg.device))
 
     def _compute_score(
         self,
         q_head: torch.Tensor,
         k_head: torch.Tensor,
-        k_g2: torch.Tensor,
     ) -> torch.Tensor:
-        """Computes GA attention score using precomputed bilinear form tables.
+        """Compute GA attention scores for one query block."""
+        return self._compute_score_dense(q_head, k_head)
 
-        Avoids the O(B.H.Lq.Lk.Hc.D.BLOCK) memory of the full pairwise
-        geometric product. Instead:
-
-          Grade-0: score_g0 = Q_weighted @ K^T  (weighted dot product, peak ~1 MB)
-          Grade-2: batched matmul via precomputed k_g2            (peak ~4 MB)
-
-        Args:
-            q_head: Query block [B, H, Lq, Hc, D]
-            k_head: Keys        [B, H, Lk, Hc, D]
-            k_g2:   Precomputed [B, H, Lk, Hc, n_g2, D]
-                    k_g2[b,h,j,c,r,d] = K[b,h,j,c, d^r] * g2_sign[r, d]
-
-        Returns:
-            scores: [B, H, Lq, Lk]
-        """
+    def _compute_score_dense(self, q_head: torch.Tensor, k_head: torch.Tensor) -> torch.Tensor:
+        """Exact dense score with automatic full/prechunked grade-2 routing."""
         B, H, Lq, Hc, D = q_head.shape
         Lk = k_head.shape[2]
         n_g2 = self.n_g2
@@ -169,21 +133,15 @@ class GeometricProductAttention(CliffordModule):
 
         # == Grade-2 score ====================================================
         # ||<Q * rev(K)>_2||_F = sqrt(Sum_c Sum_r (Sum_d Q[c,d]*k_g2[j,c,r,d])^2)
-        # Batched matmul merging (B, H, Hc) into one batch dimension:
-        #   q_2d:     [B*H*Hc, Lq, D]
-        #   k_g2_2d:  [B*H*Hc, Lk*n_g2, D]   (Lk and n_g2 merged, n_g2 varies fast)
-        #   comp:     [B*H*Hc, Lq, Lk*n_g2]
-        # Peak ~4 MB vs ~256 MB for the naive B_gathered approach.
         if n_g2 > 0:
             q_2d = q_head.permute(0, 1, 3, 2, 4).reshape(B * H * Hc, Lq, D)
-            # k_g2: [B, H, Lk, Hc, n_g2, D] -> permute to [B, H, Hc, Lk, n_g2, D]
-            k_g2_t = k_g2.permute(0, 1, 3, 2, 4, 5)
-            k_g2_2d = k_g2_t.reshape(B * H * Hc, Lk * n_g2, D)
-            # [B*H*Hc, Lq, D] @ [B*H*Hc, D, Lk*n_g2] -> [B*H*Hc, Lq, Lk*n_g2]
-            comp = torch.bmm(q_2d, k_g2_2d.transpose(-2, -1))
-            # Sum squared components over n_g2, then sum over Hc -> [B, H, Lq, Lk]
-            comp_sq = comp.reshape(B * H * Hc, Lq, Lk, n_g2).pow(2).sum(-1)  # [B*H*Hc, Lq, Lk]
-            score_g2_sq = comp_sq.reshape(B, H, Hc, Lq, Lk).sum(2)  # [B, H, Lq, Lk]
+
+            full_k_g2_elements = B * H * Lk * Hc * n_g2 * D
+            if full_k_g2_elements <= self.score_precompute_limit:
+                score_g2_sq = self._dense_score_g2_precomputed(q_2d, k_head, B, H, Hc, Lq, Lk, D, n_g2)
+            else:
+                k_2d = k_head.permute(0, 1, 3, 2, 4).reshape(B * H * Hc, Lk, D)
+                score_g2_sq = self._dense_score_g2_chunked(q_2d, k_2d, B, H, Hc, Lq, Lk, D, n_g2)
             score_g2 = score_g2_sq.sqrt()
         else:
             score_g2 = torch.zeros_like(score_g0)
@@ -191,6 +149,39 @@ class GeometricProductAttention(CliffordModule):
         # Combined score
         scale = math.sqrt(self.head_channels * self.algebra.dim)
         return (score_g0 + self.bivector_weight * score_g2) / scale
+
+    def _dense_score_g2_precomputed(self, q_2d, k_head, B, H, Hc, Lq, Lk, D, n_g2):
+        """Dense grade-2 score using one full shifted-key materialization."""
+        r_vals = self._g2_blades
+        b_idx = self._basis_indices.unsqueeze(0) ^ r_vals.unsqueeze(1)
+        rev_b = self.algebra.rev_signs[b_idx].to(dtype=k_head.dtype)
+        gp_ar = self.algebra.gp_signs[:, r_vals].T.to(dtype=k_head.dtype)
+        g2_sign = rev_b * gp_ar
+
+        k_g2 = k_head[..., b_idx] * g2_sign
+        k_g2_2d = k_g2.permute(0, 1, 3, 2, 4, 5).reshape(B * H * Hc, Lk * n_g2, D)
+        comp = torch.bmm(q_2d, k_g2_2d.transpose(-2, -1))
+        comp_sq = comp.reshape(B * H * Hc, Lq, Lk, n_g2).pow(2).sum(-1)
+        return comp_sq.reshape(B, H, Hc, Lq, Lk).sum(2)
+
+    def _dense_score_g2_chunked(self, q_2d, k_2d, B, H, Hc, Lq, Lk, D, n_g2):
+        """Dense grade-2 score using bounded output-blade chunks."""
+        score_g2_sq = q_2d.new_zeros(B, H, Lq, Lk)
+        for start in range(0, n_g2, self.score_blade_chunk_size):
+            end = min(start + self.score_blade_chunk_size, n_g2)
+            r_vals = self._g2_blades[start:end]
+            b_idx = self._basis_indices.unsqueeze(0) ^ r_vals.unsqueeze(1)
+            rev_b = self.algebra.rev_signs[b_idx].to(dtype=k_2d.dtype)
+            gp_ar = self.algebra.gp_signs[:, r_vals].T.to(dtype=k_2d.dtype)
+            g2_sign = rev_b * gp_ar
+
+            k_shifted = torch.index_select(k_2d, -1, b_idx.reshape(-1))
+            k_shifted = k_shifted * g2_sign.reshape(-1)
+            k_g2_2d = k_shifted.reshape(B * H * Hc, Lk * (end - start), D)
+            comp = torch.bmm(q_2d, k_g2_2d.transpose(-2, -1))
+            comp_sq = comp.reshape(B * H * Hc, Lq, Lk, end - start).pow(2).sum(-1)
+            score_g2_sq = score_g2_sq + comp_sq.reshape(B, H, Hc, Lq, Lk).sum(2)
+        return score_g2_sq
 
     def forward(self, x: torch.Tensor, key_padding_mask: torch.Tensor = None) -> torch.Tensor:
         """Computes geometric product attention.
@@ -226,11 +217,6 @@ class GeometricProductAttention(CliffordModule):
         else:
             causal_mask = None
 
-        # Precompute K_g2 once for all query blocks - much cheaper than recomputing
-        # k_g2[b,h,j,c,r,d] = K[b,h,j,c, d^r_val] * g2_sign[r, d]
-        # Shape: [B, H, L, Hc, n_g2, D]  ~= 768 KB for the small MPS config
-        K_g2 = K[..., self._g2_b_idx] * self._g2_sign  # [B, H, L, Hc, n_g2, D]
-
         # Chunked attention over query positions to bound memory
         output_chunks = []
         for q_start in range(0, L, _BLOCK_SIZE):
@@ -239,7 +225,7 @@ class GeometricProductAttention(CliffordModule):
             Q_block = Q[:, :, q_start:q_end]  # [B, H, Lq, Hc, D]
 
             # Compute scores: [B, H, Lq, L]
-            scores = self._compute_score(Q_block, K, K_g2)
+            scores = self._compute_score(Q_block, K)
 
             # Apply causal mask
             if causal_mask is not None:

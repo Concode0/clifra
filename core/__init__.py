@@ -11,16 +11,48 @@ The ``core.analysis`` sub-package (``MetricSearch``, ``GeodesicFlow``,
 until first access, keeping ``import core`` lightweight.
 """
 
-from .algebra import CliffordAlgebra
-from .decomposition import (
+from .config import AlgebraConfig, make_algebra, make_algebra_from_config
+from .foundation.basis import (
+    GradeProductOp,
+    basis_indices_for_grades,
+    basis_product,
+    expand_output_grades,
+    geometric_product_output_grades,
+    normalize_grades,
+    operation_coefficient,
+    operation_may_be_nonzero,
+    product_output_grades,
+    reverse_sign,
+)
+from .foundation.device import DeviceConfig, dtype_name, optional_dtype, resolve_device, resolve_dtype
+from .foundation.layout import AlgebraSpec, GradeLayout
+from .foundation.module import AlgebraLike, CliffordModule
+from .foundation.validation import check_channels, check_multivector
+from .planning.flow import GradeFlow
+from .planning.layouts import ProductRequest, build_product_request
+from .planning.planner import GradePlanner
+from .planning.policy import DEFAULT_PLANNING_LIMITS, PlanCost, PlanningLimits
+from .planning.product import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
+from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
+from .planning.unary import GradeUnaryExecutor, GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
+from .runtime.accessors import (
+    as_multivector,
+    compact_values,
+    grade_indices,
+    hermitian_signs,
+    materialize_dense,
+    resolve_layout,
+)
+from .runtime.algebra import CliffordAlgebra
+from .runtime.context import AlgebraContext
+from .runtime.decomposition import (
     ExpPolicy,
     compiled_safe_decomposed_exp,
     differentiable_invariant_decomposition,
     exp_simple_bivector,
     ga_power_iteration,
 )
-from .device import DeviceConfig, resolve_device
-from .metric import (
+from .runtime.metric import (
     clifford_conjugate,
     geometric_distance,
     grade_hermitian_norm,
@@ -36,18 +68,30 @@ from .metric import (
     signature_norm_squared,
     signature_trace_form,
 )
-from .module import CliffordModule
-from .multivector import Multivector
-from .validation import check_channels, check_multivector
+from .runtime.multivector import Multivector
 
 __all__ = [
     # algebra
+    "AlgebraContext",
     "CliffordAlgebra",
+    "AlgebraConfig",
+    "AlgebraLike",
     "CliffordModule",
     "Multivector",
+    "AlgebraSpec",
+    "GradeLayout",
+    "GradePlanner",
+    "PlanningLimits",
+    "PlanCost",
+    "DEFAULT_PLANNING_LIMITS",
+    "make_algebra",
+    "make_algebra_from_config",
     # device / validation
     "DeviceConfig",
+    "dtype_name",
+    "optional_dtype",
     "resolve_device",
+    "resolve_dtype",
     "check_multivector",
     "check_channels",
     # metric
@@ -65,12 +109,43 @@ __all__ = [
     "hermitian_grade_spectrum",
     "signature_trace_form",
     "signature_norm_squared",
+    "as_multivector",
+    "compact_values",
+    "grade_indices",
+    "hermitian_signs",
+    "materialize_dense",
+    "resolve_layout",
     # decomposition
     "ExpPolicy",
     "ga_power_iteration",
     "differentiable_invariant_decomposition",
     "exp_simple_bivector",
     "compiled_safe_decomposed_exp",
+    # static sparse grade planning
+    "GradeProductOp",
+    "GradeProductExecutor",
+    "GradeProductPlan",
+    "GradePathNode",
+    "GradePlanTree",
+    "GradeFlow",
+    "ProductRequest",
+    "GradeUnaryExecutor",
+    "GradeUnaryOp",
+    "GradeUnaryPlan",
+    "UnaryRequest",
+    "basis_indices_for_grades",
+    "basis_product",
+    "build_grade_product_plan",
+    "build_grade_plan_tree",
+    "build_product_request",
+    "build_unary_request",
+    "expand_output_grades",
+    "geometric_product_output_grades",
+    "normalize_grades",
+    "operation_coefficient",
+    "operation_may_be_nonzero",
+    "product_output_grades",
+    "reverse_sign",
     # analysis (lazy)
     "MetricSearch",
     "GeodesicFlow",
