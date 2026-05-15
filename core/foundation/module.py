@@ -120,6 +120,10 @@ class AlgebraLike(Protocol):
         """Apply Clifford conjugation."""
         ...
 
+    def planned_linear_action(self, values: torch.Tensor, matrix: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply a vector-space linear action to dense or compact grade lanes."""
+        ...
+
 
 class CliffordModule(nn.Module):
     """Base module for Clifford algebra-aware components.

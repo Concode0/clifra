@@ -15,6 +15,7 @@ import torch
 
 from core.foundation.layout import GradeLayout
 from core.foundation.validation import check_multivector
+from core.planning.action import apply_graded_linear_action
 from core.runtime.accessors import default_layout as _default_layout
 from core.runtime.accessors import grade_indices as _grade_indices
 from core.runtime.accessors import hermitian_signs as _hermitian_signs
@@ -207,6 +208,52 @@ class AlgebraRuntimeMixin:
         if compact_output:
             return output
         return materialize_dense(self, output, layout=executor.output_layout)
+
+    def planned_linear_action(
+        self,
+        values: torch.Tensor,
+        matrix: torch.Tensor,
+        *,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        input_compact: bool = False,
+        compact_output: bool = False,
+        return_layout: bool = False,
+    ):
+        """Apply a vector-space linear action to compact grade lanes.
+
+        The action is lifted to each active grade through exterior powers of
+        ``matrix``. This is the compact execution path for grade-preserving
+        versor actions such as rotations and reflections.
+        """
+        input_layout = self._declared_layout(input_grades, input_layout)
+        if input_layout is None:
+            if input_compact:
+                raise ValueError("input_layout or input_grades is required for compact planned_linear_action")
+            input_layout = self.default_layout()
+
+        if output_layout is None:
+            output_layout = self.layout(output_grades) if output_grades is not None else input_layout
+
+        if input_compact:
+            active_values = values
+            if active_values.shape[-1] != input_layout.dim:
+                raise ValueError(f"input compact dimension must be {input_layout.dim}, got {active_values.shape[-1]}")
+        else:
+            check_multivector(values, self, "planned_linear_action(values)")
+            active_values = input_layout.compact(values)
+
+        output = apply_graded_linear_action(
+            active_values, matrix, input_layout=input_layout, output_layout=output_layout
+        )
+
+        if return_layout:
+            return output, output_layout
+        if compact_output:
+            return output
+        return materialize_dense(self, output, layout=output_layout)
 
     def _declared_layout(self, grades, layout):
         if layout is not None:

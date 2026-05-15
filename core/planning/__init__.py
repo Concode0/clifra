@@ -7,6 +7,7 @@
 
 """Static grade planning and Torch executor lowering."""
 
+from .action import apply_graded_linear_action, bivector_vector_generator, reflection_vector_matrix
 from .flow import GradeFlow
 from .layouts import ProductRequest, build_product_request
 from .planner import GradePlanner
@@ -25,6 +26,8 @@ __all__ = [
     "PlanningLimits",
     "PlanCost",
     "DEFAULT_PLANNING_LIMITS",
+    "apply_graded_linear_action",
+    "bivector_vector_generator",
     "GradeUnaryExecutor",
     "GradeUnaryOp",
     "GradeUnaryPlan",
@@ -34,4 +37,5 @@ __all__ = [
     "build_grade_plan_tree",
     "build_product_request",
     "build_unary_request",
+    "reflection_vector_matrix",
 ]

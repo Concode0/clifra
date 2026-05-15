@@ -749,11 +749,11 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
 
         Args:
             R: Per-channel rotors [C, D].
-            x: Batched multivectors [B, C, D].
+            x: Batched multivectors [..., C, D].
             R_rev: Optional precomputed reverse of R [C, D].
 
         Returns:
-            Sandwiched result [B, C, D].
+            Sandwiched result [..., C, D].
         """
         if R_rev is None:
             R_rev = self.reverse(R)
@@ -770,9 +770,7 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
 
         M = torch.bmm(R_Rr, L_R)  # [C, D, D]
 
-        # Apply: result[b, c, k] = sum_j M[c, j, k] * x[b, c, j]
-        # x: [B, C, D], M.T: [C, D, D] -> einsum or matmul with broadcast
-        return torch.einsum("bcd,cdk->bck", x, M.transpose(-2, -1))
+        return torch.einsum("...cd,cdk->...ck", x, M.transpose(-2, -1))
 
     def multi_rotor_sandwich(self, R: torch.Tensor, x: torch.Tensor, R_rev: torch.Tensor = None) -> torch.Tensor:
         """Sandwich product with K rotors applied to C-channel input.
@@ -786,11 +784,11 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
 
         Args:
             R: Per-rotor versors [K, D].
-            x: Batched multivectors [B, C, D].
+            x: Batched multivectors [..., C, D].
             R_rev: Optional precomputed reverse/inverse of R [K, D].
 
         Returns:
-            Per-rotor sandwiched result [B, C, K, D].
+            Per-rotor sandwiched result [..., C, K, D].
         """
         if R_rev is None:
             R_rev = self.reverse(R)
@@ -806,8 +804,7 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
 
         M = torch.bmm(R_Rr, L_R)  # [K, D, D]
 
-        # Apply all K rotors: x[B,C,D] @ M[K,D,D].T -> [B,C,K,D]
-        return torch.einsum("bcd,kde->bcke", x, M.transpose(-2, -1))
+        return torch.einsum("...cd,kde->...cke", x, M.transpose(-2, -1))
 
     def pseudoscalar_product(self, x: torch.Tensor) -> torch.Tensor:
         """Multiply by the unit pseudoscalar: x * I.
