@@ -6,7 +6,12 @@ import torch
 
 from core.foundation.layout import GradeLayout
 from core.foundation.validation import check_multivector
-from core.planning.action import bivector_vector_generator, metric_self_signs, reflection_vector_matrix
+from core.planning.action import (
+    apply_multi_graded_linear_action,
+    bivector_vector_generator,
+    metric_self_signs,
+    reflection_vector_matrix,
+)
 from core.runtime.accessors import materialize_dense
 
 
@@ -29,9 +34,15 @@ def apply_versor_action(
     return_cache: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
     """Apply one versor action while the algebra host chooses storage execution."""
-    input_layout = _declared_layout(algebra, input_grades, input_layout)
-    output_layout = _declared_layout(algebra, output_grades, output_layout) or input_layout
-    parameter_layout = parameter_layout or algebra.layout((int(grade),))
+    input_layout, output_layout, parameter_layout = _action_layouts(
+        algebra,
+        grade=grade,
+        input_grades=input_grades,
+        output_grades=output_grades,
+        input_layout=input_layout,
+        output_layout=output_layout,
+        parameter_layout=parameter_layout,
+    )
 
     input_compact = _validate_action_values(
         algebra,
@@ -88,9 +99,15 @@ def apply_multi_versor_action(
     return_cache: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
     """Apply a weighted versor superposition with host-owned storage dispatch."""
-    input_layout = _declared_layout(algebra, input_grades, input_layout)
-    output_layout = _declared_layout(algebra, output_grades, output_layout) or input_layout
-    parameter_layout = parameter_layout or algebra.layout((int(grade),))
+    input_layout, output_layout, parameter_layout = _action_layouts(
+        algebra,
+        grade=grade,
+        input_grades=input_grades,
+        output_grades=output_grades,
+        input_layout=input_layout,
+        output_layout=output_layout,
+        parameter_layout=parameter_layout,
+    )
 
     input_compact = _validate_action_values(
         algebra,
@@ -196,22 +213,17 @@ def compact_multi_versor_action(
         grade=grade,
         parameter_layout=parameter_layout,
     )
-    outputs = []
-    for index in range(matrices.shape[0]):
-        matrix = matrices[index].unsqueeze(0).expand(values.shape[-2], -1, -1)
-        outputs.append(
-            algebra.planned_linear_action(
-                values,
-                matrix,
-                input_layout=input_layout,
-                output_layout=output_layout,
-                input_compact=True,
-                compact_output=True,
-            )
-        )
+    mix = mix.to(device=values.device, dtype=values.dtype)
+    if mix.shape != (values.shape[-2], matrices.shape[0]):
+        raise ValueError(f"mix shape must be {(values.shape[-2], matrices.shape[0])}, got {tuple(mix.shape)}")
 
-    stacked = torch.stack(outputs, dim=-2)
-    result = torch.einsum("ck,...ckd->...cd", mix.to(device=values.device, dtype=values.dtype), stacked)
+    transformed = apply_multi_graded_linear_action(
+        values,
+        matrices,
+        input_layout=input_layout,
+        output_layout=output_layout,
+    )
+    result = torch.einsum("ck,...cko->...co", mix, transformed)
     if compact_output:
         return result
     return materialize_dense(algebra, result, layout=output_layout)
@@ -304,6 +316,22 @@ def _declared_layout(algebra, grades, layout: GradeLayout | None) -> GradeLayout
     if default_grades is None:
         return None
     return algebra.layout(default_grades)
+
+
+def _action_layouts(
+    algebra,
+    *,
+    grade: int,
+    input_grades,
+    output_grades,
+    input_layout: GradeLayout | None,
+    output_layout: GradeLayout | None,
+    parameter_layout: GradeLayout | None,
+) -> tuple[GradeLayout | None, GradeLayout | None, GradeLayout]:
+    input_layout = _declared_layout(algebra, input_grades, input_layout)
+    output_layout = _declared_layout(algebra, output_grades, output_layout) or input_layout
+    parameter_layout = parameter_layout or algebra.layout((int(grade),))
+    return input_layout, output_layout, parameter_layout
 
 
 def _validate_action_values(
