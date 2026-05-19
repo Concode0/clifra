@@ -16,19 +16,15 @@ import torch.nn as nn
 from core.foundation.layout import GradeLayout
 from core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from core.foundation.module import CliffordModule
-from core.planning.action import bivector_vector_generator, reflection_vector_matrix
-from core.runtime.accessors import materialize_dense
+from core.runtime.actions import compact_multi_versor_action
 from core.runtime.algebra import CliffordAlgebra
+from core.runtime.layers import resolve_layer_storage
 
 from ._utils import (
     cache_matches,
-    check_multivector_storage,
-    compact_grade_norms,
     dense_from_indices,
     grade_indices,
-    layout_metric_signs,
     require_positive_int,
-    resolve_layer_layout,
 )
 
 
@@ -76,12 +72,14 @@ class MultiRotorLayer(CliffordModule):
         self.channels = require_positive_int(channels, "channels")
         self.num_rotors = require_positive_int(num_rotors, "num_rotors")
         self.grade = int(grade)
-        self.input_layout = resolve_layer_layout(algebra, layout=input_layout, grades=input_grades)
-        self.output_layout = (
-            resolve_layer_layout(algebra, layout=output_layout, grades=output_grades)
+        self.input_storage = resolve_layer_storage(algebra, layout=input_layout, grades=input_grades)
+        self.output_storage = (
+            resolve_layer_storage(algebra, layout=output_layout, grades=output_grades)
             if output_layout is not None or output_grades is not None
-            else self.input_layout
+            else self.input_storage
         )
+        self.input_layout = self.input_storage.layout
+        self.output_layout = self.output_storage.layout
         self.compact_output = bool(compact_output)
 
         self.register_buffer("grade_indices", grade_indices(algebra, self.grade))
@@ -154,19 +152,18 @@ class MultiRotorLayer(CliffordModule):
         Returns:
             torch.Tensor: Transformed output [Batch, Channels, Dim].
         """
-        is_compact = check_multivector_storage(
+        is_compact = self.input_storage.validate_input(
             x,
-            self.algebra,
             channels=self.channels,
             name="MultiRotorLayer input",
-            layout=self.input_layout,
             allow_dense=self.input_layout is None or self.input_layout.dim == self.algebra.dim,
         )
         if is_compact:
             out = self._forward_compact(x)
             if return_invariants:
-                output_layout = self.output_layout if self.output_layout is not None else self.input_layout
-                return compact_grade_norms(self.algebra, out, output_layout)
+                if not self.compact_output:
+                    return self.algebra.get_grade_norms(out)
+                return self.output_storage.compact_grade_norms(out)
             return out
         if not hasattr(self.algebra, "multi_rotor_sandwich"):
             raise ValueError(
@@ -206,40 +203,19 @@ class MultiRotorLayer(CliffordModule):
         """Apply compact weighted superposition of induced versor actions."""
         if self.input_layout is None:
             raise ValueError("MultiRotorLayer compact input requires input_layout or input_grades")
-        output_layout = self.output_layout if self.output_layout is not None else self.input_layout
-
-        rotor_values = self.rotor_grade_weights.to(device=x.device, dtype=x.dtype)
-        if self.grade == 2:
-            generator = bivector_vector_generator(rotor_values, bivector_layout=self.parameter_layout)
-            matrices = torch.matrix_exp(generator)
-        elif self.grade == 1:
-            signs = layout_metric_signs(self.parameter_layout, device=x.device, dtype=x.dtype)
-            norm_sq = (rotor_values * rotor_values * signs).sum(dim=-1, keepdim=True)
-            scale = norm_sq.abs().clamp_min(1e-12).sqrt()
-            normals = rotor_values / scale
-            matrices = reflection_vector_matrix(normals, vector_layout=self.parameter_layout, eps=self.algebra.eps_sq)
-        else:
-            raise ValueError("MultiRotorLayer compact execution currently supports grade=1 and grade=2 versors")
-
-        outputs = []
-        for rotor_index in range(self.num_rotors):
-            matrix = matrices[rotor_index].unsqueeze(0).expand(self.channels, -1, -1)
-            outputs.append(
-                self.algebra.planned_linear_action(
-                    x,
-                    matrix,
-                    input_layout=self.input_layout,
-                    output_layout=output_layout,
-                    input_compact=True,
-                    compact_output=True,
-                )
-            )
-        stacked = torch.stack(outputs, dim=-2)
-        weights = self.weights.to(device=x.device, dtype=x.dtype)
-        out = torch.einsum("ck,...ckd->...cd", weights, stacked)
-        if self.compact_output:
-            return out
-        return materialize_dense(self.algebra, out, layout=output_layout)
+        if self.output_layout is None:
+            raise ValueError("MultiRotorLayer compact output requires output_layout or output_grades")
+        return compact_multi_versor_action(
+            self.algebra,
+            x,
+            self.rotor_grade_weights,
+            self.weights,
+            grade=self.grade,
+            input_layout=self.input_layout,
+            output_layout=self.output_layout,
+            parameter_layout=self.parameter_layout,
+            compact_output=self.compact_output,
+        )
 
     def train(self, mode: bool = True):
         """Invalidate versor cache when switching to train mode."""

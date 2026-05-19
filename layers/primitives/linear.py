@@ -18,8 +18,9 @@ import torch.nn as nn
 from core.foundation.layout import GradeLayout
 from core.foundation.module import CliffordModule
 from core.runtime.algebra import CliffordAlgebra
+from core.runtime.layers import resolve_layer_storage
 
-from ._utils import check_multivector_storage, lane_dim, require_choice, require_positive_int, resolve_layer_layout
+from ._utils import require_choice, require_positive_int
 
 
 class CliffordLinear(CliffordModule):
@@ -73,8 +74,9 @@ class CliffordLinear(CliffordModule):
         self.in_channels = require_positive_int(in_channels, "in_channels")
         self.out_channels = require_positive_int(out_channels, "out_channels")
         self.backend = require_choice(backend, "backend", ("traditional", "rotor"))
-        self.layout = resolve_layer_layout(algebra, layout=layout, grades=grades)
-        self.lane_dim = lane_dim(algebra, self.layout)
+        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
+        self.layout = self.storage.layout
+        self.lane_dim = self.storage.lane_dim
 
         if self.backend == "traditional":
             self.weight = nn.Parameter(torch.Tensor(self.out_channels, self.in_channels))
@@ -116,12 +118,10 @@ class CliffordLinear(CliffordModule):
         Returns:
             torch.Tensor: Output [Batch, Out, Dim].
         """
-        check_multivector_storage(
+        self.storage.validate_input(
             x,
-            self.algebra,
             channels=self.in_channels,
             name="CliffordLinear input",
-            layout=self.layout,
             allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
         )
 

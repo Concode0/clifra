@@ -11,17 +11,15 @@ import torch.nn as nn
 from core.foundation.layout import GradeLayout
 from core.foundation.manifold import MANIFOLD_SPHERE, tag_manifold
 from core.foundation.module import CliffordModule
-from core.planning.action import reflection_vector_matrix
+from core.runtime.actions import compact_versor_action
 from core.runtime.algebra import CliffordAlgebra
+from core.runtime.layers import resolve_layer_storage
 
 from ._utils import (
     cache_matches,
-    check_multivector_storage,
     dense_from_indices,
     grade_indices,
-    layout_metric_signs,
     require_positive_int,
-    resolve_layer_layout,
 )
 
 
@@ -61,12 +59,14 @@ class ReflectionLayer(CliffordModule):
         """
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
-        self.input_layout = resolve_layer_layout(algebra, layout=input_layout, grades=input_grades)
-        self.output_layout = (
-            resolve_layer_layout(algebra, layout=output_layout, grades=output_grades)
+        self.input_storage = resolve_layer_storage(algebra, layout=input_layout, grades=input_grades)
+        self.output_storage = (
+            resolve_layer_storage(algebra, layout=output_layout, grades=output_grades)
             if output_layout is not None or output_grades is not None
-            else self.input_layout
+            else self.input_storage
         )
+        self.input_layout = self.input_storage.layout
+        self.output_layout = self.output_storage.layout
         self.compact_output = bool(compact_output)
 
         self.register_buffer("vector_indices", grade_indices(algebra, 1, name="vector grade"))
@@ -116,12 +116,10 @@ class ReflectionLayer(CliffordModule):
         Returns:
             torch.Tensor: Reflected input [Batch, Channels, Dim].
         """
-        is_compact = check_multivector_storage(
+        is_compact = self.input_storage.validate_input(
             x,
-            self.algebra,
             channels=self.channels,
             name="ReflectionLayer input",
-            layout=self.input_layout,
             allow_dense=self.input_layout is None or self.input_layout.dim == self.algebra.dim,
         )
         if is_compact:
@@ -155,20 +153,16 @@ class ReflectionLayer(CliffordModule):
         """Apply compact reflection through the induced vector action."""
         if self.input_layout is None:
             raise ValueError("ReflectionLayer compact input requires input_layout or input_grades")
-        output_layout = self.output_layout if self.output_layout is not None else self.input_layout
-
-        normals = self.vector_weights.to(device=x.device, dtype=x.dtype)
-        signs = layout_metric_signs(self.vector_layout, device=x.device, dtype=x.dtype)
-        norm_sq = (normals * normals * signs).sum(dim=-1, keepdim=True)
-        scale = norm_sq.abs().clamp_min(1e-12).sqrt()
-        normals = normals / scale
-        matrix = reflection_vector_matrix(normals, vector_layout=self.vector_layout, eps=self.algebra.eps_sq)
-        return self.algebra.planned_linear_action(
+        if self.output_layout is None:
+            raise ValueError("ReflectionLayer compact output requires output_layout or output_grades")
+        return compact_versor_action(
+            self.algebra,
             x,
-            matrix,
+            self.vector_weights,
+            grade=1,
             input_layout=self.input_layout,
-            output_layout=output_layout,
-            input_compact=True,
+            output_layout=self.output_layout,
+            parameter_layout=self.vector_layout,
             compact_output=self.compact_output,
         )
 
