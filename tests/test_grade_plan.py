@@ -12,6 +12,7 @@ from core.foundation.basis import (
     product_output_grades,
 )
 from core.foundation.layout import AlgebraSpec
+from core.planning.action import apply_graded_linear_action, apply_multi_graded_linear_action
 from core.planning.flow import GradeFlow
 from core.planning.layouts import build_product_request
 from core.planning.planner import GradePlanner
@@ -351,6 +352,30 @@ def test_product_executor_compact_forward_supports_different_layout_widths():
 
     assert plan.left_layout.dim != plan.right_layout.dim
     assert torch.allclose(compact, dense, atol=1e-12, rtol=1e-12)
+
+
+def test_multi_graded_linear_action_matches_stacked_single_actions():
+    algebra = CliffordAlgebra(4, 0, 0, device=DEVICE, dtype=torch.float64)
+    layout = algebra.layout((0, 1, 2))
+    values = torch.randn(2, 3, layout.dim, dtype=torch.float64)
+    matrices = torch.randn(5, algebra.n, algebra.n, dtype=torch.float64)
+
+    actual = apply_multi_graded_linear_action(values, matrices, input_layout=layout, output_layout=layout)
+    expected = torch.stack(
+        [
+            apply_graded_linear_action(
+                values,
+                matrix.unsqueeze(0).expand(values.shape[-2], -1, -1),
+                input_layout=layout,
+                output_layout=layout,
+            )
+            for matrix in matrices
+        ],
+        dim=-2,
+    )
+
+    assert actual.shape == (2, 3, 5, layout.dim)
+    assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
 def test_algebra_projected_product_matches_dense_kernel_and_compact_output():

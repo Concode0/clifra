@@ -38,6 +38,17 @@ class TestRotorGadgetShapes:
 
         assert out.shape == (batch_size, 8, algebra_2d.dim)
 
+    @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
+    def test_fullgraph_compile(self, algebra_3d):
+        """RotorGadget remains graph-capturable on its dense execution path."""
+        layer = RotorGadget(algebra=algebra_3d, in_channels=4, out_channels=4, num_rotor_pairs=2)
+        compiled = torch.compile(layer, backend="aot_eager", fullgraph=True)
+        x = torch.randn(2, 4, algebra_3d.dim)
+
+        y = compiled(x)
+
+        assert y.shape == (2, 4, algebra_3d.dim)
+
     @pytest.mark.parametrize(
         "in_ch,out_ch,num_pairs",
         [

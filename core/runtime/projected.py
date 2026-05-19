@@ -21,6 +21,8 @@ from core.runtime.accessors import grade_indices as _grade_indices
 from core.runtime.accessors import hermitian_signs as _hermitian_signs
 from core.runtime.accessors import materialize_dense
 from core.runtime.accessors import resolve_layout as _resolve_layout
+from core.runtime.actions import apply_multi_versor_action, apply_versor_action
+from core.runtime.actions import grade_norms as _grade_norms
 
 
 class AlgebraRuntimeMixin:
@@ -95,6 +97,18 @@ class AlgebraRuntimeMixin:
     ) -> torch.Tensor:
         """Return Hermitian signs for a dense or compact layout."""
         return _hermitian_signs(self, layout=layout, grades=grades, device=device, dtype=dtype)
+
+    def versor_action(self, values: torch.Tensor, weights: torch.Tensor, **kwargs):
+        """Apply a parameterized versor action through the host storage dispatcher."""
+        return apply_versor_action(self, values, weights, **kwargs)
+
+    def multi_versor_action(self, values: torch.Tensor, weights: torch.Tensor, mix: torch.Tensor, **kwargs):
+        """Apply a weighted versor superposition through the host storage dispatcher."""
+        return apply_multi_versor_action(self, values, weights, mix, **kwargs)
+
+    def grade_norms(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Return per-grade norms for dense or compact values."""
+        return _grade_norms(self, values, **kwargs)
 
     def projected_product(
         self,

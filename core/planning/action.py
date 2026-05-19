@@ -41,6 +41,36 @@ def apply_graded_linear_action(
     return torch.einsum("coi,...ci->...co", coefficients, values)
 
 
+def apply_multi_graded_linear_action(
+    values: torch.Tensor,
+    matrices: torch.Tensor,
+    *,
+    input_layout: GradeLayout,
+    output_layout: GradeLayout,
+) -> torch.Tensor:
+    """Apply multiple outermorphisms to compact grade lanes.
+
+    ``matrices`` stores ``[actions, n, n]`` vector-space maps. ``values``
+    stores ``[..., channels, input_layout.dim]`` compact lanes. The result is
+    ``[..., channels, actions, output_layout.dim]``.
+    """
+    if input_layout.spec != output_layout.spec:
+        raise ValueError(f"layout mismatch: {input_layout.spec} vs {output_layout.spec}")
+    if values.shape[-1] != input_layout.dim:
+        raise ValueError(f"input compact dimension must be {input_layout.dim}, got {values.shape[-1]}")
+    if values.ndim < 2:
+        raise ValueError(f"values must include channel and lane axes, got shape {tuple(values.shape)}")
+
+    spec = input_layout.spec
+    if matrices.shape[-2:] != (spec.n, spec.n):
+        raise ValueError(f"matrices trailing shape must be {(spec.n, spec.n)}, got {tuple(matrices.shape[-2:])}")
+    if matrices.ndim != 3:
+        raise ValueError(f"matrices must have shape [actions, n, n], got {tuple(matrices.shape)}")
+
+    coefficients = _graded_action_coefficients(matrices, input_layout=input_layout, output_layout=output_layout)
+    return torch.einsum("koi,...ci->...cko", coefficients, values)
+
+
 def bivector_vector_generator(bivectors: torch.Tensor, *, bivector_layout: GradeLayout) -> torch.Tensor:
     """Return the vector-space generator induced by compact bivectors."""
     if bivector_layout.grades != (2,):

@@ -140,6 +140,21 @@ class TestLayers:
         assert actual.shape == x.shape
         assert torch.allclose(actual, expected, atol=1e-4)
 
+    def test_declared_rotor_layout_accepts_dense_input_and_returns_compact(self):
+        dense = CliffordAlgebra(3, 0, device="cpu")
+        layout = dense.layout((1,))
+        x = dense.embed_vector(torch.randn(2, 4, dense.n))
+
+        declared_layer = RotorLayer(dense, 4, input_layout=layout)
+        reference_layer = RotorLayer(dense, 4)
+        reference_layer.grade_weights.data.copy_(declared_layer.grade_weights.data)
+
+        actual = declared_layer(x)
+        expected = layout.compact(reference_layer(x))
+
+        assert actual.shape == (2, 4, layout.dim)
+        assert torch.allclose(actual, expected, atol=1e-4)
+
     def test_multi_rotor_shape(self, algebra_3d):
         x = torch.randn(4, 5, 8)
         layer = MultiRotorLayer(algebra_3d, 5, num_rotors=4)
@@ -333,6 +348,21 @@ class TestLayers:
         assert actual.shape == x.shape
         assert torch.allclose(actual, expected, atol=1e-4)
 
+    def test_declared_reflection_layout_accepts_dense_input_and_returns_compact(self):
+        dense = CliffordAlgebra(3, 0, device="cpu")
+        layout = dense.layout((1,))
+        x = dense.embed_vector(torch.randn(2, 4, dense.n))
+
+        declared_layer = ReflectionLayer(dense, channels=4, input_layout=layout)
+        reference_layer = ReflectionLayer(dense, channels=4)
+        reference_layer.vector_weights.data.copy_(declared_layer.vector_weights.data)
+
+        actual = declared_layer(x)
+        expected = layout.compact(reference_layer(x))
+
+        assert actual.shape == (2, 4, layout.dim)
+        assert torch.allclose(actual, expected, atol=1e-4)
+
     def test_reflection_preserves_norm(self, algebra_3d):
         C = 3
         layer = ReflectionLayer(algebra_3d, channels=C)
@@ -443,6 +473,22 @@ class TestCompile:
         x = torch.randn(2, 4, 8)
         y = compiled(x)
         assert y.shape == (2, 4, 8)
+
+    def test_compile_compact_versor_layers(self):
+        """Compact versor layers compile through the polymorphic core dispatcher."""
+        context = AlgebraContext(3, 0, device="cpu")
+        layout = context.layout((1,))
+        x = torch.randn(2, 4, layout.dim)
+
+        layers = (
+            RotorLayer(context, channels=4, input_layout=layout),
+            ReflectionLayer(context, channels=4, input_layout=layout),
+            MultiRotorLayer(context, channels=4, num_rotors=2, input_layout=layout),
+        )
+        for layer in layers:
+            compiled = torch.compile(layer, backend="aot_eager", fullgraph=True)
+            y = compiled(x)
+            assert y.shape == x.shape
 
     def test_compile_backward(self, algebra_3d):
         """Gradients flow through compiled RotorLayer."""
