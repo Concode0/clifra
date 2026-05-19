@@ -11,13 +11,11 @@ import torch.nn as nn
 from core.foundation.layout import GradeLayout
 from core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from core.foundation.module import CliffordModule
-from core.runtime.actions import compact_versor_action
+from core.runtime.actions import dense_versor_factors
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.layers import resolve_layer_storage
 
 from ._utils import (
-    cache_matches,
-    dense_from_indices,
     grade_indices,
     require_positive_int,
 )
@@ -113,7 +111,7 @@ class RotorLayer(CliffordModule):
     def _build_grade_element(self, device, dtype):
         """Scatter grade_weights into full multivector dimension [channels, dim]."""
         weights = self.grade_weights.to(device=device, dtype=dtype)
-        return dense_from_indices(weights, self.grade_indices, self.algebra.dim)
+        return self.parameter_layout.dense(weights)
 
     def _compute_versors(self, device, dtype):
         """Compute left and right factors for per_channel_sandwich.
@@ -126,16 +124,13 @@ class RotorLayer(CliffordModule):
         Returns:
             Tuple[Tensor, Tensor]: (V_left [C, dim], V_right [C, dim])
         """
-        V = self._build_grade_element(device, dtype)
-        if self.grade == 2:
-            R = self.algebra.exp(-0.5 * V)
-            return R, self.algebra.reverse(R)
-        else:
-            # Normalize per channel so blade_inverse is exact.
-            # For a unit-norm grade-k element, V * V_rev = scalar everywhere.
-            norm = V.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-            V = V / norm
-            return self.algebra.grade_involution(V), self.algebra.blade_inverse(V)
+        weights = self.grade_weights.to(device=device, dtype=dtype)
+        return dense_versor_factors(
+            self.algebra,
+            weights,
+            grade=self.grade,
+            parameter_layout=self.parameter_layout,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply versor product x' = hat(V) x V^{-1} (= RxR~ for grade=2).
@@ -148,42 +143,12 @@ class RotorLayer(CliffordModule):
         Returns:
             torch.Tensor: Transformed input [Batch, Channels, Dim].
         """
-        is_compact = self.input_storage.validate_input(
-            x,
-            channels=self.channels,
-            name="RotorLayer input",
-            allow_dense=self.input_layout is None or self.input_layout.dim == self.algebra.dim,
-        )
-        if is_compact:
-            return self._forward_compact(x)
-        if not hasattr(self.algebra, "per_channel_sandwich"):
-            raise ValueError(
-                "RotorLayer dense execution requires CliffordAlgebra; declare input_grades for compact use."
-            )
-
         cache = (
             (self._cached_V_left, self._cached_V_right)
-            if self._cached_V_left is not None and self._cached_V_right is not None
+            if not self.training and self._cached_V_left is not None and self._cached_V_right is not None
             else None
         )
-        if not self.training and cache_matches(cache, x):
-            V_left, V_right = self._cached_V_left, self._cached_V_right
-        else:
-            V_left, V_right = self._compute_versors(x.device, x.dtype)
-            if not self.training:
-                self._cached_V_left = V_left
-                self._cached_V_right = V_right
-
-        return self.algebra.per_channel_sandwich(V_left, x, V_right)
-
-    def _forward_compact(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply a compact grade-preserving versor action."""
-        if self.input_layout is None:
-            raise ValueError("RotorLayer compact input requires input_layout or input_grades")
-        if self.output_layout is None:
-            raise ValueError("RotorLayer compact output requires output_layout or output_grades")
-        return compact_versor_action(
-            self.algebra,
+        out, next_cache = self.algebra.versor_action(
             x,
             self.grade_weights,
             grade=self.grade,
@@ -191,7 +156,15 @@ class RotorLayer(CliffordModule):
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
             compact_output=self.compact_output,
+            channels=self.channels,
+            name="RotorLayer input",
+            dense_cache=cache,
+            cache_dense=not self.training,
+            return_cache=True,
         )
+        if not self.training and next_cache is not None:
+            self._cached_V_left, self._cached_V_right = next_cache
+        return out
 
     def train(self, mode: bool = True):
         """Invalidate versor cache when switching to train mode."""

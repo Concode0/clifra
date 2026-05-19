@@ -11,13 +11,10 @@ import torch.nn as nn
 from core.foundation.layout import GradeLayout
 from core.foundation.manifold import MANIFOLD_SPHERE, tag_manifold
 from core.foundation.module import CliffordModule
-from core.runtime.actions import compact_versor_action
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.layers import resolve_layer_storage
 
 from ._utils import (
-    cache_matches,
-    dense_from_indices,
     grade_indices,
     require_positive_int,
 )
@@ -97,7 +94,7 @@ class ReflectionLayer(CliffordModule):
             Tuple of (n, n_inv) each [C, dim].
         """
         weights = self.vector_weights.to(device=device, dtype=dtype)
-        n = dense_from_indices(weights, self.vector_indices, self.algebra.dim)
+        n = self.vector_layout.dense(weights)
 
         # Normalize: n_hat = n / sqrt(|<n ~n>_0|)
         n_sq = self.algebra.norm_sq(n)  # [C, 1]
@@ -116,47 +113,12 @@ class ReflectionLayer(CliffordModule):
         Returns:
             torch.Tensor: Reflected input [Batch, Channels, Dim].
         """
-        is_compact = self.input_storage.validate_input(
-            x,
-            channels=self.channels,
-            name="ReflectionLayer input",
-            allow_dense=self.input_layout is None or self.input_layout.dim == self.algebra.dim,
-        )
-        if is_compact:
-            return self._forward_compact(x)
-        if not hasattr(self.algebra, "per_channel_sandwich"):
-            raise ValueError(
-                "ReflectionLayer dense execution requires CliffordAlgebra; declare input_grades for compact use."
-            )
-
         cache = (
             (self._cached_n, self._cached_n_inv)
-            if self._cached_n is not None and self._cached_n_inv is not None
+            if not self.training and self._cached_n is not None and self._cached_n_inv is not None
             else None
         )
-        if not self.training and cache_matches(cache, x):
-            n, n_inv = self._cached_n, self._cached_n_inv
-        else:
-            n, n_inv = self._build_vectors(x.device, x.dtype)
-            if not self.training:
-                self._cached_n = n
-                self._cached_n_inv = n_inv
-
-        # grade_involution(n) = -n for grade-1 vectors
-        n_hat = -n  # [C, dim]
-
-        # Per-channel reflection via two GPs: (-n) * x * n^{-1}
-        # Use per_channel_sandwich with n_hat as "R" and n_inv as "R_rev"
-        return self.algebra.per_channel_sandwich(n_hat, x, n_inv)
-
-    def _forward_compact(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply compact reflection through the induced vector action."""
-        if self.input_layout is None:
-            raise ValueError("ReflectionLayer compact input requires input_layout or input_grades")
-        if self.output_layout is None:
-            raise ValueError("ReflectionLayer compact output requires output_layout or output_grades")
-        return compact_versor_action(
-            self.algebra,
+        out, next_cache = self.algebra.versor_action(
             x,
             self.vector_weights,
             grade=1,
@@ -164,7 +126,15 @@ class ReflectionLayer(CliffordModule):
             output_layout=self.output_layout,
             parameter_layout=self.vector_layout,
             compact_output=self.compact_output,
+            channels=self.channels,
+            name="ReflectionLayer input",
+            dense_cache=cache,
+            cache_dense=not self.training,
+            return_cache=True,
         )
+        if not self.training and next_cache is not None:
+            self._cached_n, self._cached_n_inv = next_cache
+        return out
 
     def train(self, mode: bool = True):
         """Override to invalidate cache when switching to train mode."""

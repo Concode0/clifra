@@ -8,6 +8,7 @@ import torch
 
 from core.foundation.layout import GradeLayout
 from core.planning.action import metric_self_signs
+from core.runtime.actions import compact_grade_norms
 
 
 @dataclass(frozen=True)
@@ -86,12 +87,8 @@ class LayerStorage:
     def compact_grade_norms(self, values: torch.Tensor) -> torch.Tensor:
         """Return per-grade coefficient norms for compact values."""
         if self.layout is None:
-            return self.algebra.get_grade_norms(values)
-        flat = values.pow(2).reshape(-1, self.layout.dim)
-        grade_ids = self.layout.grade_indices_tensor(device=values.device).unsqueeze(0).expand_as(flat)
-        result = values.new_zeros(flat.shape[0], self.algebra.num_grades)
-        result.scatter_add_(1, grade_ids, flat)
-        return result.reshape(*values.shape[:-1], self.algebra.num_grades).clamp(min=self.algebra.eps).sqrt()
+            return self.algebra.grade_norms(values)
+        return compact_grade_norms(self.algebra, values, self.layout)
 
     def metric_signs(self, *, device=None, dtype=None) -> torch.Tensor:
         """Return basis self-product signs for this storage."""

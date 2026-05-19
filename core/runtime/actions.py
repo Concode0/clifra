@@ -1,12 +1,152 @@
-"""Runtime actions used by compact-capable primitive layers."""
+"""Runtime actions shared by dense and compact algebra hosts."""
 
 from __future__ import annotations
 
 import torch
 
 from core.foundation.layout import GradeLayout
+from core.foundation.validation import check_multivector
 from core.planning.action import bivector_vector_generator, metric_self_signs, reflection_vector_matrix
 from core.runtime.accessors import materialize_dense
+
+
+def apply_versor_action(
+    algebra,
+    values: torch.Tensor,
+    weights: torch.Tensor,
+    *,
+    grade: int,
+    input_grades=None,
+    output_grades=None,
+    input_layout: GradeLayout | None = None,
+    output_layout: GradeLayout | None = None,
+    parameter_layout: GradeLayout | None = None,
+    compact_output: bool = False,
+    channels: int | None = None,
+    name: str = "versor_action",
+    dense_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
+    cache_dense: bool = False,
+    return_cache: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+    """Apply one versor action while the algebra host chooses storage execution."""
+    input_layout = _declared_layout(algebra, input_grades, input_layout)
+    output_layout = _declared_layout(algebra, output_grades, output_layout) or input_layout
+    parameter_layout = parameter_layout or algebra.layout((int(grade),))
+
+    input_compact = _validate_action_values(
+        algebra,
+        values,
+        layout=input_layout,
+        channels=channels,
+        name=name,
+    )
+    if input_compact:
+        output = compact_versor_action(
+            algebra,
+            values,
+            weights,
+            grade=grade,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+            compact_output=compact_output,
+        )
+        return (output, dense_cache) if return_cache else output
+
+    _require_dense_action(algebra, name, multi=False)
+    left, right, next_cache = _dense_versor_factors(
+        algebra,
+        values,
+        weights,
+        grade=grade,
+        parameter_layout=parameter_layout,
+        dense_cache=dense_cache,
+        cache_dense=cache_dense,
+    )
+    output = algebra.per_channel_sandwich(left, values, right)
+    output = _project_dense_action_output(algebra, output, output_layout=output_layout, compact_output=compact_output)
+    return (output, next_cache) if return_cache else output
+
+
+def apply_multi_versor_action(
+    algebra,
+    values: torch.Tensor,
+    weights: torch.Tensor,
+    mix: torch.Tensor,
+    *,
+    grade: int,
+    input_grades=None,
+    output_grades=None,
+    input_layout: GradeLayout | None = None,
+    output_layout: GradeLayout | None = None,
+    parameter_layout: GradeLayout | None = None,
+    compact_output: bool = False,
+    channels: int | None = None,
+    name: str = "multi_versor_action",
+    dense_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
+    cache_dense: bool = False,
+    return_cache: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+    """Apply a weighted versor superposition with host-owned storage dispatch."""
+    input_layout = _declared_layout(algebra, input_grades, input_layout)
+    output_layout = _declared_layout(algebra, output_grades, output_layout) or input_layout
+    parameter_layout = parameter_layout or algebra.layout((int(grade),))
+
+    input_compact = _validate_action_values(
+        algebra,
+        values,
+        layout=input_layout,
+        channels=channels,
+        name=name,
+    )
+    if input_compact:
+        output = compact_multi_versor_action(
+            algebra,
+            values,
+            weights,
+            mix,
+            grade=grade,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+            compact_output=compact_output,
+        )
+        return (output, dense_cache) if return_cache else output
+
+    _require_dense_action(algebra, name, multi=True)
+    left, right, next_cache = _dense_versor_factors(
+        algebra,
+        values,
+        weights,
+        grade=grade,
+        parameter_layout=parameter_layout,
+        dense_cache=dense_cache,
+        cache_dense=cache_dense,
+    )
+    versored = algebra.multi_rotor_sandwich(left, values, right)
+    output = torch.einsum("ck,...cke->...ce", mix.to(device=values.device, dtype=values.dtype), versored)
+    output = _project_dense_action_output(algebra, output, output_layout=output_layout, compact_output=compact_output)
+    return (output, next_cache) if return_cache else output
+
+
+def grade_norms(
+    algebra,
+    values: torch.Tensor,
+    *,
+    input_grades=None,
+    layout: GradeLayout | None = None,
+) -> torch.Tensor:
+    """Return per-grade coefficient norms for dense or compact values."""
+    layout = _declared_layout(algebra, input_grades, layout)
+    input_compact = _values_are_compact(algebra, values, layout)
+    if input_compact:
+        return compact_grade_norms(algebra, values, layout)
+    if hasattr(algebra, "get_grade_norms"):
+        return algebra.get_grade_norms(values)
+
+    check_multivector(values, algebra, "grade_norms(values)")
+    full_layout = algebra.layout(range(algebra.num_grades))
+    return compact_grade_norms(algebra, values, full_layout)
 
 
 def compact_versor_action(
@@ -94,3 +234,131 @@ def versor_vector_matrix(algebra, weights: torch.Tensor, *, grade: int, paramete
 def parameter_layout_signs(layout: GradeLayout, *, device=None, dtype=None) -> torch.Tensor:
     """Return basis self-product signs for compact parameter weights."""
     return metric_self_signs(layout, device=device, dtype=dtype)
+
+
+def compact_grade_norms(algebra, values: torch.Tensor, layout: GradeLayout) -> torch.Tensor:
+    """Return per-grade coefficient norms for compact values."""
+    flat = values.pow(2).reshape(-1, layout.dim)
+    grade_ids = layout.grade_indices_tensor(device=values.device).unsqueeze(0).expand_as(flat)
+    result = values.new_zeros(flat.shape[0], algebra.num_grades)
+    result.scatter_add_(1, grade_ids, flat)
+    return result.reshape(*values.shape[:-1], algebra.num_grades).clamp(min=algebra.eps).sqrt()
+
+
+def dense_versor_factors(
+    algebra,
+    weights: torch.Tensor,
+    *,
+    grade: int,
+    parameter_layout: GradeLayout,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return dense left/right factors for a parameterized versor."""
+    versor = parameter_layout.dense(weights)
+    grade = int(grade)
+
+    if grade == 2:
+        rotor = algebra.exp(-0.5 * versor)
+        return rotor, algebra.reverse(rotor)
+
+    if grade == 1:
+        norm_sq = algebra.norm_sq(versor)
+        scale = norm_sq.abs().clamp(min=1e-12).sqrt()
+        versor = versor / scale
+    else:
+        norm = versor.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        versor = versor / norm
+    return algebra.grade_involution(versor), algebra.blade_inverse(versor)
+
+
+def _dense_versor_factors(
+    algebra,
+    values: torch.Tensor,
+    weights: torch.Tensor,
+    *,
+    grade: int,
+    parameter_layout: GradeLayout,
+    dense_cache: tuple[torch.Tensor, torch.Tensor] | None,
+    cache_dense: bool,
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+    if _cache_matches(dense_cache, values):
+        left, right = dense_cache
+    else:
+        dense_weights = weights.to(device=values.device, dtype=values.dtype)
+        left, right = dense_versor_factors(
+            algebra,
+            dense_weights,
+            grade=grade,
+            parameter_layout=parameter_layout,
+        )
+    return left, right, (left, right) if cache_dense else None
+
+
+def _declared_layout(algebra, grades, layout: GradeLayout | None) -> GradeLayout | None:
+    if hasattr(algebra, "_declared_layout"):
+        return algebra._declared_layout(grades, layout)
+    if layout is not None:
+        return layout
+    if grades is not None:
+        return algebra.layout(grades)
+    default_grades = getattr(algebra, "_default_grades", None)
+    if default_grades is None:
+        return None
+    return algebra.layout(default_grades)
+
+
+def _validate_action_values(
+    algebra,
+    values: torch.Tensor,
+    *,
+    layout: GradeLayout | None,
+    channels: int | None,
+    name: str,
+) -> bool:
+    if values.ndim < 3:
+        raise ValueError(f"{name}: expected ndim >= 3, got shape {tuple(values.shape)}")
+    if channels is not None and values.shape[-2] != channels:
+        raise ValueError(f"{name}: expected {channels} channels, got {values.shape[-2]} (shape {tuple(values.shape)})")
+
+    if _values_are_compact(algebra, values, layout):
+        return True
+    if values.shape[-1] == algebra.dim:
+        return False
+
+    expected = [str(algebra.dim)]
+    if layout is not None:
+        expected.insert(0, f"{layout.dim} for grades {layout.grades}")
+    raise ValueError(f"{name}: last dim must be {' or '.join(expected)}, got {values.shape[-1]}")
+
+
+def _values_are_compact(algebra, values: torch.Tensor, layout: GradeLayout | None) -> bool:
+    if layout is None or values.shape[-1] != layout.dim:
+        return False
+    return layout.dim != algebra.dim or not hasattr(algebra, "per_channel_sandwich")
+
+
+def _require_dense_action(algebra, name: str, *, multi: bool) -> None:
+    if not hasattr(algebra, "per_channel_sandwich"):
+        raise ValueError(f"{name}: dense execution requires CliffordAlgebra; declare grades/layout for compact use")
+    if multi and not hasattr(algebra, "multi_rotor_sandwich"):
+        raise ValueError(f"{name}: dense execution requires CliffordAlgebra action kernels")
+
+
+def _project_dense_action_output(
+    algebra,
+    output: torch.Tensor,
+    *,
+    output_layout: GradeLayout | None,
+    compact_output: bool,
+) -> torch.Tensor:
+    if output_layout is None:
+        return output
+    compact = output_layout.compact(output)
+    if compact_output:
+        return compact
+    return materialize_dense(algebra, compact, layout=output_layout)
+
+
+def _cache_matches(cache: tuple[torch.Tensor, ...] | None, reference: torch.Tensor) -> bool:
+    if cache is None:
+        return False
+    return all(tensor.device == reference.device and tensor.dtype == reference.dtype for tensor in cache)

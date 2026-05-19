@@ -6,6 +6,7 @@ from core.planning import PlanningLimits
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.context import AlgebraContext
 from layers import ProductLayer, WedgeLayer
+from layers.blocks.multi_rotor_ffn import MultiRotorFFN
 from optimizers import make_riemannian_optimizer
 
 pytestmark = pytest.mark.unit
@@ -123,6 +124,28 @@ def test_compact_layer_pipeline_trains_with_riemannian_optimizer_factory():
 
     assert model.scale.grad is not None
     assert torch.isfinite(model.scale).all()
+
+
+def test_rotor_backend_block_trains_with_riemannian_optimizer_factory():
+    algebra = CliffordAlgebra(p=3, q=0, device="cpu")
+    model = MultiRotorFFN(
+        algebra,
+        channels=2,
+        ffn_mult=2,
+        num_rotors=2,
+        use_rotor_backend=True,
+    )
+    optimizer = make_riemannian_optimizer(model, algebra, optimizer="adam", lr=0.01)
+    x = torch.randn(4, 2, algebra.dim)
+
+    output = model(x)
+    loss = output.square().mean()
+    loss.backward()
+    optimizer.step()
+
+    assert output.shape == x.shape
+    assert any(group.get("manifold") == "spin" for group in optimizer.param_groups)
+    assert all(torch.isfinite(parameter).all() for parameter in model.parameters())
 
 
 def test_product_layer_uses_context_planning_limits():

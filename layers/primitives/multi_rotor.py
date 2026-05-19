@@ -16,13 +16,11 @@ import torch.nn as nn
 from core.foundation.layout import GradeLayout
 from core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from core.foundation.module import CliffordModule
-from core.runtime.actions import compact_multi_versor_action
+from core.runtime.actions import dense_versor_factors
 from core.runtime.algebra import CliffordAlgebra
 from core.runtime.layers import resolve_layer_storage
 
 from ._utils import (
-    cache_matches,
-    dense_from_indices,
     grade_indices,
     require_positive_int,
 )
@@ -130,15 +128,12 @@ class MultiRotorLayer(CliffordModule):
             Tuple[Tensor, Tensor]: (V_left [K, dim], V_right [K, dim])
         """
         weights = self.rotor_grade_weights.to(device=device, dtype=dtype)
-        V = dense_from_indices(weights, self.grade_indices, self.algebra.dim)
-
-        if self.grade == 2:
-            R = self.algebra.exp(-0.5 * V)  # [K, D]
-            return R, self.algebra.reverse(R)
-        else:
-            norm = V.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-            V = V / norm
-            return self.algebra.grade_involution(V), self.algebra.blade_inverse(V)
+        return dense_versor_factors(
+            self.algebra,
+            weights,
+            grade=self.grade,
+            parameter_layout=self.parameter_layout,
+        )
 
     def forward(self, x: torch.Tensor, return_invariants: bool = False) -> torch.Tensor:
         """Apply weighted multi-versor superposition.
@@ -152,61 +147,12 @@ class MultiRotorLayer(CliffordModule):
         Returns:
             torch.Tensor: Transformed output [Batch, Channels, Dim].
         """
-        is_compact = self.input_storage.validate_input(
-            x,
-            channels=self.channels,
-            name="MultiRotorLayer input",
-            allow_dense=self.input_layout is None or self.input_layout.dim == self.algebra.dim,
-        )
-        if is_compact:
-            out = self._forward_compact(x)
-            if return_invariants:
-                if not self.compact_output:
-                    return self.algebra.get_grade_norms(out)
-                return self.output_storage.compact_grade_norms(out)
-            return out
-        if not hasattr(self.algebra, "multi_rotor_sandwich"):
-            raise ValueError(
-                "MultiRotorLayer dense execution requires CliffordAlgebra; declare input_grades for compact use."
-            )
-
         cache = (
             (self._cached_V_left, self._cached_V_right)
-            if self._cached_V_left is not None and self._cached_V_right is not None
+            if not self.training and self._cached_V_left is not None and self._cached_V_right is not None
             else None
         )
-        if not self.training and cache_matches(cache, x):
-            V_left, V_right = self._cached_V_left, self._cached_V_right
-        else:
-            V_left, V_right = self._compute_versors(x.device, x.dtype)
-            if not self.training:
-                self._cached_V_left = V_left
-                self._cached_V_right = V_right
-
-        # Action-matrix sandwich: build K matrices once, apply via einsum
-        versored_x = self.algebra.multi_rotor_sandwich(
-            V_left,
-            x,
-            V_right,
-        )  # [B, C, K, D]
-
-        # Weighted superposition
-        weights = self.weights.to(device=x.device, dtype=x.dtype)
-        out = torch.einsum("ck,...cke->...ce", weights, versored_x)
-
-        if return_invariants:
-            return self.algebra.get_grade_norms(out)
-
-        return out
-
-    def _forward_compact(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply compact weighted superposition of induced versor actions."""
-        if self.input_layout is None:
-            raise ValueError("MultiRotorLayer compact input requires input_layout or input_grades")
-        if self.output_layout is None:
-            raise ValueError("MultiRotorLayer compact output requires output_layout or output_grades")
-        return compact_multi_versor_action(
-            self.algebra,
+        out, next_cache = self.algebra.multi_versor_action(
             x,
             self.rotor_grade_weights,
             self.weights,
@@ -215,7 +161,19 @@ class MultiRotorLayer(CliffordModule):
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
             compact_output=self.compact_output,
+            channels=self.channels,
+            name="MultiRotorLayer input",
+            dense_cache=cache,
+            cache_dense=not self.training,
+            return_cache=True,
         )
+        if not self.training and next_cache is not None:
+            self._cached_V_left, self._cached_V_right = next_cache
+
+        if return_invariants:
+            return self.algebra.grade_norms(out, layout=self.output_layout)
+
+        return out
 
     def train(self, mode: bool = True):
         """Invalidate versor cache when switching to train mode."""
