@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
-from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.module import CliffordModule, require_dense_kernel_host
 from clifra.core.foundation.validation import check_channels, check_multivector
 from clifra.core.runtime.algebra import CliffordAlgebra
 
@@ -79,8 +79,7 @@ class RotorGadget(CliffordModule):
             bias: Whether to include bias term (applied after transformation)
         """
         super().__init__(algebra)
-        if not hasattr(algebra, "per_channel_sandwich"):
-            raise ValueError("RotorGadget is dense-only and requires CliffordAlgebra.")
+        require_dense_kernel_host(algebra, "RotorGadget")
 
         self.in_channels = require_positive_int(in_channels, "in_channels")
         self.out_channels = require_positive_int(out_channels, "out_channels")

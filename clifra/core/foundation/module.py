@@ -171,3 +171,16 @@ class CliffordModule(nn.Module):
     def forward(self, x):
         """Perform the forward pass computation."""
         raise NotImplementedError
+
+
+def is_dense_kernel_host(algebra: object) -> bool:
+    """Return whether ``algebra`` owns dense Clifford kernel tables."""
+    from clifra.core.runtime.algebra import CliffordAlgebra
+
+    return isinstance(algebra, CliffordAlgebra)
+
+
+def require_dense_kernel_host(algebra: object, feature: str) -> None:
+    """Raise a consistent error for features that need dense kernel tables."""
+    if not is_dense_kernel_host(algebra):
+        raise ValueError(f"{feature} requires dense CliffordAlgebra kernels; declare compact layouts or use dense mode.")

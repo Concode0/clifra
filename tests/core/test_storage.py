@@ -25,6 +25,18 @@ def test_tensor_storage_distinguishes_logical_layout_from_physical_mode():
     assert compact_storage.lane_dim == vector_layout.dim
 
 
+def test_grade_layout_returns_compact_positions_for_grades():
+    spec = AlgebraSpec(4, 0, 0)
+    layout = spec.layout((0, 2))
+
+    scalar_positions = layout.positions_for_grades((0,))
+    bivector_positions = layout.positions_for_grades((2,))
+
+    assert scalar_positions.tolist() == [0]
+    assert len(bivector_positions) == 6
+    assert set(bivector_positions.tolist()).isdisjoint(scalar_positions.tolist())
+
+
 def test_product_request_carries_resolved_operand_storage():
     spec = AlgebraSpec(6, 0, 0)
     vector_layout = spec.layout((1,))

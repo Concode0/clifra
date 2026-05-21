@@ -4,7 +4,9 @@ import pytest
 import torch
 
 from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.context import AlgebraContext
 from clifra.layers.blocks.attention import GeometricProductAttention
+from clifra.layers.blocks.transformer import GeometricTransformerBlock
 
 pytestmark = pytest.mark.unit
 
@@ -55,6 +57,57 @@ def test_attention_forward_shape_after_score_refactor():
     y = attn(x)
 
     assert y.shape == x.shape
+
+
+def test_attention_compact_context_score_matches_dense_reference():
+    context = AlgebraContext(4, 0, device=DEVICE, default_grades=(1,), dtype=torch.float64)
+    dense = CliffordAlgebra(4, 0, 0, device=DEVICE, dtype=torch.float64)
+    layout = context.layout((1,))
+    attn = GeometricProductAttention(
+        context,
+        channels=4,
+        num_heads=2,
+        causal=False,
+        bivector_weight=0.25,
+    )
+    q_head = torch.randn(2, 2, 3, 2, layout.dim, dtype=torch.float64)
+    k_head = torch.randn(2, 2, 4, 2, layout.dim, dtype=torch.float64)
+
+    actual = attn._compute_score(q_head, k_head)
+    expected = _reference_attention_score(dense, layout.dense(q_head), layout.dense(k_head), attn.bivector_weight)
+
+    assert actual.shape == expected.shape
+    assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
+
+
+def test_attention_forward_accepts_compact_context_inputs():
+    context = AlgebraContext(5, 0, device=DEVICE, default_grades=(1,), dtype=torch.float32)
+    layout = context.layout((1,))
+    attn = GeometricProductAttention(context, channels=4, num_heads=2, causal=False)
+    x = torch.randn(2, 5, 4, layout.dim)
+
+    y = attn(x)
+
+    assert y.shape == x.shape
+    assert torch.isfinite(y).all()
+
+
+def test_transformer_block_accepts_compact_context_inputs():
+    context = AlgebraContext(5, 0, device=DEVICE, default_grades=(1,), dtype=torch.float32)
+    layout = context.layout((1,))
+    block = GeometricTransformerBlock(
+        context,
+        channels=4,
+        num_heads=2,
+        num_rotors=2,
+        dropout=0.0,
+    )
+    x = torch.randn(2, 5, 4, layout.dim)
+
+    y = block(x)
+
+    assert y.shape == x.shape
+    assert torch.isfinite(y).all()
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")

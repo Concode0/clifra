@@ -8,8 +8,7 @@
 import torch
 import torch.nn as nn
 
-from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 
 from ..adapters.mother import EntropyGatedAttention
 from ..primitives.normalization import CliffordLayerNorm
@@ -31,7 +30,7 @@ class GeometricTransformerBlock(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         channels: int,
         num_heads: int = 4,
         num_rotors: int = 8,

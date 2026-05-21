@@ -7,8 +7,7 @@
 
 import torch
 
-from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.functional.activation import GeometricGELU
 
 from ..primitives.linear import CliffordLinear
@@ -36,7 +35,7 @@ class MultiRotorFFN(CliffordModule):
     (md17, pdbbind, etc.) beyond the language model.
 
     Args:
-        algebra (CliffordAlgebra): The algebra instance.
+        algebra (AlgebraLike): The algebra instance.
         channels (int): Input/output channel count.
         ffn_mult (int): Expansion factor (ffn_channels = channels * ffn_mult).
         num_rotors (int): Number of parallel rotors K in the toolbox.
@@ -47,7 +46,7 @@ class MultiRotorFFN(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         channels: int,
         ffn_mult: int = 4,
         num_rotors: int = 8,

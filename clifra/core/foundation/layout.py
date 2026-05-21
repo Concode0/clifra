@@ -108,6 +108,14 @@ class GradeLayout:
             self._grade_index_cache[key] = cached
         return cached
 
+    def positions_for_grades(self, grades: Iterable[int], *, device=None) -> torch.Tensor:
+        """Return compact lane positions for the requested grades."""
+        requested = set(normalize_grades(grades, self.spec.n))
+        positions = [
+            position for position, index in enumerate(self.basis_indices) if index.bit_count() in requested
+        ]
+        return torch.tensor(positions, dtype=torch.long, device=device)
+
     def convert(self, values: torch.Tensor, source: "GradeLayout") -> torch.Tensor:
         """Convert compact values from ``source`` into this layout.
 

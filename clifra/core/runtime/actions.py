@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from clifra.core.foundation.layout import GradeLayout
+from clifra.core.foundation.module import is_dense_kernel_host, require_dense_kernel_host
 from clifra.core.foundation.numerics import eps_like
 from clifra.core.foundation.validation import check_multivector
 from clifra.core.planning.action import (
@@ -65,7 +66,7 @@ def apply_versor_action(
         )
         return (output, dense_cache) if return_cache else output
 
-    _require_dense_action(algebra, name, multi=False)
+    _require_dense_action(algebra, name)
     left, right, next_cache = _dense_versor_factors(
         algebra,
         values,
@@ -131,7 +132,7 @@ def apply_multi_versor_action(
         )
         return (output, dense_cache) if return_cache else output
 
-    _require_dense_action(algebra, name, multi=True)
+    _require_dense_action(algebra, name)
     left, right, next_cache = _dense_versor_factors(
         algebra,
         values,
@@ -159,7 +160,7 @@ def grade_norms(
     input_compact = _values_are_compact(algebra, values, layout)
     if input_compact:
         return compact_grade_norms(algebra, values, layout)
-    if hasattr(algebra, "get_grade_norms"):
+    if is_dense_kernel_host(algebra):
         return algebra.get_grade_norms(values)
 
     check_multivector(values, algebra, "grade_norms(values)")
@@ -362,14 +363,11 @@ def _validate_action_values(
 def _values_are_compact(algebra, values: torch.Tensor, layout: GradeLayout | None) -> bool:
     if layout is None or values.shape[-1] != layout.dim:
         return False
-    return layout.dim != algebra.dim or not hasattr(algebra, "per_channel_sandwich")
+    return layout.dim != algebra.dim or not is_dense_kernel_host(algebra)
 
 
-def _require_dense_action(algebra, name: str, *, multi: bool) -> None:
-    if not hasattr(algebra, "per_channel_sandwich"):
-        raise ValueError(f"{name}: dense execution requires CliffordAlgebra; declare grades/layout for compact use")
-    if multi and not hasattr(algebra, "multi_rotor_sandwich"):
-        raise ValueError(f"{name}: dense execution requires CliffordAlgebra action kernels")
+def _require_dense_action(algebra, name: str) -> None:
+    require_dense_kernel_host(algebra, f"{name} dense execution")
 
 
 def _project_dense_action_output(

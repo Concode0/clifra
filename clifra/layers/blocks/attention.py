@@ -11,9 +11,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.layout import GradeLayout
+from clifra.core.foundation.module import AlgebraLike, CliffordModule, require_dense_kernel_host
 from clifra.core.foundation.numerics import eps_like
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.storage import resolve_layer_storage
 
 from ..primitives.linear import CliffordLinear
 
@@ -68,7 +69,7 @@ class GeometricProductAttention(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         channels: int,
         num_heads: int,
         causal: bool = True,
@@ -76,6 +77,8 @@ class GeometricProductAttention(CliffordModule):
         dropout: float = 0.0,
         score_blade_chunk_size: int = _G2_BLADE_CHUNK_SIZE,
         score_precompute_limit: int = _SCORE_PRECOMPUTE_LIMIT,
+        grades=None,
+        layout: GradeLayout = None,
     ):
         """Sets up geometric product attention.
 
@@ -90,6 +93,9 @@ class GeometricProductAttention(CliffordModule):
                 chunk when exact dense scoring is used.
             score_precompute_limit: Maximum temporary ``K_g2`` elements allowed
                 before exact dense scoring switches to chunked grade-2 blades.
+            grades: Optional compact input/output grades. Compact attention is
+                currently grade-1 only and uses planned pairwise products.
+            layout: Optional compact input/output layout.
         """
         super().__init__(algebra)
         assert channels % num_heads == 0, f"channels ({channels}) must be divisible by num_heads ({num_heads})"
@@ -101,12 +107,15 @@ class GeometricProductAttention(CliffordModule):
         self.bivector_weight = bivector_weight
         self.score_blade_chunk_size = max(1, int(score_blade_chunk_size))
         self.score_precompute_limit = max(0, int(score_precompute_limit))
+        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
+        self.layout = self.storage.layout
+        self.lane_dim = self.storage.lane_dim
 
         # Q, K, V projections operate on [B*L, channels, dim]
-        self.q_proj = CliffordLinear(algebra, channels, channels)
-        self.k_proj = CliffordLinear(algebra, channels, channels)
-        self.v_proj = CliffordLinear(algebra, channels, channels)
-        self.out_proj = CliffordLinear(algebra, channels, channels)
+        self.q_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
+        self.k_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
+        self.v_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
+        self.out_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
 
         self.attn_dropout = nn.Dropout(dropout) if dropout > 0.0 else None
 
@@ -114,16 +123,30 @@ class GeometricProductAttention(CliffordModule):
         self._precompute_score_tables()
 
     def _precompute_score_tables(self):
-        """Precompute exact dense attention score routes."""
+        """Precompute exact dense or compact attention score routes."""
         alg = self.algebra
-        D = alg.dim
 
-        if not hasattr(alg, "gp_signs") or not hasattr(alg, "rev_signs"):
-            raise ValueError("GeometricProductAttention currently requires dense CliffordAlgebra inputs.")
+        if self.layout is not None and self.layout.dim != alg.dim:
+            if self.layout.grades != (1,):
+                raise ValueError(
+                    "Compact GeometricProductAttention currently requires a grade-1 input layout. "
+                    "Use dense CliffordAlgebra mode for full multivector attention."
+                )
+            self._score_mode = "compact"
+            self.score_output_layout = alg.layout((0, 2))
+            scalar_positions = self.score_output_layout.positions_for_grades((0,), device=alg.device)
+            bivector_positions = self.score_output_layout.positions_for_grades((2,), device=alg.device)
+            self.register_buffer("_score_scalar_positions", scalar_positions)
+            self.register_buffer("_score_bivector_positions", bivector_positions)
+            return
+
+        require_dense_kernel_host(alg, "GeometricProductAttention dense scoring")
+        self._score_mode = "dense"
+        D = alg.dim
 
         # Grade-0 metric: metric_rev[a] = gp_signs[a, 0] * rev_signs[a]
         # gp_signs[a, 0] is the sign when A[a] * B[a] contributes to output blade 0
-        metric_rev = alg.gp_signs[:, 0].float() * alg.rev_signs.float()
+        metric_rev = alg.gp_signs[:, 0].to(dtype=alg.dtype) * alg.rev_signs.to(dtype=alg.dtype)
         self.register_buffer("_metric_rev", metric_rev)  # [D]
 
         g2_blades = [i for i in range(D) if bin(i).count("1") == 2]
@@ -137,7 +160,37 @@ class GeometricProductAttention(CliffordModule):
         k_head: torch.Tensor,
     ) -> torch.Tensor:
         """Compute GA attention scores for one query block."""
+        if self._score_mode == "compact":
+            return self._compute_score_compact(q_head, k_head)
         return self._compute_score_dense(q_head, k_head)
+
+    def _compute_score_compact(self, q_head: torch.Tensor, k_head: torch.Tensor) -> torch.Tensor:
+        """Exact compact grade-1 score through the core pairwise product planner."""
+        B, H, Lq, Hc, D = q_head.shape
+        Lk = k_head.shape[2]
+        q_by_channel = q_head.permute(0, 1, 3, 2, 4).reshape(B, H, Hc, Lq, D)
+        k_by_channel = k_head.permute(0, 1, 3, 2, 4).reshape(B, H, Hc, Lk, D)
+        product = self.algebra.geometric_product(
+            q_by_channel,
+            k_by_channel,
+            left_layout=self.layout,
+            right_layout=self.layout,
+            output_layout=self.score_output_layout,
+            compact_output=True,
+            pairwise=True,
+        )  # [B, H, Hc, Lq, Lk, G02]
+
+        scalar = torch.index_select(product, -1, self._score_scalar_positions.to(device=product.device))
+        score_g0 = scalar.sum(dim=(-1, 2))
+
+        bivectors = torch.index_select(product, -1, self._score_bivector_positions.to(device=product.device))
+        if bivectors.shape[-1] > 0:
+            score_g2 = bivectors.pow(2).sum(dim=(-1, 2)).clamp_min(0.0).sqrt()
+        else:
+            score_g2 = torch.zeros_like(score_g0)
+
+        scale = math.sqrt(self.head_channels * self.algebra.dim)
+        return (score_g0 + self.bivector_weight * score_g2) / scale
 
     def _compute_score_dense(self, q_head: torch.Tensor, k_head: torch.Tensor) -> torch.Tensor:
         """Exact dense score with automatic full/prechunked grade-2 routing."""
@@ -215,6 +268,12 @@ class GeometricProductAttention(CliffordModule):
         Returns:
             Output multivectors [B, L, C, D].
         """
+        self.storage.validate_input(
+            x,
+            channels=self.channels,
+            name="GeometricProductAttention input",
+            allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
+        )
         B, L, C, D = x.shape
 
         # Project Q, K, V (CliffordLinear expects [B, C, D])
