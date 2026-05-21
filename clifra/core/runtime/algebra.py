@@ -19,8 +19,16 @@ import torch.nn as nn
 
 from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.foundation.validation import check_multivector
-from clifra.core.planning.policy import DEFAULT_PLANNING_LIMITS, PlanningLimits
+from clifra.core.planning.policy import (
+    DEFAULT_PLANNING_LIMITS,
+    DENSE_AUTO_MAX_N,
+    DENSE_EXPLICIT_MAX_N,
+    PlanningLimits,
+)
 from clifra.core.runtime.projected import AlgebraRuntimeMixin
+
+EXP_TAYLOR_DEFAULT_ORDER = 8
+SIMPLE_BIVECTOR_RESIDUAL_EPS_MULTIPLIER = 100.0
 
 
 class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
@@ -81,10 +89,11 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         assert p >= 0, f"p must be non-negative, got {p}"
         assert q >= 0, f"q must be non-negative, got {q}"
         assert r >= 0, f"r must be non-negative, got {r}"
-        max_dense_n = 12 if allow_large_dense else 8
+        max_dense_n = DENSE_EXPLICIT_MAX_N if allow_large_dense else DENSE_AUTO_MAX_N
         assert p + q + r <= max_dense_n, (
             f"p + q + r must be <= {max_dense_n} for dense CliffordAlgebra, got {p + q + r}. "
-            "Use make_algebra(..., kernel='auto') for AlgebraContext or kernel='dense' to explicitly allow Cl9-Cl12."
+            "Use make_algebra(..., kernel='auto') for AlgebraContext or kernel='dense' to explicitly allow "
+            f"Cl{DENSE_AUTO_MAX_N + 1}-Cl{DENSE_EXPLICIT_MAX_N}."
         )
 
         self.p, self.q, self.r = p, q, r
@@ -1131,16 +1140,17 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
             compact_output=True,
         )
         non_scalar_energy = grade4.norm(dim=-1, keepdim=True)
-        is_simple = non_scalar_energy < self.eps * 100
+        is_simple = non_scalar_energy < self.eps * SIMPLE_BIVECTOR_RESIDUAL_EPS_MULTIPLIER
 
         return torch.where(is_simple, R_closed, R_decomposed)
 
-    def _exp_taylor(self, mv: torch.Tensor, order: int = 8) -> torch.Tensor:
+    def _exp_taylor(self, mv: torch.Tensor, order: int = EXP_TAYLOR_DEFAULT_ORDER) -> torch.Tensor:
         """Taylor series exponential with scaling-and-squaring (fallback).
 
         Args:
             mv (torch.Tensor): General multivector [..., dim].
-            order (int, optional): Taylor order. Defaults to 8.
+            order (int, optional): Taylor order. Defaults to
+                :data:`EXP_TAYLOR_DEFAULT_ORDER`.
 
         Returns:
             torch.Tensor: exp(mv) [..., dim].

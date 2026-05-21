@@ -16,10 +16,12 @@ from typing import List, Optional
 import torch
 
 from clifra.core.foundation.module import AlgebraLike
+from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.decomposition import differentiable_invariant_decomposition
 from clifra.core.runtime.metric import hermitian_grade_spectrum
 
 from ._types import CONSTANTS, SpectralResult
+from ._utils import declared_full_product_kwargs, full_grades, is_dense_algebra
 
 
 class SpectralAnalyzer:
@@ -43,7 +45,7 @@ class SpectralAnalyzer:
     def __init__(
         self,
         algebra: AlgebraLike,
-        max_simple_components: int = 5,
+        max_simple_components: int = CONSTANTS.spectral_max_simple_components,
     ):
         self.algebra = algebra
         self.max_simple_components = max_simple_components
@@ -90,7 +92,7 @@ class SpectralAnalyzer:
         # hermitian_grade_spectrum expects [..., dim]
         # Average over channels first to get [N, dim]
         flat = mv_data.mean(dim=1)  # [N, dim]
-        spectrum = hermitian_grade_spectrum(self.algebra, flat)  # [N, n+1]
+        spectrum = hermitian_grade_spectrum(self.algebra, flat, grades=full_grades(self.algebra))  # [N, n+1]
         return spectrum.mean(dim=0)  # [n+1]
 
     def bivector_field_spectrum(self, mv_data: torch.Tensor) -> tuple:
@@ -115,14 +117,21 @@ class SpectralAnalyzer:
             )
 
         # Extract grade-2 (bivector) part
-        mean_bv = self.algebra.grade_projection(mean_mv, 2)
+        bv_layout = self.algebra.layout((2,))
+        mean_bv_compact = self.algebra.grade_projection(mean_mv, 2, compact_output=True)
 
-        bv_norm = mean_bv.norm()
-        if bv_norm < self.algebra.eps_sq:
+        bv_norm = mean_bv_compact.norm()
+        if bv_norm < eps_like(mean_bv_compact):
+            zero_component = bv_layout.dense(mean_bv_compact) if is_dense_algebra(self.algebra) else mean_bv_compact
             return (
                 torch.zeros(1, device=mv_data.device),
-                [torch.zeros_like(mean_bv)],
+                [torch.zeros_like(zero_component)],
             )
+
+        if not is_dense_algebra(self.algebra):
+            return bv_norm.reshape(1), [mean_bv_compact]
+
+        mean_bv = bv_layout.dense(mean_bv_compact)
 
         decomp, _ = differentiable_invariant_decomposition(
             self.algebra,
@@ -136,7 +145,7 @@ class SpectralAnalyzer:
         for comp in decomp:
             c = comp.squeeze(0)  # [dim]
             n = c.norm()
-            if n > self.algebra.eps_sq:
+            if n > eps_like(c):
                 norms.append(n)
                 components.append(c)
 
@@ -176,7 +185,7 @@ class SpectralAnalyzer:
 
         k = min(N, n_samples)
         if k < N:
-            idx = torch.randperm(N)[:k]
+            idx = torch.randperm(N, device=flat.device)[:k]
             flat = flat[idx]
 
         # Build GP matrix: L[:, j] = gp(mean_x, e_j)
@@ -184,7 +193,11 @@ class SpectralAnalyzer:
         mean_x = flat.mean(dim=0)  # [dim]
         # Batched GP: expand mean_x to [dim, dim], basis is [dim, dim]
         # Result[j, :] = gp(mean_x, e_j) = L[:, j], so transpose
-        L = self.algebra.geometric_product(mean_x.unsqueeze(0).expand(dim, -1), basis).T
+        L = self.algebra.geometric_product(
+            mean_x.unsqueeze(0).expand(dim, -1),
+            basis,
+            **declared_full_product_kwargs(self.algebra),
+        ).T
 
         eigvals = torch.linalg.eigvals(L)  # complex
         magnitudes = eigvals.abs()

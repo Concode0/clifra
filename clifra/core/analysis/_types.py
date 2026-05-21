@@ -12,15 +12,16 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
+from clifra.core.planning.policy import DENSE_AUTO_MAX_N, DENSE_EXPLICIT_MAX_N
+
 
 @dataclass
 class AnalysisConstants:
     """Central registry of tuneable constants for the analysis toolkit.
 
     All magic numbers that affect analytical decisions live here so they
-    can be adjusted in one place.  Numerical guards (``1e-8`` etc.) are
-    *not* included -- those are pure division-by-zero protections and
-    have no analytical significance.
+    can be adjusted in one place. Numerical guards belong in
+    :mod:`clifra.core.foundation.numerics`.
 
     Attributes:
         curvature_causal_threshold: Maximum curvature score for a flow
@@ -56,6 +57,49 @@ class AnalysisConstants:
     gp_spectrum_max_n: int = 10
     adjoint_max_n: int = 8
     gp_spectrum_n_samples: int = 50
+    dense_analysis_max_n: int = DENSE_AUTO_MAX_N
+    reflection_analysis_max_n: int = DENSE_AUTO_MAX_N
+    default_k_neighbors: int = 8
+    default_energy_threshold: float = 0.05
+    default_dtype: torch.dtype = torch.float32
+    dimension_k_local: int = 20
+    dimension_local_max_samples: int = 5000
+    dimension_min_intrinsic_dim: int = 1
+    dimension_lift_positive_fill: float = 1.0
+    dimension_lift_null_fill: float = 0.0
+    geodesic_interpolation_steps: int = 10
+    sampling_max_samples: int = 500
+    sampling_seed: int = 42
+    sampling_bootstrap_resamples: int = 100
+    sampling_recommended_min_samples: int = 500
+    sampling_recommended_feature_multiplier: int = 20
+    stratified_points_per_stratum: int = 20
+    stratified_min_strata: int = 2
+    stratified_max_strata: int = 10
+    stratified_algebra_max_dim: int = 6
+    metric_search_num_probes: int = 6
+    metric_search_probe_epochs: int = 80
+    metric_search_probe_lr: float = 0.005
+    metric_search_probe_channels: int = 4
+    metric_search_curvature_weight: float = 0.3
+    metric_search_sparsity_weight: float = 0.01
+    metric_search_parallel_worker_cap: int = 4
+    metric_search_dense_max_n: int = DENSE_EXPLICIT_MAX_N
+    metric_search_cga_extra_dims: int = 2
+    metric_search_rotor_init_std: float = 0.01
+    metric_search_bias_minor_weight: float = 0.1
+    metric_search_bias_noise_std: float = 0.05
+    metric_search_projective_init_bound: float = 0.5
+    metric_search_random_init_std: float = 0.3
+    signature_search_max_dim: int = DENSE_EXPLICIT_MAX_N - 2
+    signature_bootstrap_resamples: int = 10
+    signature_bootstrap_max_samples: int = 500
+    spectral_max_simple_components: int = 5
+    symmetry_null_threshold: float = 0.01
+    commutator_max_bivectors: int = 15
+    pipeline_parallel_workers: int = 3
+    pipeline_fallback_dim_cap: int = 6
+    pipeline_min_ga_n: int = 2
 
 
 # Module-level singleton -- importable as ``from ._types import CONSTANTS``.
@@ -78,9 +122,9 @@ class SamplingConfig:
     """
 
     strategy: str = "random"
-    max_samples: int = 500
-    seed: int = 42
-    n_bootstrap: int = 100
+    max_samples: int = CONSTANTS.sampling_max_samples
+    seed: int = CONSTANTS.sampling_seed
+    n_bootstrap: int = CONSTANTS.sampling_bootstrap_resamples
     n_strata: Optional[int] = None
 
 
@@ -103,14 +147,15 @@ class AnalysisConfig:
     """
 
     device: str = "cpu"
+    dtype: torch.dtype = CONSTANTS.default_dtype
     sampling: SamplingConfig = field(default_factory=SamplingConfig)
     run_dimension: bool = True
     run_signature: bool = True
     run_spectral: bool = True
     run_symmetry: bool = True
     run_commutator: bool = True
-    energy_threshold: float = 0.05
-    k_neighbors: int = 8
+    energy_threshold: float = CONSTANTS.default_energy_threshold
+    k_neighbors: int = CONSTANTS.default_k_neighbors
     verbose: bool = False
 
 

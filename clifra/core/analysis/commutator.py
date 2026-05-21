@@ -17,8 +17,10 @@ from typing import Dict
 import torch
 
 from clifra.core.foundation.module import AlgebraLike
+from clifra.core.foundation.numerics import eps_like
 
 from ._types import CONSTANTS, CommutatorResult
+from ._utils import declared_full_product_kwargs, dense_analysis_supported, full_grades, is_dense_algebra
 
 
 class CommutatorAnalyzer:
@@ -37,7 +39,7 @@ class CommutatorAnalyzer:
     def __init__(
         self,
         algebra: AlgebraLike,
-        max_bivectors: int = 15,
+        max_bivectors: int = CONSTANTS.commutator_max_bivectors,
     ):
         self.algebra = algebra
         self.max_bivectors = max_bivectors
@@ -146,8 +148,12 @@ class CommutatorAnalyzer:
         mu = mv_data.mean(dim=0)  # [dim]
         basis = torch.eye(dim, device=device, dtype=dtype)
 
-        # Batched commutator: [dim, dim] x [dim, dim] -> [dim, dim], transpose
-        ad_mu = self.algebra.commutator(mu.unsqueeze(0).expand(dim, -1), basis).T
+        # Batched commutator: [dim, dim] x [dim, dim] -> [dim, dim], transpose.
+        ad_mu = self.algebra.commutator(
+            mu.unsqueeze(0).expand(dim, -1),
+            basis,
+            **declared_full_product_kwargs(self.algebra),
+        ).T
 
         eigvals = torch.linalg.eigvals(ad_mu)  # complex
         magnitudes = eigvals.abs()
@@ -165,8 +171,26 @@ class CommutatorAnalyzer:
         Returns:
             Mean commutator norm (float).
         """
+        if not is_dense_algebra(self.algebra) and not dense_analysis_supported(
+            self.algebra, max_n=CONSTANTS.adjoint_max_n
+        ):
+            layout = self.algebra.layout((1,))
+            values = layout.compact(mv_data)
+            mu = values.mean(dim=0, keepdim=True)
+            comm = self.algebra.commutator(
+                values,
+                mu.expand_as(values),
+                left_grades=(1,),
+                right_grades=(1,),
+                output_grades=(2,),
+                left_compact=True,
+                right_compact=True,
+                compact_output=True,
+            )
+            return comm.norm(dim=-1).mean().item()
+
         mu = mv_data.mean(dim=0, keepdim=True)  # [1, dim]
-        comm = self.algebra.commutator(mv_data, mu.expand_as(mv_data))
+        comm = self.algebra.commutator(mv_data, mu.expand_as(mv_data), **declared_full_product_kwargs(self.algebra))
         return comm.norm(dim=-1).mean().item()
 
     def lie_bracket_closure(self, mv_data: torch.Tensor) -> Dict:
@@ -190,7 +214,7 @@ class CommutatorAnalyzer:
 
         if n < 2:
             return {
-                "structure_constants": torch.zeros(0, 0, 0, device=device),
+                "structure_constants": torch.zeros(0, 0, 0, device=device, dtype=dtype),
                 "closure_error": 0.0,
                 "basis_indices": [],
             }
@@ -203,7 +227,7 @@ class CommutatorAnalyzer:
 
         if bv_blade_indices.numel() == 0:
             return {
-                "structure_constants": torch.zeros(0, 0, 0, device=device),
+                "structure_constants": torch.zeros(0, 0, 0, device=device, dtype=dtype),
                 "closure_error": 0.0,
                 "basis_indices": [],
             }
@@ -246,7 +270,7 @@ class CommutatorAnalyzer:
         res_norms = residuals.norm(dim=-1)  # [n_pairs]
         bracket_norms = brackets_bv.norm(dim=-1)  # [n_pairs]
 
-        valid = bracket_norms > self.algebra.eps_sq
+        valid = bracket_norms > eps_like(bracket_norms)
         if valid.any():
             closure_error = (res_norms[valid] / bracket_norms[valid]).mean().item()
         else:
@@ -278,7 +302,7 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
 
     # 1. Lift data to grade-1 for commutator analysis
     if D < n:
-        pad = torch.zeros(N, n - D, device=data_tensor.device)
+        pad = torch.zeros(N, n - D, device=data_tensor.device, dtype=data_tensor.dtype)
         x_n = torch.cat([data_tensor, pad], dim=-1)
     else:
         x_n = data_tensor[:, :n]
@@ -301,10 +325,9 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
     # 3. Procrustes alignment via SVD
     x_c = data_tensor - data_tensor.mean(dim=0, keepdim=True)
     try:
-        x_cpu = x_c.cpu()
-        _, _, V = torch.svd(x_cpu)
-        V = V.to(data_tensor.device)
-    except Exception:
-        V = torch.eye(D, device=data_tensor.device)
+        _, _, Vh = torch.linalg.svd(x_c, full_matrices=False)
+        V = Vh.mH
+    except RuntimeError:
+        V = torch.eye(D, device=data_tensor.device, dtype=data_tensor.dtype)
 
     return U, V

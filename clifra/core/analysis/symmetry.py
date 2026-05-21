@@ -15,9 +15,12 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
+from clifra.core.foundation.basis import operation_coefficient
 from clifra.core.foundation.module import AlgebraLike
+from clifra.core.foundation.numerics import eps_like
 
 from ._types import CONSTANTS, CommutatorResult, SymmetryResult
+from ._utils import declared_full_product_kwargs, dense_analysis_supported, full_grades, is_dense_algebra
 
 
 class SymmetryDetector:
@@ -32,7 +35,7 @@ class SymmetryDetector:
     def __init__(
         self,
         algebra: AlgebraLike,
-        null_threshold: float = 0.01,
+        null_threshold: float = CONSTANTS.symmetry_null_threshold,
     ):
         self.algebra = algebra
         self.null_threshold = null_threshold
@@ -118,10 +121,14 @@ class SymmetryDetector:
             Score in ``[0, 1]``.  0 means the data lives entirely in
             the even sub-algebra; 1 means entirely odd grades.
         """
-        alpha = self.algebra.grade_involution(mv_data)  # [N, dim]
+        alpha = self.algebra.grade_involution(
+            mv_data,
+            input_grades=full_grades(self.algebra),
+            compact_output=True,
+        )  # [N, dim]
         odd_part = (mv_data - alpha) / 2.0
         odd_energy = (odd_part**2).sum(dim=-1)
-        total_energy = (mv_data**2).sum(dim=-1).clamp(min=self.algebra.eps_sq)
+        total_energy = (mv_data**2).sum(dim=-1).clamp_min(eps_like(mv_data))
         return (odd_energy / total_energy).mean().item()
 
     def detect_reflection_symmetries(self, mv_data: torch.Tensor) -> List[Dict]:
@@ -138,27 +145,77 @@ class SymmetryDetector:
         n = self.algebra.n
         dim = self.algebra.dim
         N = mv_data.shape[0]
+        if not dense_analysis_supported(self.algebra, max_n=CONSTANTS.reflection_analysis_max_n):
+            return []
 
         # Build all n basis vectors: [n, dim]
         basis_vecs = torch.zeros(n, dim, device=mv_data.device, dtype=mv_data.dtype)
         blade_indices = self.algebra.grade_indices((1,), device=mv_data.device)
         basis_vecs[torch.arange(n, device=mv_data.device), blade_indices] = 1.0
 
-        # Batch reflect: [n, N, dim]
-        mv_exp = mv_data.unsqueeze(0).expand(n, N, dim)
-        basis_exp = basis_vecs.unsqueeze(1).expand(n, N, dim)
-        reflected = self.algebra.reflect(mv_exp, basis_exp)  # [n, N, dim]
+        if is_dense_algebra(self.algebra):
+            mv_exp = mv_data.unsqueeze(0).expand(n, N, dim)
+            basis_exp = basis_vecs.unsqueeze(1).expand(n, N, dim)
+            reflected = self.algebra.reflect(mv_exp, basis_exp)  # [n, N, dim]
+            valid = torch.ones(n, device=mv_data.device, dtype=torch.bool)
+        else:
+            reflected, valid = self._planned_basis_reflections(mv_data, basis_vecs, blade_indices)
 
         # Distributional distance for all directions at once
         orig_sorted = mv_data.sort(dim=0).values.unsqueeze(0).expand(n, N, dim)
         refl_sorted = reflected.sort(dim=1).values  # sort along N
         dist = ((orig_sorted - refl_sorted) ** 2).sum(dim=-1).mean(dim=-1)  # [n]
-        norm = (mv_data**2).sum(dim=-1).mean().clamp(min=self.algebra.eps_sq)
+        norm = (mv_data**2).sum(dim=-1).mean().clamp_min(eps_like(mv_data))
         scores = dist / norm  # [n]
+        scores = torch.where(valid, scores, torch.full_like(scores, float("inf")))
 
         results = [{"direction": i, "score": scores[i].item()} for i in range(n)]
         results.sort(key=lambda r: r["score"])
         return results
+
+    def _planned_basis_reflections(
+        self,
+        mv_data: torch.Tensor,
+        basis_vecs: torch.Tensor,
+        blade_indices: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Reflect by basis vectors through planned products for context hosts."""
+        n = self.algebra.n
+        dim = self.algebra.dim
+        N = mv_data.shape[0]
+        signs = torch.tensor(
+            [
+                operation_coefficient(int(index), int(index), self.algebra.p, self.algebra.q, self.algebra.r, "gp")
+                for index in blade_indices.tolist()
+            ],
+            device=mv_data.device,
+            dtype=mv_data.dtype,
+        )
+        valid = signs.abs() > eps_like(signs)
+        inv_basis = basis_vecs * signs.view(-1, 1)
+
+        full = full_grades(self.algebra)
+        left = basis_vecs.unsqueeze(1).expand(n, N, dim).reshape(n * N, dim)
+        values = mv_data.unsqueeze(0).expand(n, N, dim).reshape(n * N, dim)
+        right = inv_basis.unsqueeze(1).expand(n, N, dim).reshape(n * N, dim)
+        first = self.algebra.geometric_product(
+            left,
+            values,
+            left_grades=(1,),
+            right_grades=full,
+            output_grades=full,
+            compact_output=True,
+        )
+        reflected = -self.algebra.geometric_product(
+            first,
+            right,
+            left_grades=full,
+            right_grades=(1,),
+            output_grades=full,
+            left_compact=True,
+            compact_output=True,
+        ).reshape(n, N, dim)
+        return reflected, valid
 
     def detect_continuous_symmetries(
         self,
@@ -190,13 +247,15 @@ class SymmetryDetector:
         if commutator_result is not None:
             spec = commutator_result.exchange_spectrum
             if spec.numel() > 0:
-                max_val = spec.abs().max().clamp(min=self.algebra.eps_sq)
+                max_val = spec.abs().max().clamp_min(eps_like(spec))
                 return int((spec.abs() / max_val < threshold).sum().item())
 
         # Compute from scratch: test each basis bivector
         n = self.algebra.n
         dim = self.algebra.dim
         N = mv_data.shape[0]
+        if not dense_analysis_supported(self.algebra, max_n=CONSTANTS.adjoint_max_n):
+            return 0
 
         bv_idx_tensor = self.algebra.grade_indices((2,), device=mv_data.device)
 
@@ -211,9 +270,16 @@ class SymmetryDetector:
         # Batch commutator: [n_bv, N, dim]
         bv_exp = bv_bases.unsqueeze(1).expand(n_bv, N, dim)
         mv_exp = mv_data.unsqueeze(0).expand(n_bv, N, dim)
-        comm = self.algebra.commutator(bv_exp, mv_exp)
+        comm = self.algebra.commutator(
+            bv_exp,
+            mv_exp,
+            left_grades=(2,),
+            right_grades=full_grades(self.algebra),
+            output_grades=full_grades(self.algebra),
+            compact_output=True,
+        )
 
         comm_norms = comm.norm(dim=-1).mean(dim=-1)  # [n_bv]
-        data_norm = mv_data.norm(dim=-1).mean().clamp(min=self.algebra.eps_sq)
+        data_norm = mv_data.norm(dim=-1).mean().clamp_min(eps_like(mv_data))
 
         return int((comm_norms / data_norm < threshold).sum().item())

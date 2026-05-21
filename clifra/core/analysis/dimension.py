@@ -19,8 +19,10 @@ import torch
 
 from clifra.core.config import make_algebra
 from clifra.core.foundation.module import AlgebraLike
+from clifra.core.foundation.numerics import DEFAULT_EPS_MULTIPLIER, eps_for
 
 from ._types import CONSTANTS, DimensionResult
+from ._utils import analysis_dtype, as_analysis_tensor
 
 
 class EffectiveDimensionAnalyzer:
@@ -43,15 +45,16 @@ class EffectiveDimensionAnalyzer:
     def __init__(
         self,
         device: str = "cpu",
-        dtype: torch.dtype = torch.float32,
-        k_local: int = 20,
-        energy_threshold: float = 0.05,
+        dtype: torch.dtype = CONSTANTS.default_dtype,
+        k_local: int = CONSTANTS.dimension_k_local,
+        energy_threshold: float = CONSTANTS.default_energy_threshold,
     ):
         self.device = device
-        self.dtype = dtype
+        self.dtype = analysis_dtype(dtype)
         self.k_local = k_local
         self.energy_threshold = energy_threshold
-        self._eps_sq: float = float(torch.finfo(dtype).eps ** 2)
+        self._eps: float = eps_for(self.dtype, multiplier=DEFAULT_EPS_MULTIPLIER)
+        self._eps_sq: float = self._eps**2
 
     def analyze(self, data: torch.Tensor) -> DimensionResult:
         """Full effective-dimension analysis.
@@ -63,7 +66,9 @@ class EffectiveDimensionAnalyzer:
             :class:`DimensionResult` with eigenvalues, participation
             ratio, broken-stick threshold, and optional local dims.
         """
-        data = data.to(device=self.device, dtype=self.dtype)
+        data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
+        if data.ndim != 2:
+            raise ValueError(f"data must have shape [N, D], got {tuple(data.shape)}")
         N, D = data.shape
 
         eigenvalues = self._covariance_eigenvalues(data)  # descending
@@ -78,10 +83,10 @@ class EffectiveDimensionAnalyzer:
         bs_threshold = self._broken_stick_threshold(eigenvalues, D)
 
         local_dims = None
-        if N < 5000 and N > self.k_local + 1:
+        if N < CONSTANTS.dimension_local_max_samples and N > self.k_local + 1:
             local_dims = self._local_dimensions(data, self.k_local)
 
-        intrinsic_dim = max(1, bs_threshold)
+        intrinsic_dim = max(CONSTANTS.dimension_min_intrinsic_dim, bs_threshold)
 
         return DimensionResult(
             intrinsic_dim=intrinsic_dim,
@@ -102,7 +107,12 @@ class EffectiveDimensionAnalyzer:
         Returns:
             ``[N, target_dim]`` projected tensor.
         """
-        data = data.to(device=self.device, dtype=self.dtype)
+        data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
+        if data.ndim != 2:
+            raise ValueError(f"data must have shape [N, D], got {tuple(data.shape)}")
+        if target_dim <= 0:
+            raise ValueError(f"target_dim must be positive, got {target_dim}")
+        target_dim = min(int(target_dim), data.shape[1])
         mean = data.mean(dim=0, keepdim=True)
         centered = data - mean
         # Economy SVD
@@ -162,6 +172,8 @@ class EffectiveDimensionAnalyzer:
         all_nbrs = data[knn_idx]  # [N, k, D]
         centered = all_nbrs - all_nbrs.mean(dim=1, keepdim=True)
         k_count = centered.shape[1]
+        if k_count < 2:
+            return data.new_zeros(data.shape[0])
         cov = torch.bmm(centered.transpose(1, 2), centered) / max(k_count - 1, 1)
         eigvals = torch.linalg.eigvalsh(cov).flip(-1).clamp(min=0.0)  # [N, D] desc
 
@@ -191,14 +203,15 @@ class DimensionLifter:
     indicates that the extra dimension captures hidden geometric structure.
     """
 
-    def __init__(self, device: str = "cpu"):
+    def __init__(self, device: str = "cpu", dtype: torch.dtype = CONSTANTS.default_dtype):
         self.device = device
+        self.dtype = analysis_dtype(dtype)
 
     def lift(
         self,
         data: torch.Tensor,
         target_algebra: AlgebraLike,
-        fill: float = 1.0,
+        fill: float = CONSTANTS.dimension_lift_positive_fill,
     ) -> torch.Tensor:
         """Lifts data into the grade-1 subspace of a higher-dimensional algebra.
 
@@ -217,18 +230,19 @@ class DimensionLifter:
         """
         N, d = data.shape
         n = target_algebra.n
+        dtype = getattr(target_algebra, "dtype", self.dtype)
         if n < d:
             raise ValueError(f"Target algebra dim {n} < source data dim {d}.")
         if n == d:
-            return target_algebra.embed_vector(data.to(self.device))
+            return target_algebra.embed_vector(as_analysis_tensor(data, device=self.device, dtype=dtype))
 
         pad = torch.full(
             (N, n - d),
             fill,
             device=self.device,
-            dtype=data.dtype,
+            dtype=dtype,
         )
-        lifted = torch.cat([data.to(self.device), pad], dim=-1)
+        lifted = torch.cat([as_analysis_tensor(data, device=self.device, dtype=dtype), pad], dim=-1)
         return target_algebra.embed_vector(lifted)
 
     def test(
@@ -236,7 +250,7 @@ class DimensionLifter:
         data: torch.Tensor,
         p: int,
         q: int,
-        k: int = 8,
+        k: int = CONSTANTS.default_k_neighbors,
     ) -> Dict:
         """Compares geodesic flow coherence before and after dimension lifting.
 
@@ -258,7 +272,7 @@ class DimensionLifter:
         """
         from .geodesic import GeodesicFlow
 
-        data = data.to(self.device)
+        data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
         results: Dict = {}
 
         def _measure(alg: AlgebraLike, mv: torch.Tensor) -> Dict:
@@ -274,16 +288,16 @@ class DimensionLifter:
                 "causal": (coh > coh_threshold) and (curv < CONSTANTS.curvature_causal_threshold),
             }
 
-        alg_orig = make_algebra(p, q, device=self.device)
+        alg_orig = make_algebra(p, q, device=self.device, dtype=self.dtype)
         mv_orig = alg_orig.embed_vector(data[..., : alg_orig.n])
         results["original"] = _measure(alg_orig, mv_orig)
 
-        alg_pos = make_algebra(p + 1, q, device=self.device)
-        mv_pos = self.lift(data, alg_pos, fill=1.0)
+        alg_pos = make_algebra(p + 1, q, device=self.device, dtype=self.dtype)
+        mv_pos = self.lift(data, alg_pos, fill=CONSTANTS.dimension_lift_positive_fill)
         results["lift_positive"] = _measure(alg_pos, mv_pos)
 
-        alg_null = make_algebra(p, q + 1, device=self.device)
-        mv_null = self.lift(data, alg_null, fill=0.0)
+        alg_null = make_algebra(p, q + 1, device=self.device, dtype=self.dtype)
+        mv_null = self.lift(data, alg_null, fill=CONSTANTS.dimension_lift_null_fill)
         results["lift_null"] = _measure(alg_null, mv_null)
 
         best = max(

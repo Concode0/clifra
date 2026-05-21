@@ -16,7 +16,7 @@ from .action import (
 from .flow import GradeFlow
 from .layouts import ProductRequest, build_product_request
 from .planner import GradePlanner
-from .policy import DEFAULT_PLANNING_LIMITS, PlanCost, PlanningLimits
+from .policy import DEFAULT_PLANNING_LIMITS, DENSE_AUTO_MAX_N, DENSE_EXPLICIT_MAX_N, PlanCost, PlanningLimits
 from .product import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
 from .tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .unary import GradeUnaryExecutor, GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
@@ -31,6 +31,8 @@ __all__ = [
     "PlanningLimits",
     "PlanCost",
     "DEFAULT_PLANNING_LIMITS",
+    "DENSE_AUTO_MAX_N",
+    "DENSE_EXPLICIT_MAX_N",
     "apply_graded_linear_action",
     "apply_multi_graded_linear_action",
     "bivector_vector_generator",

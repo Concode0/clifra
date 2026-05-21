@@ -25,6 +25,7 @@ from clifra.core.config import make_algebra
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 
 from ._types import CONSTANTS, DimensionResult, SamplingConfig, SignatureResult
+from ._utils import analysis_dtype, as_analysis_tensor, require_dense_algebra
 from .geodesic import GeodesicFlow
 
 
@@ -57,13 +58,10 @@ class _ProbeRotor(CliffordModule):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.normal_(self.bivector_weights, std=0.01)
+        nn.init.normal_(self.bivector_weights, std=CONSTANTS.metric_search_rotor_init_std)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if not hasattr(self.algebra, "exp") or not hasattr(self.algebra, "per_channel_sandwich"):
-            raise ValueError(
-                "Signature probes require dense rotor execution; reduce dimensions or request dense kernel."
-            )
+        require_dense_algebra(self.algebra, "Signature probes")
         bivectors = x.new_zeros(self.channels, self.algebra.dim)
         indices = self.bivector_indices.unsqueeze(0).expand(self.channels, -1)
         bivectors.scatter_(1, indices, self.bivector_weights.to(dtype=x.dtype))
@@ -93,7 +91,7 @@ class _SignatureProbe(nn.Module):
     is the primary signal for signature discovery.
     """
 
-    def __init__(self, algebra: AlgebraLike, channels: int = 4):
+    def __init__(self, algebra: AlgebraLike, channels: int = CONSTANTS.metric_search_probe_channels):
         super().__init__()
         self.algebra = algebra
         self.linear_in = _ProbeLinear(algebra, 1, channels)
@@ -130,21 +128,33 @@ def _apply_biased_init(
     for rotor in probe.get_rotor_layers():
         with torch.no_grad():
             if bias_type == "euclidean":
-                weights = torch.where(bv_sq < ell, torch.ones_like(bv_sq), torch.full_like(bv_sq, 0.1))
+                weights = torch.where(
+                    bv_sq < ell,
+                    torch.ones_like(bv_sq),
+                    torch.full_like(bv_sq, CONSTANTS.metric_search_bias_minor_weight),
+                )
                 rotor.bivector_weights.copy_(
                     weights.unsqueeze(0).expand_as(rotor.bivector_weights)
-                    + torch.randn_like(rotor.bivector_weights) * 0.05
+                    + torch.randn_like(rotor.bivector_weights) * CONSTANTS.metric_search_bias_noise_std
                 )
             elif bias_type == "minkowski":
-                weights = torch.where(bv_sq.abs() > hyp, torch.ones_like(bv_sq), torch.full_like(bv_sq, 0.1))
+                weights = torch.where(
+                    bv_sq.abs() > hyp,
+                    torch.ones_like(bv_sq),
+                    torch.full_like(bv_sq, CONSTANTS.metric_search_bias_minor_weight),
+                )
                 rotor.bivector_weights.copy_(
                     weights.unsqueeze(0).expand_as(rotor.bivector_weights)
-                    + torch.randn_like(rotor.bivector_weights) * 0.05
+                    + torch.randn_like(rotor.bivector_weights) * CONSTANTS.metric_search_bias_noise_std
                 )
             elif bias_type == "projective":
-                nn.init.uniform_(rotor.bivector_weights, -0.5, 0.5)
+                nn.init.uniform_(
+                    rotor.bivector_weights,
+                    -CONSTANTS.metric_search_projective_init_bound,
+                    CONSTANTS.metric_search_projective_init_bound,
+                )
             else:  # 'random'
-                nn.init.normal_(rotor.bivector_weights, 0.0, 0.3)
+                nn.init.normal_(rotor.bivector_weights, 0.0, CONSTANTS.metric_search_random_init_std)
 
 
 class MetricSearch:
@@ -161,19 +171,21 @@ class MetricSearch:
     def __init__(
         self,
         device: str = "cpu",
-        num_probes: int = 6,
-        probe_epochs: int = 80,
-        probe_lr: float = 0.005,
-        probe_channels: int = 4,
-        k: int = 8,
-        energy_threshold: float = 0.05,
-        curvature_weight: float = 0.3,
-        sparsity_weight: float = 0.01,
+        num_probes: int = CONSTANTS.metric_search_num_probes,
+        probe_epochs: int = CONSTANTS.metric_search_probe_epochs,
+        probe_lr: float = CONSTANTS.metric_search_probe_lr,
+        probe_channels: int = CONSTANTS.metric_search_probe_channels,
+        k: int = CONSTANTS.default_k_neighbors,
+        energy_threshold: float = CONSTANTS.default_energy_threshold,
+        curvature_weight: float = CONSTANTS.metric_search_curvature_weight,
+        sparsity_weight: float = CONSTANTS.metric_search_sparsity_weight,
         max_workers: Optional[int] = None,
         micro_batch_size: Optional[int] = None,
         early_stop_patience: int = 0,
+        dtype: torch.dtype = CONSTANTS.default_dtype,
     ):
         self.device = device
+        self.dtype = analysis_dtype(dtype)
         self.num_probes = num_probes
         self.probe_epochs = probe_epochs
         self.probe_lr = probe_lr
@@ -188,22 +200,27 @@ class MetricSearch:
 
     def _lift_data(self, data: torch.Tensor) -> Tuple[torch.Tensor, AlgebraLike]:
         """Lifts [N, X] data into Cl(X+1, 1, 0) via CGA-style embedding."""
-        data = data.to(self.device)
+        data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
         N, X = data.shape
 
-        if X + 2 > 12:
+        max_input_dim = CONSTANTS.metric_search_dense_max_n - CONSTANTS.metric_search_cga_extra_dims
+        if X + CONSTANTS.metric_search_cga_extra_dims > CONSTANTS.metric_search_dense_max_n:
             warnings.warn(
-                f"Data dimension {X} yields algebra dim 2^{X + 2}={2 ** (X + 2)}. "
+                f"Data dimension {X} yields algebra dim 2^{X + CONSTANTS.metric_search_cga_extra_dims}="
+                f"{2 ** (X + CONSTANTS.metric_search_cga_extra_dims)}. "
                 "MetricSearch probes require dense rotor execution; use SignatureSearchAnalyzer PCA "
-                "pre-reduction to X <= 10."
+                f"pre-reduction to X <= {max_input_dim}."
             )
-            raise ValueError("MetricSearch requires X <= 10 so the conformal probe algebra stays within Cl12.")
+            raise ValueError(
+                f"MetricSearch requires X <= {max_input_dim} so the conformal probe algebra stays within "
+                f"Cl{CONSTANTS.metric_search_dense_max_n}."
+            )
 
         norm_sq = 0.5 * (data**2).sum(dim=-1, keepdim=True)
         ones = torch.ones(N, 1, device=self.device, dtype=data.dtype)
         lifted = torch.cat([data, norm_sq, ones], dim=-1)
 
-        algebra = make_algebra(X + 1, 1, 0, kernel="dense", device=self.device)
+        algebra = make_algebra(X + 1, 1, 0, kernel="dense", device=self.device, dtype=data.dtype)
         mv = algebra.embed_vector(lifted)
         mv = mv.unsqueeze(1)
         return mv, algebra
@@ -413,7 +430,7 @@ class MetricSearch:
         if self.num_probes <= 2:
             probe_results = [_run_probe(bt) for bt in bias_types]
         else:
-            max_w = self.max_workers or min(self.num_probes, 4)
+            max_w = self.max_workers or min(self.num_probes, CONSTANTS.metric_search_parallel_worker_cap)
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as pool:
                 futures = [pool.submit(_run_probe, bt) for bt in bias_types]
                 probe_results = [f.result() for f in futures]
@@ -461,11 +478,13 @@ class SignatureSearchAnalyzer:
     def __init__(
         self,
         device: str = "cpu",
-        max_search_dim: int = 10,
+        max_search_dim: int = CONSTANTS.signature_search_max_dim,
         metric_search_kwargs: Optional[Dict] = None,
+        dtype: torch.dtype = CONSTANTS.default_dtype,
     ):
         self.device = device
         self.max_search_dim = max_search_dim
+        self.dtype = analysis_dtype(dtype)
         self._ms_kwargs = metric_search_kwargs or {}
 
     def analyze(
@@ -486,7 +505,7 @@ class SignatureSearchAnalyzer:
         """
         from .dimension import EffectiveDimensionAnalyzer
 
-        data = data.to(self.device).float()
+        data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
         effective_dim_used = None
 
         target_dim = data.shape[1]
@@ -497,11 +516,12 @@ class SignatureSearchAnalyzer:
             target_dim = self.max_search_dim
 
         if target_dim < data.shape[1]:
-            reducer = EffectiveDimensionAnalyzer(device=self.device)
+            reducer = EffectiveDimensionAnalyzer(device=self.device, dtype=data.dtype)
             data = reducer.reduce(data, target_dim)
             effective_dim_used = target_dim
 
-        ms = MetricSearch(device=self.device, **self._ms_kwargs)
+        ms_kwargs = {"dtype": data.dtype, **self._ms_kwargs}
+        ms = MetricSearch(device=self.device, **ms_kwargs)
         result = ms.search_detailed(data)
 
         return SignatureResult(
@@ -515,7 +535,7 @@ class SignatureSearchAnalyzer:
     def analyze_with_confidence(
         self,
         data: torch.Tensor,
-        n_bootstrap: int = 10,
+        n_bootstrap: int = CONSTANTS.signature_bootstrap_resamples,
         dim_result: Optional[DimensionResult] = None,
     ) -> Tuple[SignatureResult, Dict]:
         """Signature search with bootstrap confidence estimate.
@@ -531,7 +551,7 @@ class SignatureSearchAnalyzer:
 
         cfg = SamplingConfig(
             strategy="bootstrap",
-            max_samples=min(data.shape[0], 500),
+            max_samples=min(data.shape[0], CONSTANTS.signature_bootstrap_max_samples),
             n_bootstrap=n_bootstrap,
         )
         resamples, _ = StatisticalSampler.sample(data, cfg)

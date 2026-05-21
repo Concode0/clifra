@@ -16,7 +16,7 @@ import torch
 
 from clifra.core.foundation.device import resolve_device, resolve_dtype
 from clifra.core.foundation.module import AlgebraLike
-from clifra.core.planning.policy import PlanningLimits
+from clifra.core.planning.policy import DENSE_AUTO_MAX_N, PlanningLimits
 from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.runtime.context import AlgebraContext
 
@@ -31,7 +31,7 @@ class AlgebraConfig:
     q: int = 0
     r: int = 0
     kernel: AlgebraKernel = "auto"
-    dense_threshold: int = 8
+    dense_threshold: int = DENSE_AUTO_MAX_N
     device: str = "cuda"
     dtype: torch.dtype = torch.float32
     exp_policy: str = "balanced"
@@ -48,7 +48,7 @@ class AlgebraConfig:
             "q": int(_mapping_get(config, "q", 0)),
             "r": int(_mapping_get(config, "r", 0)),
             "kernel": _mapping_get(config, "kernel", "auto"),
-            "dense_threshold": int(_mapping_get(config, "dense_threshold", 8)),
+            "dense_threshold": int(_mapping_get(config, "dense_threshold", DENSE_AUTO_MAX_N)),
             "device": _mapping_get(config, "device", "cuda"),
             "dtype": resolve_dtype(_mapping_get(config, "dtype", torch.float32)),
             "exp_policy": _mapping_get(config, "exp_policy", "balanced"),
@@ -67,7 +67,7 @@ def make_algebra(
     r: int = 0,
     *,
     kernel: AlgebraKernel = "auto",
-    dense_threshold: int = 8,
+    dense_threshold: int = DENSE_AUTO_MAX_N,
     device="cuda",
     dtype: torch.dtype = torch.float32,
     exp_policy: str = "balanced",

@@ -16,7 +16,8 @@ import torch
 from clifra.core.config import make_algebra
 from clifra.core.foundation.module import AlgebraLike
 
-from ._types import AnalysisConfig, AnalysisReport, SamplingConfig
+from ._types import CONSTANTS, AnalysisConfig, AnalysisReport
+from ._utils import as_analysis_tensor
 from .commutator import CommutatorAnalyzer
 from .dimension import EffectiveDimensionAnalyzer
 from .sampler import StatisticalSampler
@@ -67,7 +68,7 @@ class GeometricAnalyzer:
         report = AnalysisReport()
         t0 = time.time()
 
-        data = data.to(cfg.device)
+        data = as_analysis_tensor(data, device=cfg.device, dtype=cfg.dtype)
         report.metadata["data_shape"] = list(data.shape)
         report.metadata["config_device"] = cfg.device
 
@@ -102,6 +103,7 @@ class GeometricAnalyzer:
         if cfg.run_dimension:
             da = EffectiveDimensionAnalyzer(
                 device=cfg.device,
+                dtype=cfg.dtype,
                 energy_threshold=cfg.energy_threshold,
             )
             dim_result = da.analyze(sampled)
@@ -110,7 +112,7 @@ class GeometricAnalyzer:
         # 3. Signature search
         sig_result = None
         if cfg.run_signature:
-            ssa = SignatureSearchAnalyzer(device=cfg.device)
+            ssa = SignatureSearchAnalyzer(device=cfg.device, dtype=cfg.dtype)
             sig_result = ssa.analyze(sampled, dim_result=dim_result)
             report.signature = sig_result
 
@@ -120,12 +122,14 @@ class GeometricAnalyzer:
         elif dim_result is not None:
             p, q, r = dim_result.intrinsic_dim, 0, 0
         else:
-            p, q, r = min(sampled.shape[1], 6), 0, 0
+            p, q, r = min(sampled.shape[1], CONSTANTS.pipeline_fallback_dim_cap), 0, 0
         # Ensure n >= 2 so grade-2 (bivectors) exist for GA analyses
-        if p + q + r < 2:
-            p = max(p, 2 - q - r)
+        if p + q + r < CONSTANTS.pipeline_min_ga_n:
+            p = max(p, CONSTANTS.pipeline_min_ga_n - q - r)
 
-        algebra = make_algebra(p, q, r, device=cfg.device)
+        n = p + q + r
+        kernel = "dense" if n <= CONSTANTS.dense_analysis_max_n else "context"
+        algebra = make_algebra(p, q, r, kernel=kernel, device=cfg.device, dtype=cfg.dtype, default_grades=(1,))
         mv_data = self._embed_raw(sampled, algebra)
 
         # 5. GA analyses (parallel)
@@ -155,7 +159,7 @@ class GeometricAnalyzer:
                 setattr(report, name, fn())
         else:
             # Parallel
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=CONSTANTS.pipeline_parallel_workers) as pool:
                 futures = {name: pool.submit(fn) for name, fn in tasks.items()}
                 for name, fut in futures.items():
                     setattr(report, name, fut.result())
@@ -183,5 +187,5 @@ class GeometricAnalyzer:
         elif D < n:
             pad = torch.zeros(data.shape[0], n - D, device=data.device, dtype=data.dtype)
             data = torch.cat([data, pad], dim=-1)
-        mv = algebra.embed_vector(data.float())  # [N, dim]
+        mv = algebra.embed_vector(data.to(device=algebra.device, dtype=algebra.dtype))  # [N, dim]
         return mv.unsqueeze(1)  # [N, 1, dim]

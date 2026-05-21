@@ -16,7 +16,7 @@ from typing import Dict, List, Tuple, Union
 
 import torch
 
-from ._types import SamplingConfig
+from ._types import CONSTANTS, SamplingConfig
 
 
 class StatisticalSampler:
@@ -65,16 +65,23 @@ class StatisticalSampler:
     def recommend_size(n_features: int, n_total: int) -> int:
         """Heuristic recommendation for adequate sample size.
 
-        Returns ``min(n_total, max(500, 20 * n_features))``.
+        Returns ``min(n_total, max(CONSTANTS.sampling_recommended_min_samples,
+        CONSTANTS.sampling_recommended_feature_multiplier * n_features))``.
         """
-        return min(n_total, max(500, 20 * n_features))
+        return min(
+            n_total,
+            max(
+                CONSTANTS.sampling_recommended_min_samples,
+                CONSTANTS.sampling_recommended_feature_multiplier * n_features,
+            ),
+        )
 
     @staticmethod
     def _random(data: torch.Tensor, config: SamplingConfig) -> Tuple[torch.Tensor, Dict]:
         N = data.shape[0]
         k = min(N, config.max_samples)
         gen = torch.Generator(device="cpu").manual_seed(config.seed)
-        indices = torch.randperm(N, generator=gen)[:k]
+        indices = torch.randperm(N, generator=gen)[:k].to(data.device)
         return data[indices], {
             "strategy": "random",
             "indices": indices,
@@ -97,26 +104,30 @@ class StatisticalSampler:
 
         N, D = data.shape
         k = min(N, config.max_samples)
-        n_strata = config.n_strata or max(2, min(k // 20, 10))
+        n_strata = config.n_strata or max(
+            CONSTANTS.stratified_min_strata,
+            min(k // CONSTANTS.stratified_points_per_stratum, CONSTANTS.stratified_max_strata),
+        )
         gen = torch.Generator(device="cpu").manual_seed(config.seed)
 
         # Cap algebra dimension for tractability
-        alg_dim = min(D, 6)
-        algebra = make_algebra(alg_dim, 0, device=data.device)
+        alg_dim = min(D, CONSTANTS.stratified_algebra_max_dim)
+        dtype = data.dtype if data.dtype.is_floating_point else CONSTANTS.default_dtype
+        algebra = make_algebra(alg_dim, 0, device=data.device, dtype=dtype)
 
         # Embed into algebra (truncate to alg_dim if needed)
-        raw = data[:, :alg_dim].float()
+        raw = data[:, :alg_dim].to(dtype=dtype)
         mv = algebra.embed_vector(raw)  # [N, 2^alg_dim]
 
         # Compute per-point coherence as the stratification metric
-        gf_k = min(8, N - 1)
+        gf_k = min(CONSTANTS.default_k_neighbors, N - 1)
         gf = GeodesicFlow(algebra, k=gf_k)
         with torch.no_grad():
             scores = gf.per_point_coherence(mv)  # [N]
 
         # Assign to quantile strata
-        quantiles = torch.linspace(0, 1, n_strata + 1, device=data.device)
-        thresholds = torch.quantile(scores.float(), quantiles)
+        quantiles = torch.linspace(0, 1, n_strata + 1, device=data.device, dtype=scores.dtype)
+        thresholds = torch.quantile(scores, quantiles)
 
         labels = torch.bucketize(scores, thresholds[1:-1]).clamp(max=n_strata - 1)
 
@@ -128,10 +139,10 @@ class StatisticalSampler:
                 continue
             n_from = max(1, int(round(k * len(mask) / N)))
             n_from = min(n_from, len(mask))
-            perm = torch.randperm(len(mask), generator=gen)[:n_from]
+            perm = torch.randperm(len(mask), generator=gen)[:n_from].to(mask.device)
             all_indices.append(mask[perm])
 
-        indices = torch.cat(all_indices)
+        indices = torch.cat(all_indices) if all_indices else torch.empty(0, dtype=torch.long, device=data.device)
         if len(indices) > k:
             indices = indices[:k]
 
@@ -151,7 +162,7 @@ class StatisticalSampler:
 
         resamples: List[torch.Tensor] = []
         for _ in range(config.n_bootstrap):
-            indices = torch.randint(0, N, (k,), generator=gen)
+            indices = torch.randint(0, N, (k,), generator=gen).to(data.device)
             resamples.append(data[indices])
 
         return resamples, {

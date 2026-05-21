@@ -17,8 +17,10 @@ from typing import Dict
 import torch
 
 from clifra.core.foundation.module import AlgebraLike
+from clifra.core.foundation.numerics import eps_like
 
 from ._types import CONSTANTS
+from ._utils import require_dense_algebra
 
 
 class GeodesicFlow:
@@ -44,7 +46,7 @@ class GeodesicFlow:
       collides with itself.  The signal is dominated by noise.
     """
 
-    def __init__(self, algebra: AlgebraLike, k: int = 8):
+    def __init__(self, algebra: AlgebraLike, k: int = CONSTANTS.default_k_neighbors):
         """Initialize Geodesic Flow.
 
         Args:
@@ -52,7 +54,7 @@ class GeodesicFlow:
             k (int): Number of nearest neighbours for the flow field.
         """
         self.algebra = algebra
-        self.k = k
+        self.k = int(k)
 
     def _embed(self, data: torch.Tensor) -> torch.Tensor:
         """Embeds raw vectors into the grade-1 multivector subspace.
@@ -86,12 +88,14 @@ class GeodesicFlow:
         """
         N = mv.shape[0]
         k = min(self.k, N - 1)
+        if k <= 0:
+            return torch.empty(N, 0, dtype=torch.long, device=mv.device)
         dists = torch.cdist(mv, mv)  # [N, N]
         dists.fill_diagonal_(float("inf"))
         _, idx = dists.topk(k, dim=-1, largest=False)
         return idx  # [N, k]
 
-    def _connection_bivectors(self, mv: torch.Tensor) -> torch.Tensor:
+    def _connection_bivectors(self, mv: torch.Tensor, *, compact_output: bool = False) -> torch.Tensor:
         """Computes unit connection bivectors for all (point, neighbour) pairs.
 
         The connection bivector from x_i to x_j encodes the rotational "turn"
@@ -107,11 +111,18 @@ class GeodesicFlow:
         """
         N, D = mv.shape
         k = min(self.k, N - 1)
+        if self.algebra.n < 2:
+            width = 0 if compact_output else D
+            return mv.new_zeros(N, 0, width)
+        layout = self.algebra.layout((2,))
+        if k <= 0 or layout.dim == 0:
+            width = layout.dim if compact_output else D
+            return mv.new_zeros(N, 0, width)
         nn_idx = self._knn(mv)
 
         neighbors = mv[nn_idx]  # [N, k, dim]
         xi = mv.unsqueeze(1).expand(N, k, D).reshape(N * k, D)
-        xj_rev = self.algebra.reverse(neighbors.reshape(N * k, D), input_grades=(1,))
+        xj_rev = neighbors.reshape(N * k, D)
 
         # For grade-1 inputs, <xi * ~xj>_2 = wedge(xi, xj_rev) -- single pass
         bv_raw = self.algebra.wedge(
@@ -120,9 +131,13 @@ class GeodesicFlow:
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(2,),
+            compact_output=True,
         )  # [N*k, dim]
-        bv_norm = bv_raw.norm(dim=-1, keepdim=True).clamp(min=self.algebra.eps)
-        return (bv_raw / bv_norm).reshape(N, k, D)  # [N, k, dim]
+        bv_norm = bv_raw.norm(dim=-1, keepdim=True).clamp_min(eps_like(bv_raw))
+        compact = (bv_raw / bv_norm).reshape(N, k, layout.dim)
+        if compact_output:
+            return compact
+        return layout.dense(compact)  # [N, k, dim]
 
     def flow_bivectors(self, mv: torch.Tensor) -> torch.Tensor:
         """Computes the mean flow bivector at each data point.
@@ -145,6 +160,8 @@ class GeodesicFlow:
             torch.Tensor: ``[N, dim]`` mean flow bivectors.
         """
         bv = self._connection_bivectors(mv)  # [N, k, dim]
+        if bv.shape[1] == 0:
+            return mv.new_zeros(mv.shape[0], mv.shape[-1])
         return bv.mean(dim=1)  # [N, dim]
 
     def _coherence_tensor(self, mv: torch.Tensor) -> torch.Tensor:
@@ -156,8 +173,10 @@ class GeodesicFlow:
         Returns:
             torch.Tensor: Scalar coherence in [0, 1].
         """
-        bv = self._connection_bivectors(mv)  # [N, k, dim]
+        bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
+        if k < 2 or D == 0:
+            return mv.new_zeros(())
 
         bi = bv.unsqueeze(2)  # [N, k, 1, dim]
         bj = bv.unsqueeze(1)  # [N, 1, k, dim]
@@ -165,7 +184,7 @@ class GeodesicFlow:
 
         mask = ~torch.eye(k, dtype=torch.bool, device=mv.device)  # [k, k]
         off_diag = abs_cos[:, mask]  # [N, k*(k-1)]
-        return off_diag.mean()
+        return off_diag.mean() if off_diag.numel() > 0 else mv.new_zeros(())
 
     def coherence(self, mv: torch.Tensor) -> float:
         """Measures concentration of connection bivectors within each neighbourhood.
@@ -200,8 +219,10 @@ class GeodesicFlow:
         Returns:
             torch.Tensor: Scalar curvature in [0, 1].
         """
-        bv = self._connection_bivectors(mv)  # [N, k, dim]
+        bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
+        if k == 0 or D == 0:
+            return mv.new_zeros(())
         nn_idx = self._knn(mv)  # [N, k_nn]
 
         bi = bv.unsqueeze(2)  # [N, k, 1, dim]
@@ -213,7 +234,7 @@ class GeodesicFlow:
         cross_cos = (bi * bj).sum(dim=-1).abs()  # [N, k, k]
         alignment = cross_cos.mean(dim=(-1, -2))  # [N]
 
-        return 1.0 - alignment.mean()
+        return (1.0 - alignment.mean()).clamp_min(0.0)
 
     def curvature(self, mv: torch.Tensor) -> float:
         """Measures how much connection structure changes across the manifold.
@@ -244,7 +265,7 @@ class GeodesicFlow:
         self,
         a: torch.Tensor,
         b: torch.Tensor,
-        steps: int = 10,
+        steps: int = CONSTANTS.geodesic_interpolation_steps,
     ) -> torch.Tensor:
         """Interpolates along the geodesic from ``a`` to ``b``.
 
@@ -264,13 +285,14 @@ class GeodesicFlow:
         Returns:
             torch.Tensor: ``[steps, dim]`` sequence of multivectors.
         """
+        require_dense_algebra(self.algebra, "GeodesicFlow.interpolate")
+        if steps <= 0:
+            raise ValueError(f"steps must be positive, got {steps}")
+
         a = a.unsqueeze(0)  # [1, dim]
         b = b.unsqueeze(0)  # [1, dim]
 
-        # a_inv = ~a / <a . ~a>_0
-        a_rev = self.algebra.reverse(a)
-        a_sq = (a * a_rev)[..., 0:1].clamp(min=self.algebra.eps)  # grade-0 scalar
-        a_inv = a_rev / a_sq  # [1, dim]
+        a_inv = self.algebra.blade_inverse(a)  # [1, dim]
 
         # Transition element T = a_inv . b
         T = self.algebra.geometric_product(a_inv, b)  # [1, dim]
@@ -351,8 +373,10 @@ class GeodesicFlow:
         Returns:
             torch.Tensor: ``[N]`` coherence scores in [0, 1].
         """
-        bv = self._connection_bivectors(mv)  # [N, k, dim]
+        bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
+        if k < 2 or D == 0:
+            return mv.new_zeros(N)
 
         bi = bv.unsqueeze(2)  # [N, k, 1, dim]
         bj = bv.unsqueeze(1)  # [N, 1, k, dim]
@@ -361,4 +385,4 @@ class GeodesicFlow:
         mask = ~torch.eye(k, dtype=torch.bool, device=mv.device)  # [k, k]
         # Mean over off-diagonal pairs per point
         off_diag = abs_cos[:, mask].reshape(N, -1)  # [N, k*(k-1)]
-        return off_diag.mean(dim=1)  # [N]
+        return off_diag.mean(dim=1) if off_diag.shape[-1] > 0 else mv.new_zeros(N)  # [N]

@@ -16,8 +16,10 @@ from typing import Optional
 from clifra.core.foundation.basis import basis_count_for_grades, expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 
-FULL_LAYOUT_WARN_N = 8
-FULL_LAYOUT_MAX_N = 12
+DENSE_AUTO_MAX_N = 8
+DENSE_EXPLICIT_MAX_N = 12
+FULL_LAYOUT_WARN_N = DENSE_AUTO_MAX_N
+FULL_LAYOUT_MAX_N = DENSE_EXPLICIT_MAX_N
 
 
 @dataclass(frozen=True)
