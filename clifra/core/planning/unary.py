@@ -17,7 +17,7 @@ import torch.nn as nn
 
 from clifra.core.foundation.basis import normalize_grades, reverse_sign
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.planning.layouts import check_layout_spec, is_compact_tensor, resolve_operand_layout
+from clifra.core.storage import TensorStorage, check_layout_spec, resolve_tensor_storage
 
 GradeUnaryOp = Literal["identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"]
 _VALID_UNARY_OPS = {"identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"}
@@ -29,11 +29,22 @@ class UnaryRequest:
 
     spec: AlgebraSpec
     op: GradeUnaryOp
-    input_layout: GradeLayout
-    output_layout: GradeLayout
-    input_compact: bool
+    input_storage: TensorStorage
+    output_storage: TensorStorage
     dtype: torch.dtype
     device: torch.device
+
+    @property
+    def input_layout(self) -> GradeLayout:
+        return self.input_storage.layout
+
+    @property
+    def output_layout(self) -> GradeLayout:
+        return self.output_storage.layout
+
+    @property
+    def input_compact(self) -> bool:
+        return self.input_storage.is_compact
 
     @property
     def input_grades(self) -> tuple[int, ...]:
@@ -143,7 +154,7 @@ def build_unary_request(
             input_layout = output_layout
         elif output_grades is not None:
             input_grades = output_grades
-    input_layout = resolve_operand_layout(
+    input_storage = resolve_tensor_storage(
         spec,
         values,
         grades=input_grades,
@@ -155,17 +166,16 @@ def build_unary_request(
     output_layout = resolve_unary_output_layout(
         spec,
         op=op,
-        input_layout=input_layout,
+        input_layout=input_storage.layout,
         output_grades=output_grades,
         output_layout=output_layout,
     )
-    input_compact = input_compact or is_compact_tensor(spec, values, input_layout)
+    output_storage = TensorStorage.compact(spec, output_layout)
     return UnaryRequest(
         spec=spec,
         op=op,
-        input_layout=input_layout,
-        output_layout=output_layout,
-        input_compact=input_compact,
+        input_storage=input_storage,
+        output_storage=output_storage,
         dtype=values.dtype,
         device=values.device,
     )

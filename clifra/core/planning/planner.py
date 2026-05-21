@@ -32,6 +32,7 @@ from clifra.core.planning.unary import (
     build_unary_request,
     normalize_unary_op,
 )
+from clifra.core.storage import TensorStorage
 
 
 class GradePlanner:
@@ -122,11 +123,9 @@ class GradePlanner:
         request = ProductRequest(
             spec=self.spec,
             op=normalize_product_op(op),
-            left_layout=self.layout(left_grades),
-            right_layout=self.layout(right_grades),
-            output_layout=self.layout(output_grades),
-            left_compact=False,
-            right_compact=False,
+            left_storage=TensorStorage.dense(self.spec, self.layout(left_grades)),
+            right_storage=TensorStorage.dense(self.spec, self.layout(right_grades)),
+            output_storage=TensorStorage.compact(self.spec, self.layout(output_grades)),
             dtype=dtype,
             device=torch.device(device),
         )
@@ -252,9 +251,8 @@ class GradePlanner:
         request = UnaryRequest(
             spec=self.spec,
             op=op,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            input_compact=False,
+            input_storage=TensorStorage.dense(self.spec, input_layout),
+            output_storage=TensorStorage.compact(self.spec, output_layout),
             dtype=dtype,
             device=torch.device(device),
         )

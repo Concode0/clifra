@@ -69,6 +69,19 @@ from .runtime.metric import (
     signature_trace_form,
 )
 from .runtime.multivector import Multivector
+from .storage import (
+    DispatchDecision,
+    DispatchPath,
+    LayerStorage,
+    StorageMode,
+    TensorStorage,
+    resolve_layer_layout,
+    resolve_layer_storage,
+    resolve_operand_layout,
+    resolve_planned_dispatch,
+    resolve_tensor_storage,
+    storage_for_values,
+)
 
 __all__ = [
     # algebra
@@ -81,6 +94,11 @@ __all__ = [
     "AlgebraSpec",
     "GradeLayout",
     "GradePlanner",
+    "StorageMode",
+    "DispatchPath",
+    "TensorStorage",
+    "LayerStorage",
+    "DispatchDecision",
     "PlanningLimits",
     "PlanCost",
     "DEFAULT_PLANNING_LIMITS",
@@ -94,6 +112,12 @@ __all__ = [
     "resolve_dtype",
     "check_multivector",
     "check_channels",
+    "resolve_tensor_storage",
+    "resolve_operand_layout",
+    "resolve_planned_dispatch",
+    "storage_for_values",
+    "resolve_layer_layout",
+    "resolve_layer_storage",
     # metric
     "inner_product",
     "induced_norm",

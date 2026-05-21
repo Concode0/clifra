@@ -12,7 +12,7 @@ from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPHERE, tag_manifold
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.layers import resolve_layer_storage
+from clifra.core.storage import resolve_layer_storage
 
 from ._utils import (
     grade_indices,

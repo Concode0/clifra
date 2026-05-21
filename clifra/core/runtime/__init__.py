@@ -7,6 +7,7 @@
 
 """Runtime algebra hosts and dense reference operations."""
 
+from ..storage import LayerStorage, resolve_layer_layout, resolve_layer_storage
 from .accessors import as_multivector, compact_values, grade_indices, hermitian_signs, materialize_dense, resolve_layout
 from .actions import (
     apply_multi_versor_action,
@@ -19,7 +20,6 @@ from .actions import (
 )
 from .algebra import CliffordAlgebra
 from .context import AlgebraContext
-from .layers import LayerStorage, resolve_layer_layout, resolve_layer_storage
 from .multivector import Multivector
 from .projected import AlgebraRuntimeMixin
 

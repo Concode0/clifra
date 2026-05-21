@@ -23,6 +23,7 @@ from clifra.core.runtime.accessors import materialize_dense
 from clifra.core.runtime.accessors import resolve_layout as _resolve_layout
 from clifra.core.runtime.actions import apply_multi_versor_action, apply_versor_action
 from clifra.core.runtime.actions import grade_norms as _grade_norms
+from clifra.core.storage import resolve_planned_dispatch
 
 
 class AlgebraRuntimeMixin:
@@ -164,12 +165,13 @@ class AlgebraRuntimeMixin:
             values = self._execute_pairwise_product(A, B, request, executor)
         else:
             values = self._execute_elementwise_product(A, B, request, executor)
+        dispatch = resolve_planned_dispatch(request, compact_output=compact_output)
 
         if return_layout:
-            return values, executor.output_layout
-        if compact_output:
+            return values, dispatch.output_storage.layout
+        if dispatch.output_storage.is_compact:
             return values
-        return materialize_dense(self, values, layout=executor.output_layout)
+        return materialize_dense(self, values, layout=dispatch.output_storage.layout)
 
     def projected_geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Projected geometric product convenience wrapper."""
@@ -216,12 +218,13 @@ class AlgebraRuntimeMixin:
         )
         executor = self.planner.unary_executor_for_request(request)
         output = executor.forward_compact(values) if request.input_compact else executor(values)
+        dispatch = resolve_planned_dispatch(request, compact_output=compact_output)
 
         if return_layout:
-            return output, executor.output_layout
-        if compact_output:
+            return output, dispatch.output_storage.layout
+        if dispatch.output_storage.is_compact:
             return output
-        return materialize_dense(self, output, layout=executor.output_layout)
+        return materialize_dense(self, output, layout=dispatch.output_storage.layout)
 
     def planned_linear_action(
         self,

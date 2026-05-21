@@ -13,7 +13,7 @@ from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.actions import dense_versor_factors
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.layers import resolve_layer_storage
+from clifra.core.storage import resolve_layer_storage
 
 from ._utils import (
     grade_indices,

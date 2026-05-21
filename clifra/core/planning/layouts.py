@@ -16,8 +16,27 @@ import torch
 
 from clifra.core.foundation.basis import GradeProductOp, expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.storage import (
+    TensorStorage,
+    check_layout_spec,
+    resolve_operand_layout,
+    resolve_tensor_storage,
+)
+from clifra.core.storage import (
+    tensor_is_compact as is_compact_tensor,
+)
 
 _VALID_PRODUCT_OPS = {"gp", "wedge", "inner", "commutator", "anti_commutator"}
+
+__all__ = [
+    "ProductRequest",
+    "build_product_request",
+    "check_layout_spec",
+    "is_compact_tensor",
+    "normalize_product_op",
+    "resolve_operand_layout",
+    "resolve_output_layout",
+]
 
 
 @dataclass(frozen=True)
@@ -26,19 +45,37 @@ class ProductRequest:
 
     The request is the planner's intermediate representation. It removes
     ambiguity from caller input before any executor is built: layouts are
-    normalized, compact-vs-dense operand storage is known, and output grades are
+    normalized, physical operand storage is known, and output grades are
     inferred when callers do not explicitly project them.
     """
 
     spec: AlgebraSpec
     op: GradeProductOp
-    left_layout: GradeLayout
-    right_layout: GradeLayout
-    output_layout: GradeLayout
-    left_compact: bool
-    right_compact: bool
+    left_storage: TensorStorage
+    right_storage: TensorStorage
+    output_storage: TensorStorage
     dtype: torch.dtype
     device: torch.device
+
+    @property
+    def left_layout(self) -> GradeLayout:
+        return self.left_storage.layout
+
+    @property
+    def right_layout(self) -> GradeLayout:
+        return self.right_storage.layout
+
+    @property
+    def output_layout(self) -> GradeLayout:
+        return self.output_storage.layout
+
+    @property
+    def left_compact(self) -> bool:
+        return self.left_storage.is_compact
+
+    @property
+    def right_compact(self) -> bool:
+        return self.right_storage.is_compact
 
     @property
     def left_grades(self) -> tuple[int, ...]:
@@ -84,7 +121,7 @@ def build_product_request(
 ) -> ProductRequest:
     """Resolve caller input into a static product request."""
     normalized_op = normalize_product_op(op)
-    left_layout = resolve_operand_layout(
+    left_storage = resolve_tensor_storage(
         spec,
         left,
         grades=left_grades,
@@ -93,7 +130,7 @@ def build_product_request(
         side="left",
         full_layout_allowed=full_layout_allowed,
     )
-    right_layout = resolve_operand_layout(
+    right_storage = resolve_tensor_storage(
         spec,
         right,
         grades=right_grades,
@@ -105,23 +142,19 @@ def build_product_request(
     output_layout = resolve_output_layout(
         spec,
         op=normalized_op,
-        left_layout=left_layout,
-        right_layout=right_layout,
+        left_layout=left_storage.layout,
+        right_layout=right_storage.layout,
         output_grades=output_grades,
         output_layout=output_layout,
     )
-
-    left_compact = left_compact or is_compact_tensor(spec, left, left_layout)
-    right_compact = right_compact or is_compact_tensor(spec, right, right_layout)
+    output_storage = TensorStorage.compact(spec, output_layout)
 
     return ProductRequest(
         spec=spec,
         op=normalized_op,
-        left_layout=left_layout,
-        right_layout=right_layout,
-        output_layout=output_layout,
-        left_compact=left_compact,
-        right_compact=right_compact,
+        left_storage=left_storage,
+        right_storage=right_storage,
+        output_storage=output_storage,
         dtype=torch.promote_types(left.dtype, right.dtype),
         device=left.device,
     )
@@ -133,44 +166,6 @@ def normalize_product_op(op: str) -> GradeProductOp:
     if normalized not in _VALID_PRODUCT_OPS:
         raise ValueError(f"Unsupported grade product op {op!r}")
     return normalized  # type: ignore[return-value]
-
-
-def resolve_operand_layout(
-    spec: AlgebraSpec,
-    tensor: torch.Tensor,
-    *,
-    grades=None,
-    layout: Optional[GradeLayout] = None,
-    compact: bool = False,
-    side: str,
-    full_layout_allowed: bool = True,
-) -> GradeLayout:
-    """Resolve one operand's grade layout from explicit metadata or tensor shape."""
-    if layout is not None:
-        check_layout_spec(spec, layout, f"{side}_layout")
-        if grades is not None and layout.grades != normalize_grades(grades, spec.n, name=f"{side}_grades"):
-            raise ValueError(f"{side}_layout and {side}_grades disagree")
-        _check_operand_shape(spec, tensor, layout, compact=compact, side=side)
-        return layout
-
-    if grades is not None:
-        layout = spec.layout(grades)
-        _check_operand_shape(spec, tensor, layout, compact=compact, side=side)
-        return layout
-
-    if compact:
-        raise ValueError(f"{side}_layout or {side}_grades is required for compact {side} input")
-    if tensor.shape[-1] != spec.dim:
-        raise ValueError(
-            f"{side} input has last dimension {tensor.shape[-1]}; declare {side}_layout or "
-            f"{side}_grades for compact planned execution"
-        )
-    if not full_layout_allowed:
-        raise ValueError(
-            f"{side} input would require a full Cl({spec.p},{spec.q},{spec.r}) layout. "
-            "Declare active grades or enable an explicit low-dimensional full-layout fallback."
-        )
-    return spec.layout(range(spec.n + 1))
 
 
 def resolve_output_layout(
@@ -194,28 +189,3 @@ def resolve_output_layout(
     if output_grades is None:
         output_grades = expand_output_grades(left_layout.grades, right_layout.grades, spec.n, op=op)
     return spec.layout(output_grades)
-
-
-def check_layout_spec(spec: AlgebraSpec, layout: GradeLayout, name: str) -> None:
-    """Validate that a layout belongs to ``spec``."""
-    if layout.spec != spec:
-        raise ValueError(f"{name} signature {layout.spec} does not match product spec {spec}")
-
-
-def is_compact_tensor(spec: AlgebraSpec, tensor: torch.Tensor, layout: GradeLayout) -> bool:
-    """Return whether ``tensor`` already uses ``layout``'s compact lane count."""
-    return layout.dim != spec.dim and tensor.shape[-1] == layout.dim
-
-
-def _check_operand_shape(
-    spec: AlgebraSpec,
-    tensor: torch.Tensor,
-    layout: GradeLayout,
-    *,
-    compact: bool,
-    side: str,
-) -> None:
-    expected = layout.dim if compact or is_compact_tensor(spec, tensor, layout) else spec.dim
-    if tensor.shape[-1] != expected:
-        storage = "compact" if expected == layout.dim else "dense"
-        raise ValueError(f"{side} {storage} last dimension must be {expected}, got {tensor.shape[-1]}")
