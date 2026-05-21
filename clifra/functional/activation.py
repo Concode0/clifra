@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.numerics import eps_like
 
 
 class GeometricGELU(CliffordModule):
@@ -48,8 +49,8 @@ class GeometricGELU(CliffordModule):
         """
         norm = x.norm(dim=-1, keepdim=True)
 
-        eps = 1e-6
-        scale = F.gelu(norm + self.bias.view(1, -1, 1)) / (norm + eps)
+        eps = eps_like(norm, min_value=torch.finfo(norm.dtype).tiny)
+        scale = F.gelu(norm + self.bias.view(1, -1, 1)) / norm.clamp_min(eps)
 
         return x * scale
 
@@ -120,7 +121,8 @@ class GradeSwish(CliffordModule):
 
         norm_sq = torch.zeros(*batch_shape, G, device=x.device, dtype=x.dtype)
         norm_sq.scatter_add_(-1, grade_idx, x_sq)  # [..., G]
-        norms = torch.sqrt(norm_sq.clamp(min=1e-12))  # [..., G]
+        eps = eps_like(norm_sq, min_value=torch.finfo(norm_sq.dtype).tiny)
+        norms = torch.sqrt(norm_sq.clamp_min(eps))  # [..., G]
 
         # Compute gates: sigmoid(w * norm + b) for each grade
         gates = torch.sigmoid(self.grade_weights * norms + self.grade_biases)  # [..., G]

@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.algebra import CliffordAlgebra
 
 from ..blocks.attention import GeometricProductAttention
@@ -120,10 +121,12 @@ class EntropyGatedAttention(CliffordModule):
             g2_energy = g2_energy.masked_fill(key_padding_mask, 0.0)
 
         # Normalize to probability distribution over sequence
-        p = g2_energy / (g2_energy.sum(dim=1, keepdim=True) + 1e-8)
+        total_energy = g2_energy.sum(dim=1, keepdim=True)
+        eps = eps_like(g2_energy, min_value=torch.finfo(g2_energy.dtype).tiny)
+        p = torch.where(total_energy > 0, g2_energy / total_energy.clamp_min(eps), torch.zeros_like(g2_energy))
 
         # Shannon Entropy H per batch [B]
-        H = -(p * torch.log(p + 1e-8)).sum(dim=1)
+        H = -(p * torch.log(p.clamp_min(eps))).sum(dim=1)
 
         # 2. Base-Adjusted Gating Function
         lambda_dyn = self.eta * torch.sigmoid(H - self.H_base)  # [B]
