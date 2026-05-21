@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from clifra.core.foundation.layout import GradeLayout
+from clifra.core.foundation.numerics import eps_like
 from clifra.core.foundation.validation import check_multivector
 from clifra.core.planning.action import (
     apply_multi_graded_linear_action,
@@ -237,7 +238,7 @@ def versor_vector_matrix(algebra, weights: torch.Tensor, *, grade: int, paramete
     if grade == 1:
         signs = parameter_layout_signs(parameter_layout, device=weights.device, dtype=weights.dtype)
         norm_sq = (weights * weights * signs).sum(dim=-1, keepdim=True)
-        scale = norm_sq.abs().clamp_min(1e-12).sqrt()
+        scale = norm_sq.abs().clamp_min(eps_like(norm_sq)).sqrt()
         normals = weights / scale
         return reflection_vector_matrix(normals, vector_layout=parameter_layout, eps=algebra.eps_sq)
     raise ValueError("compact versor execution currently supports grade=1 and grade=2")
@@ -274,10 +275,10 @@ def dense_versor_factors(
 
     if grade == 1:
         norm_sq = algebra.norm_sq(versor)
-        scale = norm_sq.abs().clamp(min=1e-12).sqrt()
+        scale = norm_sq.abs().clamp_min(eps_like(norm_sq)).sqrt()
         versor = versor / scale
     else:
-        norm = versor.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        norm = versor.norm(dim=-1, keepdim=True).clamp_min(eps_like(versor))
         versor = versor / norm
     return algebra.grade_involution(versor), algebra.blade_inverse(versor)
 

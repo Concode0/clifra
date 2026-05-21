@@ -10,6 +10,7 @@ import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.numerics import covariance_regularizer
 from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.storage import resolve_layer_storage
 from clifra.utils.compat import safe_linalg_solve
@@ -178,7 +179,11 @@ class GeometricNeutralizer(CliffordModule):
             cur_cov_bb = self.running_cov_bb
             cur_cov_bs = self.running_cov_bs
 
-        reg = 1e-6 * torch.eye(self.d2, device=cur_cov_bb.device, dtype=cur_cov_bb.dtype).unsqueeze(0)
+        reg = covariance_regularizer(cur_cov_bb) * torch.eye(
+            self.d2,
+            device=cur_cov_bb.device,
+            dtype=cur_cov_bb.dtype,
+        ).unsqueeze(0)
         weights = safe_linalg_solve(cur_cov_bb + reg, cur_cov_bs)
 
         b_centered = bivec - cur_mean_b.unsqueeze(0)

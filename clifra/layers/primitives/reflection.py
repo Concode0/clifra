@@ -11,6 +11,7 @@ import torch.nn as nn
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPHERE, tag_manifold
 from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.storage import resolve_layer_storage
 
@@ -84,7 +85,7 @@ class ReflectionLayer(CliffordModule):
         nn.init.normal_(self.vector_weights, std=1.0)
         # Normalize to unit vectors
         with torch.no_grad():
-            norms = self.vector_weights.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            norms = self.vector_weights.norm(dim=-1, keepdim=True).clamp_min(eps_like(self.vector_weights))
             self.vector_weights.div_(norms)
 
     def _build_vectors(self, device, dtype):
@@ -98,7 +99,7 @@ class ReflectionLayer(CliffordModule):
 
         # Normalize: n_hat = n / sqrt(|<n ~n>_0|)
         n_sq = self.algebra.norm_sq(n)  # [C, 1]
-        scale = n_sq.abs().clamp(min=1e-12).sqrt()
+        scale = n_sq.abs().clamp_min(eps_like(n_sq)).sqrt()
         n = n / scale
 
         n_inv = self.algebra.blade_inverse(n)

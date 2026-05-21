@@ -8,6 +8,7 @@
 import torch
 
 from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.runtime.algebra import CliffordAlgebra
 
 
@@ -104,7 +105,7 @@ class ProjectiveEmbedding(CliffordModule):
         """
         d = self.euclidean_dim
         # Normalize by e_0 coefficient (homogeneous coordinate)
-        e0_coeff = P[..., self._idx_e0 : self._idx_e0 + 1].clamp(min=1e-6)
+        e0_coeff = signed_clamp_min(P[..., self._idx_e0 : self._idx_e0 + 1], self.algebra.eps)
         P_norm = P / e0_coeff
         return torch.gather(P_norm, -1, self._g1_idx.expand(*P.shape[:-1], d))
 

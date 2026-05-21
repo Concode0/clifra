@@ -8,6 +8,7 @@
 import torch
 
 from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.runtime.algebra import CliffordAlgebra
 
 
@@ -88,7 +89,7 @@ class ConformalEmbedding(CliffordModule):
         d = self.euclidean_dim
         # Scale: -(P . e_inf)_0
         P_einf = self.algebra.geometric_product(P, self._e_inf.expand_as(P))
-        scale = (-P_einf[..., 0:1]).clamp(min=1e-6)
+        scale = signed_clamp_min(-P_einf[..., 0:1], self.algebra.eps)
         P_norm = P / scale
 
         return torch.gather(P_norm, -1, self._g1_idx.expand(*P.shape[:-1], d))

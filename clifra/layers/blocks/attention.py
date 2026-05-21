@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.algebra import CliffordAlgebra
 
 from ..primitives.linear import CliffordLinear
@@ -20,6 +21,27 @@ from ..primitives.linear import CliffordLinear
 _BLOCK_SIZE = 64
 _G2_BLADE_CHUNK_SIZE = 16
 _SCORE_PRECOMPUTE_LIMIT = 8_000_000
+
+
+def _merge_attention_mask(left: torch.Tensor | None, right: torch.Tensor | None) -> torch.Tensor | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left | right
+
+
+def _safe_masked_softmax(scores: torch.Tensor, mask: torch.Tensor | None, dim: int = -1) -> torch.Tensor:
+    """Softmax with finite zero output for fully masked rows."""
+    if mask is None:
+        return F.softmax(scores, dim=dim)
+
+    masked_scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min)
+    weights = F.softmax(masked_scores, dim=dim).masked_fill(mask, 0.0)
+    normalizer = weights.sum(dim=dim, keepdim=True)
+    eps = eps_like(weights, min_value=torch.finfo(weights.dtype).tiny)
+    weights = weights / normalizer.clamp_min(eps)
+    return torch.where(normalizer > 0, weights, torch.zeros_like(weights))
 
 
 class GeometricProductAttention(CliffordModule):
@@ -142,7 +164,7 @@ class GeometricProductAttention(CliffordModule):
             else:
                 k_2d = k_head.permute(0, 1, 3, 2, 4).reshape(B * H * Hc, Lk, D)
                 score_g2_sq = self._dense_score_g2_chunked(q_2d, k_2d, B, H, Hc, Lq, Lk, D, n_g2)
-            score_g2 = score_g2_sq.sqrt()
+            score_g2 = score_g2_sq.clamp_min(0.0).sqrt()
         else:
             score_g2 = torch.zeros_like(score_g0)
 
@@ -227,18 +249,18 @@ class GeometricProductAttention(CliffordModule):
             # Compute scores: [B, H, Lq, L]
             scores = self._compute_score(Q_block, K)
 
-            # Apply causal mask
+            score_mask = None
             if causal_mask is not None:
                 mask_block = causal_mask[q_start:q_end, :]  # [Lq, L]
-                scores = scores.masked_fill(mask_block.unsqueeze(0).unsqueeze(0), float("-inf"))
+                score_mask = mask_block.unsqueeze(0).unsqueeze(0)
 
-            # Apply key padding mask: True = padded -> -inf
             if key_padding_mask is not None:
                 # key_padding_mask: [B, L] -> [B, 1, 1, L]
-                scores = scores.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
+                padding_mask = key_padding_mask.unsqueeze(1).unsqueeze(2)
+                score_mask = _merge_attention_mask(score_mask, padding_mask)
 
             # Softmax + dropout
-            attn_weights = F.softmax(scores, dim=-1)  # [B, H, Lq, L]
+            attn_weights = _safe_masked_softmax(scores, score_mask, dim=-1)  # [B, H, Lq, L]
             if self.attn_dropout is not None:
                 attn_weights = self.attn_dropout(attn_weights)
 

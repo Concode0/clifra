@@ -17,6 +17,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.foundation.validation import check_multivector
 from clifra.core.planning.policy import DEFAULT_PLANNING_LIMITS, PlanningLimits
 from clifra.core.runtime.projected import AlgebraRuntimeMixin
@@ -697,7 +698,7 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         """
         blade_rev = self.reverse(blade)
         blade_sq = self.geometric_product(blade, blade_rev)
-        scalar = blade_sq[..., 0:1].clamp(min=self.eps_sq)
+        scalar = signed_clamp_min(blade_sq[..., 0:1], self.eps_sq)
         return blade_rev / scalar
 
     def sandwich_product(self, R: torch.Tensor, x: torch.Tensor, R_rev: torch.Tensor = None) -> torch.Tensor:

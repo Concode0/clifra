@@ -27,6 +27,7 @@ from .foundation.basis import (
 from .foundation.device import DeviceConfig, dtype_name, optional_dtype, resolve_device, resolve_dtype
 from .foundation.layout import AlgebraSpec, GradeLayout
 from .foundation.module import AlgebraLike, CliffordModule
+from .foundation.numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
 from .foundation.validation import check_channels, check_multivector
 from .planning.flow import GradeFlow
 from .planning.layouts import ProductRequest, build_product_request
@@ -110,6 +111,10 @@ __all__ = [
     "optional_dtype",
     "resolve_device",
     "resolve_dtype",
+    "eps_for",
+    "eps_like",
+    "signed_clamp_min",
+    "covariance_regularizer",
     "check_multivector",
     "check_channels",
     "resolve_tensor_storage",

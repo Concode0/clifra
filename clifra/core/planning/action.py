@@ -6,6 +6,7 @@ import torch
 
 from clifra.core.foundation.basis import operation_coefficient
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.foundation.numerics import signed_clamp_min
 
 
 def apply_graded_linear_action(
@@ -131,12 +132,6 @@ def metric_self_signs(layout: GradeLayout, *, device=None, dtype=None) -> torch.
         for index in layout.basis_indices
     ]
     return torch.tensor(signs, device=device, dtype=torch.float32 if dtype is None else dtype)
-
-
-def signed_clamp_min(values: torch.Tensor, eps: float) -> torch.Tensor:
-    """Clamp magnitude while preserving sign for inverse denominators."""
-    signs = torch.where(values < 0, -torch.ones_like(values), torch.ones_like(values))
-    return signs * values.abs().clamp_min(eps)
 
 
 def _graded_action_coefficients(
