@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.context import AlgebraContext
 from clifra.functional.activation import GeometricGELU, GradeSwish
 from clifra.layers.adapters.mother import EntropyGatedAttention
 
@@ -38,6 +39,21 @@ def test_entropy_gated_attention_all_masked_entropy_is_finite():
 
     output, entropy, gate = attention(x, key_padding_mask=key_padding_mask, return_gating=True)
 
+    assert torch.isfinite(output).all()
+    assert torch.isfinite(entropy).all()
+    assert torch.isfinite(gate).all()
+    assert torch.allclose(entropy, torch.zeros_like(entropy))
+
+
+def test_entropy_gated_attention_accepts_compact_grade1_context():
+    algebra = AlgebraContext(5, 0, device="cpu", dtype=torch.float32, default_grades=(1,))
+    layout = algebra.layout((1,))
+    attention = EntropyGatedAttention(algebra, channels=4, num_heads=2)
+    x = torch.randn(2, 4, 4, layout.dim)
+
+    output, entropy, gate = attention(x, return_gating=True)
+
+    assert output.shape == x.shape
     assert torch.isfinite(output).all()
     assert torch.isfinite(entropy).all()
     assert torch.isfinite(gate).all()

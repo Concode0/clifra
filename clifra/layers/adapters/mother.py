@@ -8,9 +8,11 @@
 import torch
 import torch.nn as nn
 
-from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.layout import GradeLayout
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.storage import resolve_layer_storage
 
 from ..blocks.attention import GeometricProductAttention
 from ..primitives.normalization import CliffordLayerNorm
@@ -77,7 +79,17 @@ class EntropyGatedAttention(CliffordModule):
     or suppressed, allowing only coherent, synchronized states to propagate.
     """
 
-    def __init__(self, algebra: CliffordAlgebra, channels: int, num_heads: int, eta: float = 1.0, H_base: float = 0.5):
+    def __init__(
+        self,
+        algebra: AlgebraLike,
+        channels: int,
+        num_heads: int,
+        eta: float = 1.0,
+        H_base: float = 0.5,
+        *,
+        grades=None,
+        layout: GradeLayout = None,
+    ):
         """Initializes Entropy-Gated Attention.
 
         Args:
@@ -86,17 +98,30 @@ class EntropyGatedAttention(CliffordModule):
             num_heads: Number of attention heads.
             eta: Gating multiplier.
             H_base: Base entropy threshold.
+            grades: Optional compact input/output grades.
+            layout: Optional compact input/output layout.
         """
         super().__init__(algebra)
         self.channels = channels
         self.eta = eta
         self.H_base = H_base
-        self.base_attention = GeometricProductAttention(algebra, channels, num_heads, causal=False)
+        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
+        self.layout = self.storage.layout
+        self.base_attention = GeometricProductAttention(
+            algebra,
+            channels,
+            num_heads,
+            causal=False,
+            layout=self.layout,
+        )
 
-        # Cache bivector indices and float mask for compile-friendly gating
-        mask = self.algebra.grade_masks[2]
-        self.register_buffer("g2_idx", mask.nonzero(as_tuple=True)[0])
-        self.register_buffer("_g2_float_mask", mask.float())
+        # Cache grade-2 positions and lane mask for dense and compact layouts.
+        g2_idx = self.storage.grade_positions(2, device=algebra.device)
+        g2_mask = torch.zeros(self.storage.lane_dim, device=algebra.device, dtype=torch.float32)
+        if g2_idx.numel() > 0:
+            g2_mask.index_fill_(0, g2_idx, 1.0)
+        self.register_buffer("g2_idx", g2_idx)
+        self.register_buffer("_g2_float_mask", g2_mask)
 
     def forward(
         self, x: torch.Tensor, key_padding_mask: torch.Tensor = None, return_gating: bool = False
@@ -111,10 +136,20 @@ class EntropyGatedAttention(CliffordModule):
         Returns:
             Attended multivectors [B, L, C, D].
         """
+        self.storage.validate_input(
+            x,
+            channels=self.channels,
+            name="EntropyGatedAttention input",
+            allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
+        )
         # 1. Calculate Information Entropy of Bivector Energy
-        # Summing across multivector components (g2_idx) and across channels (dim 2)
         # x: [B, L, C, D]
-        g2_energy = (x[..., self.g2_idx] ** 2).sum(dim=(-1, -2))  # [B, L]
+        g2_idx = self.g2_idx.to(device=x.device)
+        if g2_idx.numel() > 0:
+            g2_values = torch.index_select(x, -1, g2_idx)
+            g2_energy = g2_values.square().sum(dim=(-1, -2))  # [B, L]
+        else:
+            g2_energy = x.new_zeros(x.shape[0], x.shape[1])
 
         # Mask padded positions before entropy calc
         if key_padding_mask is not None:
@@ -135,7 +170,7 @@ class EntropyGatedAttention(CliffordModule):
         # Scale the rotational components (bivectors)
         lambda_view = lambda_dyn.view(-1, 1, 1, 1)
 
-        g2_mask = self._g2_float_mask.to(dtype=x.dtype)
+        g2_mask = self._g2_float_mask.to(device=x.device, dtype=x.dtype)
         scale = 1.0 + (lambda_view - 1.0) * g2_mask  # [B, 1, 1, D]
         x_gated = x * scale
 
