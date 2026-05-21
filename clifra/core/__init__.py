@@ -45,6 +45,7 @@ from .runtime.accessors import (
     resolve_layout,
 )
 from .runtime.algebra import CliffordAlgebra
+from .runtime.attention import GeometricAttentionScorer
 from .runtime.context import AlgebraContext
 from .runtime.decomposition import (
     ExpPolicy,
@@ -94,6 +95,7 @@ __all__ = [
     "is_dense_kernel_host",
     "require_dense_kernel_host",
     "Multivector",
+    "GeometricAttentionScorer",
     "AlgebraSpec",
     "GradeLayout",
     "GradePlanner",
