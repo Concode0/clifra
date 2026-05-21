@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
@@ -49,6 +49,7 @@ class BenchmarkCase:
     output_lanes: int
     pairwise: bool
     fn: Callable[[], torch.Tensor]
+    reference_fn: Optional[Callable[[], torch.Tensor]] = None
 
 
 def _sync(device: str) -> None:
@@ -79,6 +80,7 @@ def _time_case(case: BenchmarkCase, *, warmups: int, repeats: int, device: str) 
     output_lanes = int(first_output.shape[-1])
     if output_lanes != case.output_lanes:
         raise RuntimeError(f"{case.name} expected {case.output_lanes} output lanes, got {output_lanes}")
+    parity = _parity_metrics(first_output, case.reference_fn, device=device)
 
     median_ms = statistics.median(samples)
     mean_ms = statistics.fmean(samples)
@@ -100,7 +102,55 @@ def _time_case(case: BenchmarkCase, *, warmups: int, repeats: int, device: str) 
         "max_ms": max(samples),
         "repeats": repeats,
         "items_per_sec": case.batch_size * 1000.0 / median_ms if median_ms > 0 else float("inf"),
+        **parity,
     }
+
+
+def _parity_metrics(
+    output: torch.Tensor,
+    reference_fn: Optional[Callable[[], torch.Tensor]],
+    *,
+    device: str,
+) -> dict:
+    output_finite = bool(torch.isfinite(output).all().item())
+    if reference_fn is None:
+        return {
+            "output_finite": output_finite,
+            "parity_checked": False,
+            "reference_finite": False,
+            "max_abs_error": float("nan"),
+            "max_rel_error": float("nan"),
+            "rms_error": float("nan"),
+        }
+
+    with torch.no_grad():
+        reference = reference_fn()
+        _sync(device)
+    if reference.shape != output.shape:
+        raise RuntimeError(f"reference shape {tuple(reference.shape)} does not match output shape {tuple(output.shape)}")
+
+    output64 = output.detach().cpu().to(torch.float64)
+    reference64 = reference.detach().cpu().to(torch.float64)
+    diff = output64 - reference64
+    abs_diff = diff.abs()
+    max_abs = float(abs_diff.max().item()) if abs_diff.numel() else 0.0
+    reference_scale = float(reference64.abs().max().item()) if reference64.numel() else 0.0
+    max_rel = max_abs / max(reference_scale, torch.finfo(torch.float64).tiny)
+    rms = float(torch.sqrt(torch.mean(diff.square())).item()) if diff.numel() else 0.0
+    return {
+        "output_finite": output_finite,
+        "parity_checked": True,
+        "reference_finite": bool(torch.isfinite(reference).all().item()),
+        "max_abs_error": max_abs,
+        "max_rel_error": max_rel,
+        "rms_error": rms,
+    }
+
+
+def _dense_reference_algebra(args, n: int, dtype: torch.dtype, device: str) -> Optional[CliffordAlgebra]:
+    if args.disable_parity or n > args.parity_max_n:
+        return None
+    return CliffordAlgebra(n, 0, device=device, dtype=dtype, allow_large_dense=True)
 
 
 def _dense_product_case(args, dtype: torch.dtype, device: str) -> BenchmarkCase:
@@ -150,6 +200,9 @@ def _compact_product_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
         output_lanes=layout_02.dim,
         pairwise=False,
         fn=lambda: layer(left, right),
+        reference_fn=lambda: layout_02.compact(
+            algebra.geometric_product(layout_1.dense(left), layout_1.dense(right))
+        ),
     )
 
 
@@ -159,6 +212,18 @@ def _context_compact_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
     layout_02 = context.layout((0, 2))
     left = torch.randn(args.batch_size, layout_1.dim, device=device, dtype=dtype)
     right = torch.randn(args.batch_size, layout_1.dim, device=device, dtype=dtype)
+    reference_algebra = _dense_reference_algebra(args, context.n, dtype, device)
+    reference_fn = None
+    if reference_algebra is not None:
+        reference_layout_1 = reference_algebra.layout((1,))
+        reference_layout_02 = reference_algebra.layout((0, 2))
+
+        def reference_product() -> torch.Tensor:
+            return reference_layout_02.compact(
+                reference_algebra.geometric_product(reference_layout_1.dense(left), reference_layout_1.dense(right))
+            )
+
+        reference_fn = reference_product
 
     return BenchmarkCase(
         name="context_compact_gp_1x1_to_02",
@@ -179,6 +244,7 @@ def _context_compact_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
             output_grades=(0, 2),
             compact_output=True,
         ),
+        reference_fn=reference_fn,
     )
 
 
@@ -189,6 +255,22 @@ def _pairwise_context_case(args, dtype: torch.dtype, device: str) -> BenchmarkCa
     layout_3 = context.layout((3,))
     left = torch.randn(args.batch_size, args.left_items, layout_2.dim, device=device, dtype=dtype)
     right = torch.randn(args.batch_size, args.right_items, layout_1.dim, device=device, dtype=dtype)
+    reference_algebra = _dense_reference_algebra(args, context.n, dtype, device)
+    reference_fn = None
+    if reference_algebra is not None:
+        reference_layout_2 = reference_algebra.layout((2,))
+        reference_layout_1 = reference_algebra.layout((1,))
+        reference_layout_3 = reference_algebra.layout((3,))
+
+        def reference_pairwise_wedge() -> torch.Tensor:
+            return reference_layout_3.compact(
+                reference_algebra.wedge(
+                    reference_layout_2.dense(left).unsqueeze(-2),
+                    reference_layout_1.dense(right).unsqueeze(-3),
+                )
+            )
+
+        reference_fn = reference_pairwise_wedge
 
     return BenchmarkCase(
         name="context_pairwise_wedge_2x1_to_3",
@@ -210,6 +292,7 @@ def _pairwise_context_case(args, dtype: torch.dtype, device: str) -> BenchmarkCa
             compact_output=True,
             pairwise=True,
         ),
+        reference_fn=reference_fn,
     )
 
 
@@ -244,6 +327,18 @@ def _layer_pipeline_case(args, dtype: torch.dtype, device: str) -> BenchmarkCase
     left = context.embed_vector(torch.randn(args.batch_size, context.n, device=device, dtype=dtype))
     right = context.embed_vector(torch.randn(args.batch_size, context.n, device=device, dtype=dtype))
     third = layout_1.compact(context.embed_vector(torch.randn(args.batch_size, context.n, device=device, dtype=dtype)))
+    reference_algebra = _dense_reference_algebra(args, context.n, dtype, device)
+    reference_fn = None
+    if reference_algebra is not None:
+        reference_layout_1 = reference_algebra.layout((1,))
+        reference_layout_3 = reference_algebra.layout((3,))
+
+        def reference_pipeline() -> torch.Tensor:
+            return reference_layout_3.compact(
+                reference_algebra.wedge(reference_algebra.wedge(left, right), reference_layout_1.dense(third))
+            )
+
+        reference_fn = reference_pipeline
 
     return BenchmarkCase(
         name="layer_pipeline_wedge_wedge",
@@ -257,6 +352,62 @@ def _layer_pipeline_case(args, dtype: torch.dtype, device: str) -> BenchmarkCase
         output_lanes=layout_3.dim,
         pairwise=False,
         fn=lambda: model(left, right, third),
+        reference_fn=reference_fn,
+    )
+
+
+def _compact_wedge_chain_case(args, dtype: torch.dtype, device: str) -> BenchmarkCase:
+    context = AlgebraContext(args.context_n, 0, device=device, dtype=dtype)
+    steps = max(1, min(args.chain_steps, context.n))
+    layouts = {grade: context.layout((grade,)) for grade in range(1, steps + 1)}
+    vector_layout = layouts[1]
+    vectors = [torch.randn(args.batch_size, context.n, device=device, dtype=dtype) for _ in range(steps)]
+    compact_vectors = [vector_layout.compact(context.embed_vector(vector)) for vector in vectors]
+    output_layout = layouts[steps]
+
+    def run_chain() -> torch.Tensor:
+        value = compact_vectors[0]
+        left_layout = vector_layout
+        for output_grade, right in enumerate(compact_vectors[1:], start=2):
+            next_layout = layouts[output_grade]
+            value = context.wedge(
+                value,
+                right,
+                left_layout=left_layout,
+                right_layout=vector_layout,
+                output_layout=next_layout,
+                compact_output=True,
+            )
+            left_layout = next_layout
+        return value
+
+    reference_algebra = _dense_reference_algebra(args, context.n, dtype, device)
+    reference_fn = None
+    if reference_algebra is not None:
+        reference_output_layout = reference_algebra.layout((steps,))
+        dense_vectors = [reference_algebra.embed_vector(vector) for vector in vectors]
+
+        def reference_chain() -> torch.Tensor:
+            value = dense_vectors[0]
+            for right in dense_vectors[1:]:
+                value = reference_algebra.wedge(value, right)
+            return reference_output_layout.compact(value)
+
+        reference_fn = reference_chain
+
+    return BenchmarkCase(
+        name=f"context_compact_wedge_chain_1_to_{steps}",
+        host="AlgebraContext",
+        n=context.n,
+        op="wedge_chain",
+        storage="compact",
+        batch_size=args.batch_size,
+        left_lanes=vector_layout.dim,
+        right_lanes=vector_layout.dim,
+        output_lanes=output_layout.dim,
+        pairwise=False,
+        fn=run_chain,
+        reference_fn=reference_fn,
     )
 
 
@@ -271,13 +422,20 @@ def _write_results(rows: list[dict], output_dir: Path) -> None:
     summary_path = output_dir / "summary.md"
     with summary_path.open("w") as handle:
         handle.write("# Framework Pipeline Benchmark\n\n")
-        handle.write("| case | host | storage | n | median ms | items/sec |\n")
-        handle.write("| --- | --- | --- | ---: | ---: | ---: |\n")
+        handle.write("| case | host | storage | n | median ms | items/sec | max abs error | max rel error |\n")
+        handle.write("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |\n")
         for row in rows:
             handle.write(
                 f"| {row['name']} | {row['host']} | {row['storage']} | {row['n']} | "
-                f"{row['median_ms']:.4f} | {row['items_per_sec']:.2f} |\n"
+                f"{row['median_ms']:.4f} | {row['items_per_sec']:.2f} | "
+                f"{_format_metric(row['max_abs_error'])} | {_format_metric(row['max_rel_error'])} |\n"
             )
+
+
+def _format_metric(value: float) -> str:
+    if value != value:
+        return "skipped"
+    return f"{value:.3e}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -289,6 +447,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--left-items", type=int, default=16)
     parser.add_argument("--right-items", type=int, default=16)
+    parser.add_argument("--chain-steps", type=int, default=4, help="Number of vector factors in the compact wedge chain")
+    parser.add_argument(
+        "--parity-max-n",
+        type=int,
+        default=8,
+        help="Largest signature dimension that will materialize a dense reference for parity checks",
+    )
+    parser.add_argument("--disable-parity", action="store_true", help="Skip dense-reference parity checks")
     parser.add_argument("--warmups", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--quick", action="store_true", help="Use smaller dimensions and repeat counts")
@@ -305,6 +471,7 @@ def main() -> None:
         args.batch_size = min(args.batch_size, 64)
         args.left_items = min(args.left_items, 8)
         args.right_items = min(args.right_items, 8)
+        args.chain_steps = min(args.chain_steps, 4)
         args.warmups = min(args.warmups, 2)
         args.repeats = min(args.repeats, 5)
 
@@ -318,13 +485,19 @@ def main() -> None:
         _context_compact_case(args, dtype, device),
         _pairwise_context_case(args, dtype, device),
         _layer_pipeline_case(args, dtype, device),
+        _compact_wedge_chain_case(args, dtype, device),
     ]
     rows = [_time_case(case, warmups=args.warmups, repeats=args.repeats, device=device) for case in cases]
 
     for row in rows:
+        parity = (
+            f", max_abs={row['max_abs_error']:.3e}, max_rel={row['max_rel_error']:.3e}"
+            if row["parity_checked"]
+            else ", parity=skipped"
+        )
         print(
             f"{row['name']}: median={row['median_ms']:.4f} ms, "
-            f"first={row['first_call_ms']:.4f} ms, items/sec={row['items_per_sec']:.2f}"
+            f"first={row['first_call_ms']:.4f} ms, items/sec={row['items_per_sec']:.2f}{parity}"
         )
 
     if not args.no_save:
