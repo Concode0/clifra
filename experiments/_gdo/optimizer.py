@@ -8,8 +8,8 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
-from core.runtime.algebra import CliffordAlgebra
-from optimizers.riemannian import (
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.optimizers.riemannian import (
     MANIFOLD_EUCLIDEAN,
     MANIFOLD_SPHERE,
     MANIFOLD_SPIN,

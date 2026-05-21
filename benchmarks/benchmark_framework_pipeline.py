@@ -30,10 +30,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from core.foundation.device import FLOAT_DTYPES, resolve_device  # noqa: E402
-from core.runtime.algebra import CliffordAlgebra  # noqa: E402
-from core.runtime.context import AlgebraContext  # noqa: E402
-from layers import ProductLayer, WedgeLayer  # noqa: E402
+from clifra.core.foundation.device import FLOAT_DTYPES, resolve_device  # noqa: E402
+from clifra.core.runtime.algebra import CliffordAlgebra  # noqa: E402
+from clifra.core.runtime.context import AlgebraContext  # noqa: E402
+from clifra.layers import ProductLayer, WedgeLayer  # noqa: E402
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ import torch.optim as optim
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from core.foundation.device import DeviceConfig, resolve_device
+from clifra.core.foundation.device import DeviceConfig, resolve_device
 from log import get_logger
 
 logger = get_logger(__name__)
@@ -83,7 +83,7 @@ class BaseTask(ABC):
         Priority: cuda > mps > cpu.
 
         .. deprecated::
-            Use :func:`core.foundation.device.resolve_device` instead.
+            Use :func:`clifra.core.foundation.device.resolve_device` instead.
         """
         return resolve_device(device)
 
@@ -104,7 +104,7 @@ class BaseTask(ABC):
         lr = self.cfg.training.lr
 
         if opt_type == "exponential_sgd":
-            from optimizers.riemannian import ExponentialSGD
+            from clifra.optimizers.riemannian import ExponentialSGD
 
             return ExponentialSGD.from_model(
                 self.model,
@@ -114,7 +114,7 @@ class BaseTask(ABC):
                 max_bivector_norm=self.cfg.training.get("max_bivector_norm", 10.0),
             )
         elif opt_type == "riemannian_adam":
-            from optimizers.riemannian import RiemannianAdam
+            from clifra.optimizers.riemannian import RiemannianAdam
 
             return RiemannianAdam.from_model(
                 self.model,

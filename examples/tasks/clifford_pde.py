@@ -66,10 +66,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from core.config import make_algebra_from_config
-from core.foundation.module import CliffordModule
-from functional.activation import GeometricGELU
-from layers import (
+from clifra.core.config import make_algebra_from_config
+from clifra.core.foundation.module import CliffordModule
+from clifra.functional.activation import GeometricGELU
+from clifra.layers import (
     CliffordLayerNorm,
     CliffordLinear,
     RotorLayer,

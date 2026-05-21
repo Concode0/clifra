@@ -8,9 +8,9 @@
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
-from core.runtime.context import AlgebraContext
-from layers import (
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.context import AlgebraContext
+from clifra.layers import (
     BladeSelector,
     CliffordLayerNorm,
     CliffordLinear,
@@ -197,7 +197,7 @@ class TestLayers:
 
     def test_rotor_layer_exact_policy(self, algebra_3d):
         """Test RotorLayer with EXACT exp policy."""
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         algebra_3d.exp_policy = ExpPolicy.PRECISE
         x = torch.randn(4, 5, 8)
@@ -215,7 +215,7 @@ class TestLayers:
 
     def test_rotor_layer_policy_vs_standard(self, algebra_3d):
         """Compare RotorLayer with FAST vs EXACT policy."""
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         layer_a = RotorLayer(algebra_3d, 3)
         layer_b = RotorLayer(algebra_3d, 3)
@@ -236,7 +236,7 @@ class TestLayers:
 
     def test_rotor_layer_backward_exact(self, algebra_3d):
         """Test gradient flow through RotorLayer with EXACT policy."""
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         algebra_3d.exp_policy = ExpPolicy.PRECISE
 
@@ -258,7 +258,7 @@ class TestLayers:
 
     def test_multi_rotor_layer_exact_policy(self, algebra_3d):
         """Test MultiRotorLayer with EXACT policy."""
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         algebra_3d.exp_policy = ExpPolicy.PRECISE
         x = torch.randn(4, 5, 8)
@@ -270,7 +270,7 @@ class TestLayers:
 
     def test_multi_rotor_layer_backward_exact(self, algebra_3d):
         """Test gradient flow through MultiRotorLayer with EXACT policy."""
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         algebra_3d.exp_policy = ExpPolicy.PRECISE
 
@@ -293,7 +293,7 @@ class TestLayers:
 
     def test_rotor_layer_rotor_property(self, algebra_3d):
         """Verify that exp-produced rotors satisfy R * ~R = 1."""
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         algebra_3d.exp_policy = ExpPolicy.PRECISE
 

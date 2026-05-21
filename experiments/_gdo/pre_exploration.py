@@ -24,10 +24,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.analysis import (
+from clifra.core.analysis import (
     CommutatorAnalyzer as CoreCommutatorAnalyzer,
 )
-from core.analysis import (
+from clifra.core.analysis import (
     DimensionLifter,
     EffectiveDimensionAnalyzer,
     GeodesicFlow,
@@ -36,13 +36,13 @@ from core.analysis import (
     StatisticalSampler,
     SymmetryDetector,
 )
-from core.analysis._types import (
+from clifra.core.analysis._types import (
     CommutatorResult,
     DimensionResult,
     SpectralResult,
     SymmetryResult,
 )
-from core.foundation.module import AlgebraLike
+from clifra.core.foundation.module import AlgebraLike
 from experiments._lib import setup_algebra
 
 from .config import GDOConfig
@@ -181,10 +181,10 @@ class PreExplorationAnalyzer:
         instances. Lazy-imports the layer types so this module stays cheap to
         import in non-architecture flows.
         """
-        from layers.adapters.embedding import RotaryBivectorPE
-        from layers.primitives.multi_rotor import MultiRotorLayer
-        from layers.primitives.reflection import ReflectionLayer
-        from layers.primitives.rotor import RotorLayer
+        from clifra.layers.adapters.embedding import RotaryBivectorPE
+        from clifra.layers.primitives.multi_rotor import MultiRotorLayer
+        from clifra.layers.primitives.reflection import ReflectionLayer
+        from clifra.layers.primitives.rotor import RotorLayer
 
         targets = (RotorLayer, MultiRotorLayer, ReflectionLayer, RotaryBivectorPE)
         return [(name, mod) for name, mod in model.named_modules() if isinstance(mod, targets)]
@@ -207,10 +207,10 @@ class PreExplorationAnalyzer:
         vectors directly (no plane decomposition; reflections are vector-
         parameterized).
         """
-        from layers.adapters.embedding import RotaryBivectorPE
-        from layers.primitives.multi_rotor import MultiRotorLayer
-        from layers.primitives.reflection import ReflectionLayer
-        from layers.primitives.rotor import RotorLayer
+        from clifra.layers.adapters.embedding import RotaryBivectorPE
+        from clifra.layers.primitives.multi_rotor import MultiRotorLayer
+        from clifra.layers.primitives.reflection import ReflectionLayer
+        from clifra.layers.primitives.rotor import RotorLayer
 
         algebra = self.algebra
         dim = algebra.dim

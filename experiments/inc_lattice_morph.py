@@ -48,9 +48,10 @@ import torch.nn as nn
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
-from core.foundation.module import AlgebraLike, CliffordModule
-from core.runtime.decomposition import ExpPolicy
-from core.runtime.metric import induced_norm
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
+from clifra.core.runtime.decomposition import ExpPolicy
+from clifra.core.runtime.metric import induced_norm
+from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     build_visualization_metadata,
     ensure_output_dir,
@@ -61,7 +62,6 @@ from experiments._lib import (
     setup_algebra,
     signature_metadata,
 )
-from optimizers.riemannian import RiemannianAdam
 
 _DTYPE_MAP = {
     "float32": torch.float32,
@@ -215,7 +215,7 @@ class MorphStage(CliffordModule):
     When ``compound_blades >= 2`` and ``n >= 4`` the global and twist rotors
     learn a *sum* of independent simple bivectors per slot, producing
     non-simple bivectors that are handled by ``algebra.exp()`` via the active
-    :class:`~core.runtime.decomposition.ExpPolicy`.
+    :class:`~clifra.core.runtime.decomposition.ExpPolicy`.
     """
 
     def __init__(self, algebra: AlgebraLike, n: int, compound_blades: int = 1):

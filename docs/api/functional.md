@@ -3,14 +3,14 @@
 Stateless operations. No learnable parameters.
 
 ## Activations
-::: functional.activation.GeometricGELU
-::: functional.activation.GradeSwish
+::: clifra.functional.activation.GeometricGELU
+::: clifra.functional.activation.GradeSwish
 
 ## Losses
-::: functional.loss.ChamferDistance
-::: functional.loss.ConservativeLoss
-::: functional.loss.PhysicsInformedLoss
-::: functional.loss.GeometricMSELoss
-::: functional.loss.SubspaceLoss
-::: functional.loss.IsometryLoss
-::: functional.loss.BivectorRegularization
+::: clifra.functional.loss.ChamferDistance
+::: clifra.functional.loss.ConservativeLoss
+::: clifra.functional.loss.PhysicsInformedLoss
+::: clifra.functional.loss.GeometricMSELoss
+::: clifra.functional.loss.SubspaceLoss
+::: clifra.functional.loss.IsometryLoss
+::: clifra.functional.loss.BivectorRegularization

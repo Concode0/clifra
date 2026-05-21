@@ -151,7 +151,7 @@ def safe_metric_search(data, device, default_n, num_probes=4, probe_epochs=40, m
     from models.sr.errors import MetricSearchError
 
     try:
-        from core.analysis import MetricSearch
+        from clifra.core.analysis import MetricSearch
 
         searcher = MetricSearch(
             device=device,

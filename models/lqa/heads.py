@@ -17,10 +17,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
-from layers.primitives.projection import GeometricNeutralizer
-from layers.primitives.rotor import RotorLayer
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers.primitives.projection import GeometricNeutralizer
+from clifra.layers.primitives.rotor import RotorLayer
 
 
 class ChainReasoningHead(CliffordModule):

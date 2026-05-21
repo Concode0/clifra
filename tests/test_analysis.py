@@ -16,7 +16,7 @@ import math
 import pytest
 import torch
 
-from core.analysis import (
+from clifra.core.analysis import (
     AnalysisConfig,
     AnalysisReport,
     CommutatorAnalyzer,
@@ -32,7 +32,7 @@ from core.analysis import (
     SymmetryResult,
     compute_uncertainty_and_alignment,
 )
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 
 DEVICE = "cpu"
 

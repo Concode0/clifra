@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 
 
 class AMASSDataset(Dataset):

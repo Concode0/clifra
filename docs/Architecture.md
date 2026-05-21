@@ -227,8 +227,8 @@ precomputed tables carry basis multiplication structure.
 `PlanningLimits` centralizes static guardrails for compact planning:
 
 ```python
-from core.planning import PlanningLimits
-from core.runtime.context import AlgebraContext
+from clifra.core.planning import PlanningLimits
+from clifra.core.runtime.context import AlgebraContext
 
 limits = PlanningLimits(max_lanes=8192, max_pairs=16_000_000)
 algebra = AlgebraContext(32, 0, device="cpu", planning_limits=limits)

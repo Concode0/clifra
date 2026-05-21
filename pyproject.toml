@@ -1,7 +1,7 @@
 [project]
-name = "versor"
+name = "clifra"
 version = "1.0.0"
-description = "A PyTorch framework for Geometric Algebra Deep Learning"
+description = "A PyTorch framework for Clifford geometric algebra deep learning"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -37,8 +37,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Concode0/Versor"
-Repository = "https://github.com/Concode0/Versor"
+Homepage = "https://github.com/Concode0/clifra"
+Repository = "https://github.com/Concode0/clifra"
 
 [project.optional-dependencies]
 sr = [
@@ -67,14 +67,14 @@ dev = [
     "ruff>=0.8.0",
 ]
 all_tasks = [
-    "versor[sr,md17,lqa]",
+    "clifra[sr,md17,lqa]",
 ]
 all = [
-    "versor[sr,md17,lqa,viz,demo,dev]",
+    "clifra[sr,md17,lqa,viz,demo,dev]",
 ]
 
 [tool.setuptools.packages.find]
-include = ["core*", "layers*", "models*", "datalib*", "optimizers*", "functional*", "tasks*", "examples*", "experiments*"]
+include = ["clifra*"]
 
 [tool.ruff]
 target-version = "py310"

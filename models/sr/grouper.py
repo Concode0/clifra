@@ -20,8 +20,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
-from core.config import make_algebra
-from core.foundation.module import AlgebraLike
+from clifra.core.config import make_algebra
+from clifra.core.foundation.module import AlgebraLike
 from models.sr.utils import safe_svd, standardize, subsample
 
 logger = logging.getLogger(__name__)
@@ -176,7 +176,7 @@ class VariableGrouper:
         9. SymmetryDetector → null dirs, involution, reflections
         10. Classify edges, assemble graph
         """
-        from core.analysis import (
+        from clifra.core.analysis import (
             CommutatorAnalyzer,
             EffectiveDimensionAnalyzer,
             GeodesicFlow,
@@ -409,7 +409,7 @@ class VariableGrouper:
         - B^2 > +0.5 → "hyperbolic" (boost)
         - |B^2| < 0.5 → "parabolic" (shear/translation)
         """
-        from core.analysis._types import CONSTANTS
+        from clifra.core.analysis._types import CONSTANTS
 
         if bv_sq is None or var_i >= algebra.n or var_j >= algebra.n:
             return "elliptic"  # default assumption
@@ -546,7 +546,7 @@ class VariableGrouper:
 
     def _single_group(self, X, y, var_names):
         """Create a single group encompassing all variables."""
-        from core.analysis import MetricSearch
+        from clifra.core.analysis import MetricSearch
 
         n_vars = X.shape[1]
         indices = list(range(n_vars))
@@ -582,7 +582,7 @@ class VariableGrouper:
 
     def _build_group(self, X, y, indices, var_names):
         """Build a VariableGroup for a subset of variable indices."""
-        from core.analysis import MetricSearch
+        from clifra.core.analysis import MetricSearch
 
         X_sub = X[:, indices]
         names_sub = [var_names[i] for i in indices]

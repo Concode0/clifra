@@ -8,15 +8,15 @@ from typing import Callable, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 
-from core.analysis import (
+from clifra.core.analysis import (
     CommutatorAnalyzer as CoreCommutatorAnalyzer,
 )
-from core.analysis import (
+from clifra.core.analysis import (
     GeodesicFlow,
     SpectralAnalyzer,
 )
-from core.runtime.algebra import CliffordAlgebra
-from layers import MultiRotorLayer, RotorLayer
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers import MultiRotorLayer, RotorLayer
 
 from .config import GDOConfig
 

@@ -18,8 +18,9 @@ import sympy
 import torch
 import torch.nn.functional as F
 
-from core.analysis import GeodesicFlow, MetricSearch
-from core.config import make_algebra
+from clifra.core.analysis import GeodesicFlow, MetricSearch
+from clifra.core.config import make_algebra
+from clifra.optimizers.riemannian import RiemannianAdam
 from models.sr.net import SRGBN
 from models.sr.translator import RotorTerm, RotorTranslator
 from models.sr.utils import (
@@ -29,7 +30,6 @@ from models.sr.utils import (
     standardize,
     subsample,
 )
-from optimizers.riemannian import RiemannianAdam
 
 logger = logging.getLogger(__name__)
 

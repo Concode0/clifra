@@ -3,8 +3,8 @@ import math
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
-from layers.blocks.attention import GeometricProductAttention
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers.blocks.attention import GeometricProductAttention
 
 pytestmark = pytest.mark.unit
 

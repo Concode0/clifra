@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
-from core.runtime.multivector import Multivector
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.multivector import Multivector
 
 
 @pytest.fixture

@@ -37,7 +37,7 @@ The signature $Cl(p, q, r)$ determines what the algebra "knows" about your geome
 **When none of the above fits**, let the data decide:
 
 ```python
-from core.analysis import MetricSearch
+from clifra.core.analysis import MetricSearch
 
 best_p, best_q, best_r = MetricSearch(device='cpu').search(your_data_tensor)
 algebra = CliffordAlgebra(best_p, best_q, best_r, device='cpu')
@@ -75,11 +75,11 @@ The canonical Geometric Blade Network block, annotated:
 
 ```python
 import torch.nn as nn
-from core.runtime.algebra import CliffordAlgebra
-from layers.primitives.linear import CliffordLinear
-from layers.primitives.rotor import RotorLayer
-from layers.primitives.normalization import CliffordLayerNorm
-from functional.activation import GeometricGELU
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers.primitives.linear import CliffordLinear
+from clifra.layers.primitives.rotor import RotorLayer
+from clifra.layers.primitives.normalization import CliffordLayerNorm
+from clifra.functional.activation import GeometricGELU
 
 algebra = CliffordAlgebra(p=3, q=0, device='cpu')  # Euclidean 3D
 
@@ -147,11 +147,11 @@ Versor models are intentionally hybrid. Standard `nn.Linear` and `CliffordLinear
 ```python
 import torch
 import torch.nn as nn
-from core.runtime.algebra import CliffordAlgebra
-from layers.primitives.linear import CliffordLinear
-from layers.primitives.rotor import RotorLayer
-from layers.primitives.normalization import CliffordLayerNorm
-from functional.activation import GeometricGELU
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers.primitives.linear import CliffordLinear
+from clifra.layers.primitives.rotor import RotorLayer
+from clifra.layers.primitives.normalization import CliffordLayerNorm
+from clifra.functional.activation import GeometricGELU
 
 class HybridModel(nn.Module):
     """
@@ -219,7 +219,7 @@ Rotors are an *inductive bias*, not a universal improvement. There are clear cas
 For models where all backbone weights are bivectors (i.e., `backend='rotor'` throughout), use `RiemannianAdam`:
 
 ```python
-from optimizers.riemannian import RiemannianAdam
+from clifra.optimizers.riemannian import RiemannianAdam
 
 optimizer = RiemannianAdam(model.parameters(), lr=1e-3, algebra=algebra)
 ```
@@ -237,12 +237,12 @@ End-to-end: choose algebra, build a 3-layer GBN, train, evaluate. Runs in under 
 ```python
 import torch
 import torch.nn as nn
-from core.runtime.algebra import CliffordAlgebra
-from layers.primitives.linear import CliffordLinear
-from layers.primitives.rotor import RotorLayer
-from layers.primitives.normalization import CliffordLayerNorm
-from functional.activation import GeometricGELU
-from optimizers.riemannian import RiemannianAdam
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers.primitives.linear import CliffordLinear
+from clifra.layers.primitives.rotor import RotorLayer
+from clifra.layers.primitives.normalization import CliffordLayerNorm
+from clifra.functional.activation import GeometricGELU
+from clifra.optimizers.riemannian import RiemannianAdam
 
 # --- 1. Algebra ---
 algebra = CliffordAlgebra(p=3, q=0, device='cpu')  # Cl(3,0): Euclidean 3D

@@ -17,10 +17,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
-from functional.activation import GeometricGELU, GeometricSquare
-from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, RotorLayer
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.functional.activation import GeometricGELU, GeometricSquare
+from clifra.layers import BladeSelector, CliffordLayerNorm, CliffordLinear, RotorLayer
 
 
 def _blade_name(idx: int, n: int) -> str:

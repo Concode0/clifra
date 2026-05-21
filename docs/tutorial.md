@@ -7,7 +7,7 @@ A step-by-step guide to using Versor's geometric layers in your own models.
 Everything starts with a `CliffordAlgebra` instance. The signature $(p, q, r)$ determines the geometry:
 
 ```python
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 
 # 3D Euclidean (rotations in 3-space)
 algebra = CliffordAlgebra(p=3, q=0, r=0, device='cpu')
@@ -76,7 +76,7 @@ R = algebra.exp(bivector)
 ### RotorLayer — Learned Geometric Rotation
 
 ```python
-from layers.rotor import RotorLayer
+from clifra.layers.primitives.rotor import RotorLayer
 
 rotor = RotorLayer(algebra, channels=4)
 
@@ -93,7 +93,7 @@ n_pruned = rotor.prune_bivectors(threshold=1e-4)
 ### MultiRotorLayer — Spectral Decomposition
 
 ```python
-from layers.multi_rotor import MultiRotorLayer
+from clifra.layers.primitives.multi_rotor import MultiRotorLayer
 
 multi = MultiRotorLayer(algebra, channels=4, num_rotors=8)
 
@@ -107,7 +107,7 @@ invariants = multi(x, return_invariants=True)  # [32, 4, n+1]
 ### CliffordLinear — Channel Mixing
 
 ```python
-from layers.linear import CliffordLinear
+from clifra.layers.primitives.linear import CliffordLinear
 
 linear = CliffordLinear(algebra, in_channels=4, out_channels=8)
 
@@ -118,7 +118,7 @@ y = linear(x)  # [32, 8, 8] — channels mixed, blades preserved
 ### CliffordLayerNorm — Direction-Preserving Normalization
 
 ```python
-from layers.normalization import CliffordLayerNorm
+from clifra.layers.primitives.normalization import CliffordLayerNorm
 
 norm = CliffordLayerNorm(algebra, channels=4)
 
@@ -129,7 +129,7 @@ y = norm(x)  # Normalized to unit magnitude, direction preserved
 ### GeometricGELU — Magnitude-Based Activation
 
 ```python
-from functional.activation import GeometricGELU
+from clifra.functional.activation import GeometricGELU
 
 act = GeometricGELU(algebra, channels=4)
 
@@ -140,7 +140,7 @@ y = act(x)  # Magnitude scaled by GELU, direction preserved
 ### BladeSelector — Grade Attention
 
 ```python
-from layers.projection import BladeSelector
+from clifra.layers.primitives.projection import BladeSelector
 
 selector = BladeSelector(algebra, channels=1)
 
@@ -152,10 +152,10 @@ y = selector(x)  # Soft per-blade gate (learned)
 
 ```python
 import torch.nn as nn
-from layers.rotor import RotorLayer
-from layers.linear import CliffordLinear
-from layers.normalization import CliffordLayerNorm
-from functional.activation import GeometricGELU
+from clifra.layers.primitives.rotor import RotorLayer
+from clifra.layers.primitives.linear import CliffordLinear
+from clifra.layers.primitives.normalization import CliffordLayerNorm
+from clifra.functional.activation import GeometricGELU
 
 class MyGBN(nn.Module):
     def __init__(self, algebra):
@@ -183,8 +183,8 @@ All tasks inherit from `BaseTask` and implement 7 methods:
 
 ```python
 from tasks.base import BaseTask
-from core.runtime.algebra import CliffordAlgebra
-from functional.loss import GeometricMSELoss
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.functional.loss import GeometricMSELoss
 
 class MyTask(BaseTask):
     def setup_algebra(self):
@@ -249,7 +249,7 @@ uv run main.py task=mytask training.epochs=200
 ## 7. Losses
 
 ```python
-from functional.loss import (
+from clifra.functional.loss import (
     GeometricMSELoss,    # Standard MSE on multivector coefficients
     SubspaceLoss,        # Penalizes energy outside target blades
     IsometryLoss,        # Enforces norm preservation
@@ -270,7 +270,7 @@ loss = iso_loss(output, input)
 Don't know the right $(p, q, r)$? Let Versor find it:
 
 ```python
-from core.analysis import MetricSearch
+from clifra.core.analysis import MetricSearch
 
 data = torch.randn(100, 6)  # 6D data
 searcher = MetricSearch(device='cpu')

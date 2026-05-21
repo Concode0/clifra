@@ -55,11 +55,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from core.config import make_algebra
-from core.runtime.decomposition import ExpPolicy, compiled_safe_decomposed_exp  # noqa: E402
-from core.foundation.device import FLOAT_DTYPES, resolve_device
-from core.foundation.device import dtype_name as _format_dtype_name
-from core.foundation.module import AlgebraLike
+from clifra.core.config import make_algebra
+from clifra.core.runtime.decomposition import ExpPolicy, compiled_safe_decomposed_exp  # noqa: E402
+from clifra.core.foundation.device import FLOAT_DTYPES, resolve_device
+from clifra.core.foundation.device import dtype_name as _format_dtype_name
+from clifra.core.foundation.module import AlgebraLike
 
 DTYPES: dict[str, torch.dtype] = FLOAT_DTYPES
 

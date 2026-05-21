@@ -56,12 +56,15 @@ from torch.utils.data import DataLoader, Dataset
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
-from core.foundation.module import CliffordModule
-from core.runtime.metric import (
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.metric import (
     hermitian_grade_spectrum,
     signature_norm_squared,
     signature_trace_form,
 )
+from clifra.functional.activation import GeometricGELU
+from clifra.layers import BladeSelector, CliffordLayerNorm, CliffordLinear, RotorLayer
+from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     build_visualization_metadata,
     ensure_output_dir,
@@ -74,9 +77,6 @@ from experiments._lib import (
     setup_algebra,
     signature_metadata,
 )
-from functional.activation import GeometricGELU
-from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, RotorLayer
-from optimizers.riemannian import RiemannianAdam
 
 # ---------------------------------------------------------------------------
 # Boost / rotation bivector helpers

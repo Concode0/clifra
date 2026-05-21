@@ -1,11 +1,11 @@
-"""Versor logging system.
+"""Clifra logging system.
 
-Provides structured logging under the ``versor`` hierarchy.
+Provides structured logging under the ``clifra`` hierarchy.
 All task/model output goes through :func:`get_logger` instead of ``print()``.
 
 Environment variables:
-    VERSOR_LOG_LEVEL - DEBUG / INFO (default) / WARNING / ERROR
-    VERSOR_LOG_FILE - optional path; appends plain-text log lines
+    CLIFRA_LOG_LEVEL - DEBUG / INFO (default) / WARNING / ERROR
+    CLIFRA_LOG_FILE - optional path; appends plain-text log lines
 """
 
 import logging
@@ -40,14 +40,14 @@ class _ColorFormatter(logging.Formatter):
 
 
 def _configure_once() -> None:
-    """One-time lazy init of the ``versor`` root logger."""
+    """One-time lazy init of the ``clifra`` root logger."""
     global _CONFIGURED
     if _CONFIGURED:
         return
     _CONFIGURED = True
 
-    root = logging.getLogger("versor")
-    level_name = os.environ.get("VERSOR_LOG_LEVEL", "INFO").upper()
+    root = logging.getLogger("clifra")
+    level_name = os.environ.get("CLIFRA_LOG_LEVEL", "INFO").upper()
     root.setLevel(getattr(logging, level_name, logging.INFO))
     root.propagate = False
 
@@ -59,7 +59,7 @@ def _configure_once() -> None:
     root.addHandler(console)
 
     # Optional file handler
-    log_file = os.environ.get("VERSOR_LOG_FILE")
+    log_file = os.environ.get("CLIFRA_LOG_FILE")
     if log_file:
         fh = logging.FileHandler(log_file, mode="a")
         fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -67,7 +67,7 @@ def _configure_once() -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a logger under the ``versor`` hierarchy.
+    """Return a logger under the ``clifra`` hierarchy.
 
     Args:
         name: Typically ``__name__`` of the calling module.
@@ -76,4 +76,4 @@ def get_logger(name: str) -> logging.Logger:
         A :class:`logging.Logger` instance.
     """
     _configure_once()
-    return logging.getLogger(f"versor.{name}")
+    return logging.getLogger(f"clifra.{name}")

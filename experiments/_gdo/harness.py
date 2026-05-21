@@ -9,9 +9,9 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
-from core.runtime.algebra import CliffordAlgebra
-from layers import MultiRotorLayer, RotorLayer
-from optimizers.riemannian import ExponentialSGD, RiemannianAdam
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers import MultiRotorLayer, RotorLayer
+from clifra.optimizers.riemannian import ExponentialSGD, RiemannianAdam
 
 from .config import ExperimentConfig, ExperimentResult, GDOConfig
 from .controller import GDOController

@@ -20,8 +20,8 @@ import torch.nn as nn
 import torch.optim as optim
 from omegaconf import DictConfig
 
-from core.config import make_algebra_from_config
-from core.foundation.module import AlgebraLike
+from clifra.core.config import make_algebra_from_config
+from clifra.core.foundation.module import AlgebraLike
 from datalib.symbolic_regression import _fetch_pmlb_data, get_dataset_ids, get_sr_loaders, get_sr_raw_splits
 from log import get_logger
 from models.sr import SRGBN
@@ -121,7 +121,7 @@ class SRTask(BaseTask):
         """Auto-discover optimal (p,q,r) via MetricSearch."""
         import numpy as np
 
-        from core.analysis import MetricSearch
+        from clifra.core.analysis import MetricSearch
 
         cache_dir = cfg.dataset.get("cache_dir", "./data/pmlb_cache")
         df = _fetch_pmlb_data(self.dataset_name, cache_dir)

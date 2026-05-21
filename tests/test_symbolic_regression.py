@@ -8,7 +8,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 from datalib.symbolic_regression import (
     BLACKBOX_DATASETS,
     FIRST_PRINCIPLES_DATASETS,

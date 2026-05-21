@@ -9,10 +9,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
-from functional.activation import GeometricGELU, GeometricSquare
-from layers import BladeSelector, CliffordLayerNorm, CliffordLinear, MultiRotorLayer
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.functional.activation import GeometricGELU, GeometricSquare
+from clifra.layers import BladeSelector, CliffordLayerNorm, CliffordLinear, MultiRotorLayer
 
 try:
     from torch_geometric.nn import global_add_pool

@@ -1,6 +1,6 @@
-# Versor: A PyTorch Framework for Geometric Algebra Deep Learning
+# Clifra: A PyTorch Framework for Clifford Geometric Algebra Deep Learning
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/) [![Docs](https://img.shields.io/badge/docs-MkDocs-brightgreen)](https://concode0.github.io/Versor/) [![DOI](https://zenodo.org/badge/1149480519.svg)](https://doi.org/10.5281/zenodo.18939518)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/) [![Docs](https://img.shields.io/badge/docs-MkDocs-brightgreen)](https://concode0.github.io/clifra/) [![DOI](https://zenodo.org/badge/1149480519.svg)](https://doi.org/10.5281/zenodo.18939518)
 
 > [!IMPORTANT]
 > **WIP (Work In Progress)**
@@ -8,13 +8,13 @@
 
 > **"There is a ceiling above standard Deep Learning that no one saw. Versor opens the door above it."**
 
-[![Documentation](https://img.shields.io/badge/Documentation-Explore%20Versor%20Docs-8A2BE2?style=for-the-badge&logo=readthedocs)](https://concode0.github.io/Versor/)
+[![Documentation](https://img.shields.io/badge/Documentation-Explore%20Clifra%20Docs-8A2BE2?style=for-the-badge&logo=readthedocs)](https://concode0.github.io/clifra/)
 
 ![Manifold Unbending Demo](assets/demo_manifold_comp.gif)
 
 ## At a Glance
 
-**Versor** provides geometrically structured layers — built on **Geometric Algebra versor** operations — that constrain spatial transformations to the rotation group where manifold structure matters, while composing naturally with standard linear algebra for channel mixing and readout. It supplies the building blocks for the **Geometric Blade Network (GBN)**: a hybrid architecture in which `CliffordLinear` (standard scalar weights) mixes channels, `RotorLayer` rotates multivectors geometrically, and `nn.Linear` handles task-specific projection.
+**Clifra** provides geometrically structured layers — built on **Geometric Algebra versor** operations — that constrain spatial transformations to the rotation group where manifold structure matters, while composing naturally with standard linear algebra for channel mixing and readout. It supplies the building blocks for the **Geometric Blade Network (GBN)**: a hybrid architecture in which `CliffordLinear` (standard scalar weights) mixes channels, `RotorLayer` rotates multivectors geometrically, and `nn.Linear` handles task-specific projection.
 
 | Task                                       | Algebra             | Key Metric         | Result                                                                                     | Note                                                   |
 | :----------------------------------------- | :------------------ | :----------------- | :----------------------------------------------------------------------------------------- | :----------------------------------------------------- |
@@ -63,12 +63,12 @@ For code examples of each innovation, see [docs/innovations.md](docs/innovations
 
 ## Installation
 
-Versor requires Python 3.10+ and PyTorch.
+Clifra requires Python 3.10+ and PyTorch.
 
 ```bash
 # Clone the repository
-git clone https://github.com/Concode0/Versor.git
-cd Versor
+git clone https://github.com/Concode0/clifra.git
+cd clifra
 
 # Install core dependencies
 uv sync
@@ -83,14 +83,14 @@ uv sync --extra all           # everything
 
 ## Quick Start
 
-### Using Versor Layers in Your Own Model
+### Using Clifra Layers in Your Own Model
 
 ```python
 import torch
-from core.runtime.algebra import CliffordAlgebra
-from layers.primitives.rotor import RotorLayer
-from layers.linear import CliffordLinear
-from functional.activation import GeometricGELU
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers.primitives.rotor import RotorLayer
+from clifra.layers.primitives.linear import CliffordLinear
+from clifra.functional.activation import GeometricGELU
 
 # Create a 3D Euclidean Clifford Algebra
 algebra = CliffordAlgebra(p=3, q=0, device='cpu')
@@ -107,7 +107,7 @@ out = activation(linear(rotor(x)))
 
 ### Running Tasks via CLI
 
-Versor uses **Hydra** for configuration management:
+Clifra uses **Hydra** for configuration management:
 
 ```bash
 # Run tasks
@@ -145,7 +145,7 @@ Discovers closed-form symbolic formulas from numerical data using iterative geom
 
 **Speed-to-Performance Ratio**: For the 12 first_principles datasets, the entire execution took roughly 5 minutes (avg. ~23s per dataset). This demonstrates a structurally different efficiency from existing Genetic Algorithm-based SR models, proving that Geometric Unbending computes laws deterministically rather than searching for them stochastically.
 
-> Check out the IU-SR Roadmap - [Discussion](https://github.com/Concode0/Versor/discussions/13)
+> Check out the IU-SR Roadmap - [Discussion](https://github.com/Concode0/clifra/discussions/13)
 
 ```bash
 uv run main.py task=sr
@@ -290,29 +290,26 @@ uv run main.py task=sr algebra.p=4 training.lr=0.001
 ## Project Structure
 
 ```
-Versor/
+clifra/
 ├── core/               # Math kernel (CliffordAlgebra, metric, search, decomposition, CGA)
 ├── layers/             # Neural layers (Rotor, MultiRotor, Linear, GNN, Norm, RotorGadget)
 ├── functional/         # Activations (GeometricGELU, GradeSwish, GeometricSquare) & losses
-├── models/             # Task-specific architectures
-│   └── sr/             # SR models (SRGBN, translator, unbender, grouper, estimator)
 ├── optimizers/         # Riemannian optimizers (RiemannianAdam, ExponentialSGD)
-├── tasks/              # Task runners (SR, MD17, LQA, DEAP EEG)
-├── datalib/            # Data loaders (PMLB, MD17, CLUTRR/HANS/BoolQ, DEAP)
-├── conf/               # Hydra configs for main tasks
-├── docs/               # Documentation
-│   └── tasks/          # Per-task specifications (LQA, DEAP EEG)
-├── examples/           # Synthetic demos, paper reimplementations, interactive Streamlit app
-│   ├── tasks/          # Manifold, Hyperbolic, Sanity, GATr, CGENN, Clifford PDE
-│   ├── datasets/       # Synthetic data generators
-│   └── conf/           # Hydra configs for example tasks
-├── tests/              # Unit & property tests
-└── main.py             # CLI entry point
+└── utils/              # Framework compatibility helpers
+models/                 # Task-specific architectures, outside the framework package
+datalib/                # Data loaders, outside the framework package
+tasks/                  # Hydra task runners, scheduled for rewrite
+experiments/            # Exploratory research scripts
+benchmarks/             # Benchmark scripts and reports
+examples/               # Synthetic demos and paper-counterpart examples
+conf/                   # Hydra configs for current task runners
+tests/                  # Unit & property tests
+main.py                 # CLI entry point for current tasks
 ```
 
 ## Documentation
 
-**[Official Versor Documentation Website](https://concode0.github.io/Versor/)**
+**[Official Clifra Documentation Website](https://concode0.github.io/clifra/)**
 
 For a deep dive into the framework, please visit our official documentation site, which includes:
 * **Philosophy**: Why Geometric Algebra? The "unbending" paradigm.
@@ -327,9 +324,9 @@ For a deep dive into the framework, please visit our official documentation site
 
 ## Contributing
 
-Versor is currently in a **Stabilization Phase** as the lead maintainer focuses on [academic milestones](https://github.com/Concode0/Versor/issues/6). While we are not actively seeking major feature contributions at this moment, we highly value community feedback.
+Versor is currently in a **Stabilization Phase** as the lead maintainer focuses on [academic milestones](https://github.com/Concode0/clifra/issues/6). While we are not actively seeking major feature contributions at this moment, we highly value community feedback.
 
-- **Found a Bug?** Please open an [Issue](https://github.com/Concode0/Versor/issues) with a detailed reproduction case.
+- **Found a Bug?** Please open an [Issue](https://github.com/Concode0/clifra/issues) with a detailed reproduction case.
 - **Have an Idea?** Open an Issue to discuss it before submitting a Pull Request.
 - **Code of Conduct:** All participants are expected to adhere to our [Code of Conduct](./CODE_OF_CONDUCT.md).
 
@@ -354,7 +351,7 @@ By releasing this under Apache 2.0, we provide a **perpetual, royalty-free paten
 @software{kim2026versor,
   author  = {Kim, Eunkyum},
   title   = {Versor: Universal Geometric Algebra Neural Network},
-  url     = {https://github.com/Concode0/versor},
+  url     = {https://github.com/Concode0/clifra},
   version = {1.0.0},
   year    = {2026},
   month   = {3},

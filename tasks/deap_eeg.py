@@ -16,7 +16,7 @@ Key: emotional states are pushed into Grade-0 (rotor-invariant scalars).
 import torch
 import torch.nn as nn
 
-from core.config import make_algebra_from_config
+from clifra.core.config import make_algebra_from_config
 from datalib.deap import get_deap_loaders, get_group_sizes
 from log import get_logger
 from models.deap import EEGNet
@@ -71,7 +71,7 @@ class DEAPEEGTask(BaseTask):
     def _compute_profiles(self, group_sizes):
         """Compute uncertainty (U) and Procrustes alignment (V) per region."""
         try:
-            from core.analysis import compute_uncertainty_and_alignment
+            from clifra.core.analysis import compute_uncertainty_and_alignment
             from datalib.deap import DEAPDataset
         except ImportError:
             logger.warning("Profiler unavailable, skipping alignment computation.")

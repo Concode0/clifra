@@ -12,9 +12,9 @@ Tests cover:
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
-from core.runtime.context import AlgebraContext
-from layers import CliffordLinear, RotorGadget
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.context import AlgebraContext
+from clifra.layers import CliffordLinear, RotorGadget
 
 pytestmark = pytest.mark.unit
 
@@ -298,7 +298,7 @@ class TestExpPolicy:
 
     def test_with_exact_policy(self, algebra_3d):
         """Test layer with EXACT exp policy."""
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         algebra_3d.exp_policy = ExpPolicy.PRECISE
 
@@ -317,7 +317,7 @@ class TestExpPolicy:
 
     def test_policy_fast_vs_exact(self, algebra_3d):
         """Compare FAST and EXACT policies (n=3: should match)."""
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         torch.manual_seed(42)
         layer_a = RotorGadget(
@@ -450,7 +450,7 @@ class TestIntegration:
 
     def test_with_rotor_layer(self, algebra_3d):
         """Test combination with RotorLayer."""
-        from layers import RotorLayer
+        from clifra.layers import RotorLayer
 
         # Create a small network: Linear -> Rotor
         linear = RotorGadget(
@@ -472,7 +472,7 @@ class TestIntegration:
 
     def test_with_multi_rotor_layer(self, algebra_3d):
         """Test combination with MultiRotorLayer."""
-        from layers import MultiRotorLayer
+        from clifra.layers import MultiRotorLayer
 
         linear = RotorGadget(
             algebra=algebra_3d,

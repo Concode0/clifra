@@ -63,9 +63,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from core.config import make_algebra_from_config
-from layers import CliffordLinear, GeometricTransformerBlock
-from layers.adapters.projective import ProjectiveEmbedding
+from clifra.core.config import make_algebra_from_config
+from clifra.layers import CliffordLinear, GeometricTransformerBlock
+from clifra.layers.adapters.projective import ProjectiveEmbedding
 from tasks.base import BaseTask
 
 # ---------------------------------------------------------------------------

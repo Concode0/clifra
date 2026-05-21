@@ -2,12 +2,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-from core.planning import PlanningLimits
-from core.runtime.algebra import CliffordAlgebra
-from core.runtime.context import AlgebraContext
-from layers import ProductLayer, WedgeLayer
-from layers.blocks.multi_rotor_ffn import MultiRotorFFN
-from optimizers import make_riemannian_optimizer
+from clifra.core.planning import PlanningLimits
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.context import AlgebraContext
+from clifra.layers import ProductLayer, WedgeLayer
+from clifra.layers.blocks.multi_rotor_ffn import MultiRotorFFN
+from clifra.optimizers import make_riemannian_optimizer
 
 pytestmark = pytest.mark.unit
 

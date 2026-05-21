@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from functional import (
+from clifra.functional import (
     anti_commutator,
     commutator,
     geometric_product,

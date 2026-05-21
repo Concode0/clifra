@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from core.config import make_algebra
-from core.foundation.basis import (
+from clifra.core.config import make_algebra
+from clifra.core.foundation.basis import (
     basis_count_for_grades,
     basis_index_tuple_for_grades,
     basis_indices_for_grades,
@@ -11,21 +11,21 @@ from core.foundation.basis import (
     operation_coefficient,
     product_output_grades,
 )
-from core.foundation.layout import AlgebraSpec
-from core.planning.action import apply_graded_linear_action, apply_multi_graded_linear_action
-from core.planning.flow import GradeFlow
-from core.planning.layouts import build_product_request
-from core.planning.planner import GradePlanner
-from core.planning.policy import PlanningLimits
-from core.planning.product import (
+from clifra.core.foundation.layout import AlgebraSpec
+from clifra.core.planning.action import apply_graded_linear_action, apply_multi_graded_linear_action
+from clifra.core.planning.flow import GradeFlow
+from clifra.core.planning.layouts import build_product_request
+from clifra.core.planning.planner import GradePlanner
+from clifra.core.planning.policy import PlanningLimits
+from clifra.core.planning.product import (
     GradeProductExecutor,
     build_grade_product_plan,
 )
-from core.planning.tree import build_grade_plan_tree
-from core.planning.unary import build_unary_request
-from core.runtime.algebra import CliffordAlgebra
-from core.runtime.context import AlgebraContext
-from core.runtime.multivector import Multivector
+from clifra.core.planning.tree import build_grade_plan_tree
+from clifra.core.planning.unary import build_unary_request
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.context import AlgebraContext
+from clifra.core.runtime.multivector import Multivector
 
 pytestmark = pytest.mark.unit
 

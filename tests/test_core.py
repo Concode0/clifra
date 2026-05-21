@@ -10,7 +10,7 @@ import math
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 
 pytestmark = pytest.mark.unit
 

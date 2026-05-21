@@ -8,10 +8,10 @@
 import torch
 import torch.nn as nn
 
-from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
-from functional.activation import GeometricGELU
-from layers import CliffordLinear, MultiRotorLayer
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.functional.activation import GeometricGELU
+from clifra.layers import CliffordLinear, MultiRotorLayer
 
 
 class MultiRotorModel(CliffordModule):

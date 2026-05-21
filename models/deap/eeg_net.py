@@ -23,9 +23,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from core.config import make_algebra, make_algebra_from_config
-from core.foundation.module import AlgebraLike, CliffordModule
-from layers import (
+from clifra.core.config import make_algebra, make_algebra_from_config
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
+from clifra.layers import (
     CliffordLayerNorm,
     GeometricNeutralizer,
     GeometricTransformerBlock,

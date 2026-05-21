@@ -16,11 +16,11 @@ import numpy as np
 import torch
 from sklearn.base import BaseEstimator, RegressorMixin
 
-from core.config import make_algebra
-from core.runtime.decomposition import ExpPolicy
+from clifra.core.config import make_algebra
+from clifra.core.runtime.decomposition import ExpPolicy
+from clifra.optimizers.riemannian import RiemannianAdam
 from models.sr.net import SRGBN
 from models.sr.utils import make_lambdify_fn
-from optimizers.riemannian import RiemannianAdam
 
 
 class VersorSR(BaseEstimator, RegressorMixin):

@@ -30,7 +30,7 @@ import numpy as np
 import sympy
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 from models.sr.utils import LAMBDIFY_MODULES, make_lambdify_fn
 
 logger = logging.getLogger(__name__)
@@ -429,7 +429,7 @@ class RotorTranslator:
         Returns:
             List[RotorTerm] with symbolic expressions.
         """
-        from functional.activation import GeometricSquare
+        from clifra.functional.activation import GeometricSquare
 
         k = model.in_features
         n = self.algebra.n

@@ -15,10 +15,10 @@ Reference:
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 
 pytestmark = pytest.mark.unit
-from core.runtime.decomposition import (
+from clifra.core.runtime.decomposition import (
     ExpPolicy,
     _power_iteration_compiled_safe,
     compiled_safe_decomposed_exp,

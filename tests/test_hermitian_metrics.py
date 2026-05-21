@@ -3,12 +3,12 @@
 import pytest
 import torch
 
-from core.config import make_algebra
-from core.runtime.algebra import CliffordAlgebra
-from core.runtime.multivector import Multivector
+from clifra.core.config import make_algebra
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.multivector import Multivector
 
 pytestmark = pytest.mark.unit
-from core.runtime.metric import (
+from clifra.core.runtime.metric import (
     _hermitian_signs,
     clifford_conjugate,
     geometric_distance,

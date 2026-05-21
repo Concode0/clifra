@@ -3,29 +3,29 @@
 The mathematical kernel of Versor.
 
 ## Algebra
-::: core.runtime.algebra.CliffordAlgebra
+::: clifra.core.runtime.algebra.CliffordAlgebra
 
 ## Algebra Config
-::: core.config
+::: clifra.core.config
 
 ## Module
-::: core.foundation.module.CliffordModule
+::: clifra.core.foundation.module.CliffordModule
 
 ## Multivector
-::: core.runtime.multivector.Multivector
+::: clifra.core.runtime.multivector.Multivector
 
 ## Metric
-::: core.runtime.metric
+::: clifra.core.runtime.metric
 
 ## Decomposition
-::: core.runtime.decomposition
+::: clifra.core.runtime.decomposition
 
 ## Analysis
-::: core.analysis.MetricSearch
-::: core.analysis.GeodesicFlow
-::: core.analysis.DimensionLifter
-::: core.analysis.GeometricAnalyzer
-::: core.analysis.SpectralAnalyzer
-::: core.analysis.SymmetryDetector
-::: core.analysis.CommutatorAnalyzer
-::: core.analysis.EffectiveDimensionAnalyzer
+::: clifra.core.analysis.MetricSearch
+::: clifra.core.analysis.GeodesicFlow
+::: clifra.core.analysis.DimensionLifter
+::: clifra.core.analysis.GeometricAnalyzer
+::: clifra.core.analysis.SpectralAnalyzer
+::: clifra.core.analysis.SymmetryDetector
+::: clifra.core.analysis.CommutatorAnalyzer
+::: clifra.core.analysis.EffectiveDimensionAnalyzer

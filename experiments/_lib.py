@@ -40,11 +40,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from core.config import make_algebra
-from core.foundation.module import AlgebraLike
-from core.runtime.metric import hermitian_grade_spectrum
-from functional.activation import GeometricGELU
-from layers import CliffordLayerNorm, CliffordLinear, RotorLayer
+from clifra.core.config import make_algebra
+from clifra.core.foundation.module import AlgebraLike
+from clifra.core.runtime.metric import hermitian_grade_spectrum
+from clifra.functional.activation import GeometricGELU
+from clifra.layers import CliffordLayerNorm, CliffordLinear, RotorLayer
 
 # ---------------------------------------------------------------------------
 # Reproducibility

@@ -21,9 +21,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig
 
-from core.config import make_algebra_from_config
+from clifra.core.config import make_algebra_from_config
+from clifra.functional.loss import AsymmetryLoss, InvolutionConsistencyLoss
 from datalib.lqa import get_lqa_loaders
-from functional.loss import AsymmetryLoss, InvolutionConsistencyLoss
 from log import get_logger
 from models.lqa.glr_net import GLRNet
 from tasks.base import BaseTask

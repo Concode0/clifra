@@ -8,10 +8,10 @@
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
-from layers import CliffordGraphConv
-from layers.adapters.conformal import ConformalEmbedding
-from layers.adapters.projective import ProjectiveEmbedding
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers import CliffordGraphConv
+from clifra.layers.adapters.conformal import ConformalEmbedding
+from clifra.layers.adapters.projective import ProjectiveEmbedding
 
 pytestmark = pytest.mark.unit
 

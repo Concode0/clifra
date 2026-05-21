@@ -56,9 +56,12 @@ from torch.utils.data import DataLoader, Dataset
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
-from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
-from core.runtime.metric import signature_norm_squared
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.metric import signature_norm_squared
+from clifra.functional.activation import GeometricGELU
+from clifra.layers import CliffordLayerNorm, GeometricNeutralizer, MotherEmbedding, RotorLayer
+from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     build_visualization_metadata,
     count_parameters,
@@ -73,9 +76,6 @@ from experiments._lib import (
     setup_algebra,
     signature_metadata,
 )
-from functional.activation import GeometricGELU
-from layers import CliffordLayerNorm, GeometricNeutralizer, MotherEmbedding, RotorLayer
-from optimizers.riemannian import RiemannianAdam
 
 # ============================================================================
 # Physical priors
@@ -382,7 +382,7 @@ class StepRotorFlow(CliffordModule):
             channels * algebra.dim, channels * self.num_bivecs, kernel_size=kernel_size, dilation=dilation, padding=0
         )
         # Channel mix after the sandwich — preserves grade structure.
-        from layers import CliffordLinear  # local import keeps top section tidy
+        from clifra.layers import CliffordLinear  # local import keeps top section tidy
 
         self.channel_mix = CliffordLinear(algebra, channels, channels)
 

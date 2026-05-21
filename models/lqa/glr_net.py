@@ -24,13 +24,13 @@ real sequence structure to attend over:
 import torch
 import torch.nn as nn
 
-from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
-from layers.adapters.embedding import RotaryBivectorPE
-from layers.adapters.mother import MotherEmbedding
-from layers.blocks.transformer import GeometricTransformerBlock
-from layers.primitives.normalization import CliffordLayerNorm
-from layers.primitives.projection import GeometricNeutralizer
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers.adapters.embedding import RotaryBivectorPE
+from clifra.layers.adapters.mother import MotherEmbedding
+from clifra.layers.blocks.transformer import GeometricTransformerBlock
+from clifra.layers.primitives.normalization import CliffordLayerNorm
+from clifra.layers.primitives.projection import GeometricNeutralizer
 
 from .heads import ChainReasoningHead, EntailmentHead, NegationHead
 

@@ -9,8 +9,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 
-from core.runtime.algebra import CliffordAlgebra
-from optimizers.riemannian import MANIFOLD_EUCLIDEAN
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.optimizers.riemannian import MANIFOLD_EUCLIDEAN
 
 from .config import GDOConfig
 from .dimensional_lift import DimensionalLiftOracle

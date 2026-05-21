@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 
 pytestmark = pytest.mark.unit
 from models.sr.net import SRGBN

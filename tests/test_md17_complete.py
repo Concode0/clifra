@@ -3,12 +3,12 @@
 import pytest
 import torch
 
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 
 pytestmark = pytest.mark.unit
-from core.runtime.decomposition import ExpPolicy
-from core.runtime.metric import hermitian_grade_spectrum, hermitian_norm
-from functional.loss import ConservativeLoss, HermitianGradeRegularization
+from clifra.core.runtime.decomposition import ExpPolicy
+from clifra.core.runtime.metric import hermitian_grade_spectrum, hermitian_norm
+from clifra.functional.loss import ConservativeLoss, HermitianGradeRegularization
 from models.md17 import DynamicRotorGenerator, GaussianRBF, MD17ForceNet, MD17InteractionBlock
 
 
@@ -116,7 +116,7 @@ class TestMD17ForceNet:
         assert force.shape == (8, 3)
 
     def test_forward_with_exact_policy(self, algebra):
-        from core.runtime.decomposition import ExpPolicy
+        from clifra.core.runtime.decomposition import ExpPolicy
 
         algebra.exp_policy = ExpPolicy.PRECISE
         model = MD17ForceNet(

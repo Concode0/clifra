@@ -17,7 +17,7 @@ import numpy as np
 import sympy
 import torch
 
-from core.config import make_algebra
+from clifra.core.config import make_algebra
 from models.sr.translator import RotorTerm
 from models.sr.utils import (
     make_lambdify_fn,

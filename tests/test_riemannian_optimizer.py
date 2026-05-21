@@ -14,9 +14,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.runtime.algebra import CliffordAlgebra
-from layers import MultiRotorLayer, RotorGadget, RotorLayer
-from optimizers.riemannian import (
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.layers import MultiRotorLayer, RotorGadget, RotorLayer
+from clifra.optimizers.riemannian import (
     MANIFOLD_EUCLIDEAN,
     MANIFOLD_SPHERE,
     MANIFOLD_SPIN,
@@ -554,7 +554,7 @@ def test_empty_parameters(algebra_3d):
 
 def test_manifold_tagging(algebra_3d):
     """Verify layers tag their parameters with correct manifold types."""
-    from layers.primitives.reflection import ReflectionLayer
+    from clifra.layers.primitives.reflection import ReflectionLayer
 
     rotor = RotorLayer(algebra_3d, channels=4)
     assert getattr(rotor.bivector_weights, "_manifold", None) == MANIFOLD_SPIN
@@ -598,7 +598,7 @@ def test_group_parameters_rejects_unknown_manifold():
 
 def test_from_model_groups(algebra_3d):
     """Verify from_model creates separate groups per manifold."""
-    from layers.primitives.reflection import ReflectionLayer
+    from clifra.layers.primitives.reflection import ReflectionLayer
 
     class MixedModel(nn.Module):
         def __init__(self):
@@ -639,7 +639,7 @@ def test_make_riemannian_optimizer_factory(algebra_3d):
 
 def test_sphere_retraction(algebra_3d):
     """Verify sphere-tagged params are projected to unit sphere after step."""
-    from layers.primitives.reflection import ReflectionLayer
+    from clifra.layers.primitives.reflection import ReflectionLayer
 
     layer = ReflectionLayer(algebra_3d, channels=4)
     opt = RiemannianAdam.from_model(layer, lr=0.01, algebra=algebra_3d)
@@ -713,7 +713,7 @@ def test_legacy_backward_compat(algebra_3d):
 @pytest.mark.slow
 def test_mixed_model_convergence(algebra_3d):
     """Verify optimizer converges with mixed manifold parameter groups."""
-    from layers.primitives.reflection import ReflectionLayer
+    from clifra.layers.primitives.reflection import ReflectionLayer
 
     class MixedModel(nn.Module):
         def __init__(self):

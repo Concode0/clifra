@@ -25,8 +25,8 @@ import streamlit as st
 import torch
 import torch.optim as optim
 
-from core.config import make_algebra
-from layers import BladeSelector, RotorLayer
+from clifra.core.config import make_algebra
+from clifra.layers import BladeSelector, RotorLayer
 
 # Setup Page
 st.set_page_config(page_title="Versor: Geometric Algebra Demo", layout="wide")

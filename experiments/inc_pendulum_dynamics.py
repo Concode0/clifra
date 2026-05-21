@@ -52,9 +52,11 @@ from torch.utils.data import DataLoader, Dataset
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
-from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
-from core.runtime.metric import hermitian_norm
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.metric import hermitian_norm
+from clifra.layers import BladeSelector, CliffordLayerNorm, CliffordLinear
+from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     apply_residual_block,
     build_visualization_metadata,
@@ -72,8 +74,6 @@ from experiments._lib import (
     setup_algebra,
     signature_metadata,
 )
-from layers import BladeSelector, CliffordLayerNorm, CliffordLinear
-from optimizers.riemannian import RiemannianAdam
 
 # ==============================================================================
 # Physics Simulation
@@ -435,7 +435,7 @@ def _rotor_norm_residual(model: HamiltonianRotorNet) -> float:
     so this number should sit near machine epsilon. A spike means the bivector
     parameter has slipped outside the regime where the closed form is exact.
     """
-    from layers.primitives.rotor import RotorLayer
+    from clifra.layers.primitives.rotor import RotorLayer
 
     deviations = []
     for module in model.modules():

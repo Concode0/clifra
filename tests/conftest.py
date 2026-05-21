@@ -1,6 +1,6 @@
 import pytest
 
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import CliffordAlgebra
 
 DEVICE = "cpu"
 

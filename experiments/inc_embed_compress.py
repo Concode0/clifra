@@ -61,11 +61,19 @@ import matplotlib
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
 
-from core.analysis._types import DimensionResult
-from core.analysis.dimension import DimensionLifter, EffectiveDimensionAnalyzer
-from core.analysis.spectral import SpectralAnalyzer
-from core.foundation.module import CliffordModule
-from core.runtime.algebra import CliffordAlgebra
+from clifra.core.analysis._types import DimensionResult
+from clifra.core.analysis.dimension import DimensionLifter, EffectiveDimensionAnalyzer
+from clifra.core.analysis.spectral import SpectralAnalyzer
+from clifra.core.foundation.module import CliffordModule
+from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.functional.activation import GeometricGELU
+from clifra.layers import (
+    BladeSelector,
+    CliffordLayerNorm,
+    CliffordLinear,
+    RotorLayer,
+)
+from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     build_visualization_metadata,
     ensure_output_dir,
@@ -75,14 +83,6 @@ from experiments._lib import (
     setup_algebra,
     signature_metadata,
 )
-from functional.activation import GeometricGELU
-from layers import (
-    BladeSelector,
-    CliffordLayerNorm,
-    CliffordLinear,
-    RotorLayer,
-)
-from optimizers.riemannian import RiemannianAdam
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

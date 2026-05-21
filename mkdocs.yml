@@ -1,7 +1,7 @@
-site_name: Versor
-site_url: https://Concode0.github.io/Versor/
-repo_url: https://github.com/Concode0/Versor
-repo_name: Concode0/Versor
+site_name: Clifra
+site_url: https://Concode0.github.io/clifra/
+repo_url: https://github.com/Concode0/clifra
+repo_name: Concode0/clifra
 
 theme:
   name: material
