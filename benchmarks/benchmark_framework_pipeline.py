@@ -135,8 +135,6 @@ def _compact_product_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
-        left_compact=True,
-        right_compact=True,
         compact_output=True,
     )
 
@@ -179,8 +177,6 @@ def _context_compact_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(0, 2),
-            left_compact=True,
-            right_compact=True,
             compact_output=True,
         ),
     )
@@ -211,8 +207,6 @@ def _pairwise_context_case(args, dtype: torch.dtype, device: str) -> BenchmarkCa
             left_grades=(2,),
             right_grades=(1,),
             output_grades=(3,),
-            left_compact=True,
-            right_compact=True,
             compact_output=True,
             pairwise=True,
         ),
@@ -239,8 +233,6 @@ def _layer_pipeline_case(args, dtype: torch.dtype, device: str) -> BenchmarkCase
                 left_grades=(2,),
                 right_grades=(1,),
                 output_grades=(3,),
-                left_compact=True,
-                right_compact=True,
                 compact_output=True,
             )
 

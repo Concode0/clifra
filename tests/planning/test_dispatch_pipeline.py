@@ -53,8 +53,6 @@ def test_product_layer_pairwise_compact_widths_match_dense_reference():
         left_grades=(2,),
         right_grades=(1,),
         output_grades=(3,),
-        left_compact=True,
-        right_compact=True,
         compact_output=True,
         pairwise=True,
     )
@@ -78,6 +76,14 @@ def test_product_layer_pairwise_compact_widths_match_dense_reference():
     assert len(context.planner._product_executors) == cache_size
 
 
+def test_product_layer_validates_declared_layouts_against_grades():
+    context = AlgebraContext(p=5, q=0, device="cpu")
+    vector_layout = context.layout((1,))
+
+    with pytest.raises(ValueError, match="left_layout and left_grades disagree"):
+        ProductLayer(context, left_grades=(2,), left_layout=vector_layout)
+
+
 def test_compact_layer_pipeline_trains_with_riemannian_optimizer_factory():
     context = AlgebraContext(p=6, q=0, device="cpu")
     vector_layout = context.layout((1,))
@@ -98,8 +104,6 @@ def test_compact_layer_pipeline_trains_with_riemannian_optimizer_factory():
                 left_grades=(2,),
                 right_grades=(1,),
                 output_grades=(3,),
-                left_compact=True,
-                right_compact=True,
                 compact_output=True,
             )
             self.scale = nn.Parameter(torch.ones(()))
@@ -159,8 +163,6 @@ def test_product_layer_uses_context_planning_limits():
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
-        left_compact=True,
-        right_compact=True,
         compact_output=True,
     )
 
