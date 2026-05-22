@@ -24,9 +24,10 @@ def _normalize_optional_grades(grades: Optional[Iterable[int]], n: int, *, name:
 class ProductLayer(CliffordModule):
     """Apply a geometric algebra product inside ``nn.Module`` graphs.
 
-    The layer is intentionally thin: grade declarations and compact/pairwise
-    behavior are forwarded to ``algebra.projected_product`` when supplied,
-    while the dense no-declaration path uses the algebra's direct kernels.
+    Grade and layout declarations define the tensor lane contract. If a caller
+    declares any input or output layout, the layer returns the planned output
+    layout lanes. If no layout is declared, it uses the algebra's direct full
+    multivector product.
     """
 
     def __init__(
@@ -40,13 +41,12 @@ class ProductLayer(CliffordModule):
         left_layout: GradeLayout = None,
         right_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
-        compact_output: bool = False,
         pairwise: bool = False,
     ):
         """Initialize a product layer.
 
         Args:
-            algebra: Dense ``CliffordAlgebra`` or planned ``AlgebraContext``.
+            algebra: Algebra host.
             op: Product route: ``"gp"``, ``"wedge"``, ``"inner"``,
                 ``"commutator"``, or ``"anti_commutator"``.
             left_grades: Declared input grades for the left operand.
@@ -55,8 +55,7 @@ class ProductLayer(CliffordModule):
             left_layout: Optional explicit left operand layout.
             right_layout: Optional explicit right operand layout.
             output_layout: Optional explicit output layout.
-            compact_output: Return compact output instead of dense coefficients.
-            pairwise: Treat the penultimate dimension of each compact operand
+            pairwise: Treat the penultimate dimension of each declared-layout operand
                 as independent left/right item axes.
         """
         super().__init__(algebra)
@@ -67,7 +66,6 @@ class ProductLayer(CliffordModule):
         self.left_layout = _validate_optional_layout(algebra, left_layout, self.left_grades, "left")
         self.right_layout = _validate_optional_layout(algebra, right_layout, self.right_grades, "right")
         self.output_layout = _validate_optional_layout(algebra, output_layout, self.output_grades, "output")
-        self.compact_output = bool(compact_output)
         self.pairwise = bool(pairwise)
 
     def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -89,7 +87,7 @@ class ProductLayer(CliffordModule):
             kwargs["right_layout"] = self.right_layout
         if self.output_layout is not None:
             kwargs["output_layout"] = self.output_layout
-        if self.compact_output:
+        if kwargs:
             kwargs["compact_output"] = True
         if self.pairwise:
             kwargs["pairwise"] = True
@@ -109,8 +107,6 @@ class ProductLayer(CliffordModule):
             parts.append(f"right_layout={self.right_layout.grades}")
         if self.output_layout is not None:
             parts.append(f"output_layout={self.output_layout.grades}")
-        if self.compact_output:
-            parts.append("compact_output=True")
         if self.pairwise:
             parts.append("pairwise=True")
         return ", ".join(parts)

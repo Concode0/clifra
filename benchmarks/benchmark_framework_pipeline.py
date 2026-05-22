@@ -185,7 +185,6 @@ def _compact_product_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
-        compact_output=True,
     )
 
     return BenchmarkCase(
@@ -309,14 +308,12 @@ def _layer_pipeline_case(args, dtype: torch.dtype, device: str) -> BenchmarkCase
                 left_grades=(1,),
                 right_grades=(1,),
                 output_grades=(2,),
-                compact_output=True,
             )
             self.wedge_trivector = WedgeLayer(
                 context,
                 left_grades=(2,),
                 right_grades=(1,),
                 output_grades=(3,),
-                compact_output=True,
             )
 
         def forward(self, left, right, third):

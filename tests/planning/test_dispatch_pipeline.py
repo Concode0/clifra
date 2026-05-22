@@ -23,9 +23,10 @@ def test_product_layer_dense_matches_algebra(algebra_3d):
     assert torch.allclose(actual, expected)
 
 
-def test_wedge_layer_declared_grades_match_planned_algebra(algebra_3d):
+def test_wedge_layer_declared_grades_return_output_layout_lanes(algebra_3d):
     left = algebra_3d.embed_vector(torch.randn(4, 5, algebra_3d.n))
     right = algebra_3d.embed_vector(torch.randn(4, 5, algebra_3d.n))
+    output_layout = algebra_3d.layout((2,))
     layer = WedgeLayer(
         algebra_3d,
         left_grades=(1,),
@@ -34,8 +35,11 @@ def test_wedge_layer_declared_grades_match_planned_algebra(algebra_3d):
     )
 
     actual = layer(left, right)
-    expected = algebra_3d.wedge(left, right, left_grades=(1,), right_grades=(1,), output_grades=(2,))
+    expected = output_layout.compact(
+        algebra_3d.wedge(left, right, left_grades=(1,), right_grades=(1,), output_grades=(2,))
+    )
 
+    assert actual.shape[-1] == output_layout.dim
     assert torch.allclose(actual, expected)
 
 
@@ -53,7 +57,6 @@ def test_product_layer_pairwise_compact_widths_match_dense_reference():
         left_grades=(2,),
         right_grades=(1,),
         output_grades=(3,),
-        compact_output=True,
         pairwise=True,
     )
 
@@ -97,14 +100,12 @@ def test_compact_layer_pipeline_trains_with_riemannian_optimizer_factory():
                 left_grades=(1,),
                 right_grades=(1,),
                 output_grades=(2,),
-                compact_output=True,
             )
             self.wedge_trivector = WedgeLayer(
                 context,
                 left_grades=(2,),
                 right_grades=(1,),
                 output_grades=(3,),
-                compact_output=True,
             )
             self.scale = nn.Parameter(torch.ones(()))
 
@@ -163,7 +164,6 @@ def test_product_layer_uses_context_planning_limits():
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(0, 2),
-        compact_output=True,
     )
 
     with pytest.raises(ValueError, match="basis interactions"):
