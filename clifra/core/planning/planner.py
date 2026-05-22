@@ -55,6 +55,7 @@ class GradePlanner:
         self.spec = AlgebraSpec.from_algebra(algebra)
         self._product_executors = {}
         self._unary_executors = {}
+        self._bivector_signs_cache = {}
 
     def layout(self, grades):
         """Return the compact layout for ``grades``."""
@@ -81,21 +82,28 @@ class GradePlanner:
         if dtype is None:
             dtype = getattr(self.algebra, "dtype", torch.float32)
         layout = self.layout((2,))
-        signs = [
-            operation_coefficient(index, index, self.spec.p, self.spec.q, self.spec.r, "gp")
-            for index in layout.basis_indices
-        ]
-        return torch.tensor(signs, dtype=dtype, device=device)
+        key = (layout.grades, str(torch.device(device)), str(dtype))
+        cached = self._bivector_signs_cache.get(key)
+        if cached is None:
+            signs = [
+                operation_coefficient(index, index, self.spec.p, self.spec.q, self.spec.r, "gp")
+                for index in layout.basis_indices
+            ]
+            cached = torch.tensor(signs, dtype=dtype, device=device)
+            self._bivector_signs_cache[key] = cached
+        return cached
 
     def clear_cache(self) -> None:
         """Drop cached executor modules."""
         self._product_executors.clear()
         self._unary_executors.clear()
+        self._bivector_signs_cache.clear()
 
     def _apply(self, fn):
         """Apply a PyTorch module-style transform to cached executor buffers."""
         product_executors = list(self._product_executors.values())
         self._product_executors.clear()
+        self._bivector_signs_cache.clear()
         for executor in product_executors:
             executor._apply(fn)
             self._product_executors[self._product_cache_key(executor)] = executor
@@ -192,6 +200,43 @@ class GradePlanner:
             executor = GradeProductExecutor(plan)
             if cache:
                 self._product_executors[key] = executor
+        return executor
+
+    def product_executor_for_layouts(
+        self,
+        *,
+        op: str,
+        left_layout: GradeLayout,
+        right_layout: GradeLayout,
+        output_layout: GradeLayout,
+        dtype: torch.dtype,
+        device,
+        cache: bool = True,
+    ) -> GradeProductExecutor:
+        """Return a cached executor when layout resolution is already complete."""
+        normalized_op = normalize_product_op(op)
+        resolved_device = torch.device(device)
+        key = (
+            self.spec,
+            str(resolved_device),
+            str(dtype),
+            normalized_op,
+            left_layout.grades,
+            right_layout.grades,
+            output_layout.grades,
+        )
+        executor = self._product_executors.get(key) if cache else None
+        if executor is None:
+            request = ProductRequest(
+                spec=self.spec,
+                op=normalized_op,
+                left_value=ValueLayout.active(self.spec, left_layout),
+                right_value=ValueLayout.active(self.spec, right_layout),
+                output_value=ValueLayout.active(self.spec, output_layout),
+                dtype=dtype,
+                device=resolved_device,
+            )
+            executor = self.product_executor_for_request(request, cache=cache)
         return executor
 
     def product_tree(self, *, op: str, left_grades, right_grades, output_grades=None):

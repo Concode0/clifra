@@ -65,6 +65,7 @@ class AlgebraContext(AlgebraHostMixin):
         self._default_grades = None if default_grades is None else normalize_grades(default_grades, self.n)
         self._default_layout: Optional[GradeLayout] = None
         self._g1_indices_cache: dict[str, torch.Tensor] = {}
+        self._layout_eye_cache: dict[tuple[tuple[int, ...], str, str], torch.Tensor] = {}
         self.planner = GradePlanner(self)
         self._sync_eps()
 
@@ -93,6 +94,7 @@ class AlgebraContext(AlgebraHostMixin):
             self._dtype = probe.dtype
         self._sync_eps()
         self._g1_indices_cache.clear()
+        self._layout_eye_cache.clear()
         self.planner._apply(fn)
         return self
 
@@ -104,6 +106,7 @@ class AlgebraContext(AlgebraHostMixin):
             self._dtype = resolve_dtype(dtype)
         self._sync_eps()
         self._g1_indices_cache.clear()
+        self._layout_eye_cache.clear()
         self.planner.clear_cache()
         return self
 
@@ -180,7 +183,7 @@ class AlgebraContext(AlgebraHostMixin):
             raise ValueError(f"AlgebraContext.exp output must contain only even grades, got {output_layout.grades}")
 
         values = mv if mv.shape[-1] == input_layout.dim else input_layout.compact(mv)
-        basis = torch.eye(output_layout.dim, device=values.device, dtype=values.dtype)
+        basis = self._layout_eye(output_layout, device=values.device, dtype=values.dtype)
         columns = self.geometric_product(
             values.unsqueeze(-2),
             basis,
@@ -193,6 +196,14 @@ class AlgebraContext(AlgebraHostMixin):
         scalar_position = output_layout.basis_indices.index(0)
         output = exp_operator[..., :, scalar_position]
         return (output, output_layout) if return_layout else output
+
+    def _layout_eye(self, layout: GradeLayout, *, device, dtype: torch.dtype) -> torch.Tensor:
+        key = (layout.grades, str(torch.device(device)), str(dtype))
+        cached = self._layout_eye_cache.get(key)
+        if cached is None:
+            cached = torch.eye(layout.dim, device=device, dtype=dtype)
+            self._layout_eye_cache[key] = cached
+        return cached
 
     def _basis_vector_indices(self, device) -> torch.Tensor:
         resolved = torch.device(device)

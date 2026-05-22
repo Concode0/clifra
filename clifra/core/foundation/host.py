@@ -12,7 +12,9 @@ from clifra.core.execution.action import (
     PairedBivectorActionExecutor,
     VersorActionExecutor,
 )
+from clifra.core.foundation.basis import normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.planning.layouts import normalize_product_op
 from clifra.core.storage import compact_grade_norms
 from clifra.core.storage import hermitian_signs as _hermitian_signs
 
@@ -118,6 +120,27 @@ class AlgebraHostMixin:
         pairwise: bool = False,
     ):
         """Execute a planner-resolved grade-restricted product."""
+        if (
+            left_layout is not None
+            and right_layout is not None
+            and output_layout is not None
+            and left_active_lanes
+            and right_active_lanes
+        ):
+            output = self._projected_product_with_explicit_layouts(
+                A,
+                B,
+                op=op,
+                left_grades=left_grades,
+                right_grades=right_grades,
+                output_grades=output_grades,
+                left_layout=left_layout,
+                right_layout=right_layout,
+                output_layout=output_layout,
+                pairwise=pairwise,
+            )
+            return (output, output_layout) if return_layout else output
+
         request = self.planner.product_request(
             A,
             B,
@@ -143,6 +166,48 @@ class AlgebraHostMixin:
             self._check_elementwise_prefix(left_values, right_values)
             output = executor.forward_compact(left_values, right_values)
         return (output, request.output_layout) if return_layout else output
+
+    def _projected_product_with_explicit_layouts(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        *,
+        op: str,
+        left_grades,
+        right_grades,
+        output_grades,
+        left_layout: GradeLayout,
+        right_layout: GradeLayout,
+        output_layout: GradeLayout,
+        pairwise: bool,
+    ) -> torch.Tensor:
+        """Fast path for already-resolved layout contracts.
+
+        Layer/executor internals normally call products with concrete layouts.
+        This avoids re-inferring the same request on every forward while still
+        validating tensor lane widths and reusing the planner executor cache.
+        """
+        self._check_declared_layout(left_layout, left_grades, "left")
+        self._check_declared_layout(right_layout, right_grades, "right")
+        self._check_declared_layout(output_layout, output_grades, "output")
+        if left.device != right.device:
+            raise ValueError(f"product operands must be on the same device, got {left.device} and {right.device}")
+
+        executor = self.planner.product_executor_for_layouts(
+            op=normalize_product_op(op),
+            left_layout=left_layout,
+            right_layout=right_layout,
+            output_layout=output_layout,
+            dtype=torch.promote_types(left.dtype, right.dtype),
+            device=left.device,
+        )
+        left_values = self._active_values_for_layout(left, left_layout, "left")
+        right_values = self._active_values_for_layout(right, right_layout, "right")
+        if pairwise:
+            self._check_pairwise_prefix(left_values, right_values)
+            return executor.forward_pairwise_compact(left_values, right_values)
+        self._check_elementwise_prefix(left_values, right_values)
+        return executor.forward_compact(left_values, right_values)
 
     def projected_geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Projected geometric product convenience wrapper."""
@@ -304,6 +369,24 @@ class AlgebraHostMixin:
         if grades is not None:
             return self.layout(grades)
         return None
+
+    @staticmethod
+    def _check_declared_layout(layout: GradeLayout, grades, side: str) -> None:
+        if grades is not None and layout.grades != normalize_grades(grades, layout.spec.n, name=f"{side}_grades"):
+            raise ValueError(f"{side}_layout and {side}_grades disagree")
+
+    @staticmethod
+    def _active_values_for_layout(values: torch.Tensor, layout: GradeLayout, name: str) -> torch.Tensor:
+        if values.ndim < 1:
+            raise ValueError(f"{name} must include a coefficient lane dimension, got shape {tuple(values.shape)}")
+        if values.shape[-1] == layout.dim:
+            return values
+        if values.shape[-1] == layout.spec.dim:
+            return layout.compact(values)
+        raise ValueError(
+            f"{name} last dimension must be {layout.dim} for grades {layout.grades} or "
+            f"{layout.spec.dim} full lanes, got {values.shape[-1]}"
+        )
 
     @staticmethod
     def _check_elementwise_prefix(left: torch.Tensor, right: torch.Tensor) -> None:
