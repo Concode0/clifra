@@ -23,11 +23,11 @@ from clifra.core.runtime.accessors import materialize_dense
 from clifra.core.runtime.accessors import resolve_layout as _resolve_layout
 from clifra.core.runtime.actions import apply_multi_versor_action, apply_versor_action
 from clifra.core.runtime.actions import grade_norms as _grade_norms
-from clifra.core.storage import resolve_planned_dispatch
+from clifra.core.storage import resolve_output_boundary
 
 
 class AlgebraRuntimeMixin:
-    """Shared runtime protocol for dense kernels and planned contexts."""
+    """Shared runtime protocol for full kernels and planned active-lane contexts."""
 
     def layout(self, grades: Optional[Iterable[int]] = None) -> GradeLayout:
         """Return a compact grade layout or the algebra's default layout."""
@@ -100,11 +100,11 @@ class AlgebraRuntimeMixin:
         return _hermitian_signs(self, layout=layout, grades=grades, device=device, dtype=dtype)
 
     def versor_action(self, values: torch.Tensor, weights: torch.Tensor, **kwargs):
-        """Apply a parameterized versor action through the host storage dispatcher."""
+        """Apply a parameterized versor action through the host layout dispatcher."""
         return apply_versor_action(self, values, weights, **kwargs)
 
     def multi_versor_action(self, values: torch.Tensor, weights: torch.Tensor, mix: torch.Tensor, **kwargs):
-        """Apply a weighted versor superposition through the host storage dispatcher."""
+        """Apply a weighted versor superposition through the host layout dispatcher."""
         return apply_multi_versor_action(self, values, weights, mix, **kwargs)
 
     def grade_norms(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -123,9 +123,9 @@ class AlgebraRuntimeMixin:
         right_layout=None,
         output_layout=None,
         op: str = "gp",
-        left_compact: bool = False,
-        right_compact: bool = False,
-        compact_output: bool = False,
+        left_active_lanes: bool = False,
+        right_active_lanes: bool = False,
+        active_output: bool = False,
         return_layout: bool = False,
         pairwise: bool = False,
     ):
@@ -137,13 +137,13 @@ class AlgebraRuntimeMixin:
         """
         left_layout = self._declared_layout(left_grades, left_layout)
         right_layout = self._declared_layout(right_grades, right_layout)
-        if not left_compact and left_layout is not None and A.shape[-1] == left_layout.dim:
-            left_compact = left_layout.dim != self.dim
-        if not right_compact and right_layout is not None and B.shape[-1] == right_layout.dim:
-            right_compact = right_layout.dim != self.dim
-        if not left_compact:
+        if not left_active_lanes and left_layout is not None and A.shape[-1] == left_layout.dim:
+            left_active_lanes = left_layout.dim != self.dim
+        if not right_active_lanes and right_layout is not None and B.shape[-1] == right_layout.dim:
+            right_active_lanes = right_layout.dim != self.dim
+        if not left_active_lanes:
             check_multivector(A, self, "projected_product(A)")
-        if not right_compact:
+        if not right_active_lanes:
             check_multivector(B, self, "projected_product(B)")
 
         request = self.planner.product_request(
@@ -156,8 +156,8 @@ class AlgebraRuntimeMixin:
             right_layout=right_layout,
             output_layout=output_layout,
             op=op,
-            left_compact=left_compact,
-            right_compact=right_compact,
+            left_active_lanes=left_active_lanes,
+            right_active_lanes=right_active_lanes,
         )
         executor = self.planner.product_executor_for_request(request)
 
@@ -165,13 +165,13 @@ class AlgebraRuntimeMixin:
             values = self._execute_pairwise_product(A, B, request, executor)
         else:
             values = self._execute_elementwise_product(A, B, request, executor)
-        dispatch = resolve_planned_dispatch(request, compact_output=compact_output)
+        boundary = resolve_output_boundary(request, active_output=active_output)
 
         if return_layout:
-            return values, dispatch.output_storage.layout
-        if dispatch.output_storage.is_compact:
+            return values, boundary.output_value.layout
+        if boundary.output_value.uses_active_lanes:
             return values
-        return materialize_dense(self, values, layout=dispatch.output_storage.layout)
+        return materialize_dense(self, values, layout=boundary.output_value.layout)
 
     def projected_geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Projected geometric product convenience wrapper."""
@@ -202,8 +202,8 @@ class AlgebraRuntimeMixin:
         output_grades=None,
         input_layout: Optional[GradeLayout] = None,
         output_layout: Optional[GradeLayout] = None,
-        input_compact: bool = False,
-        compact_output: bool = False,
+        input_active_lanes: bool = False,
+        active_output: bool = False,
         return_layout: bool = False,
     ):
         """Execute a unary operation through the shared static grade planner."""
@@ -214,17 +214,17 @@ class AlgebraRuntimeMixin:
             output_grades=output_grades,
             input_layout=input_layout,
             output_layout=output_layout,
-            input_compact=input_compact,
+            input_active_lanes=input_active_lanes,
         )
         executor = self.planner.unary_executor_for_request(request)
-        output = executor.forward_compact(values) if request.input_compact else executor(values)
-        dispatch = resolve_planned_dispatch(request, compact_output=compact_output)
+        output = executor.forward_compact(values) if request.input_uses_active_lanes else executor(values)
+        boundary = resolve_output_boundary(request, active_output=active_output)
 
         if return_layout:
-            return output, dispatch.output_storage.layout
-        if dispatch.output_storage.is_compact:
+            return output, boundary.output_value.layout
+        if boundary.output_value.uses_active_lanes:
             return output
-        return materialize_dense(self, output, layout=dispatch.output_storage.layout)
+        return materialize_dense(self, output, layout=boundary.output_value.layout)
 
     def planned_linear_action(
         self,
@@ -235,8 +235,8 @@ class AlgebraRuntimeMixin:
         output_grades=None,
         input_layout: Optional[GradeLayout] = None,
         output_layout: Optional[GradeLayout] = None,
-        input_compact: bool = False,
-        compact_output: bool = False,
+        input_active_lanes: bool = False,
+        active_output: bool = False,
         return_layout: bool = False,
     ):
         """Apply a vector-space linear action to compact grade lanes.
@@ -247,17 +247,19 @@ class AlgebraRuntimeMixin:
         """
         input_layout = self._declared_layout(input_grades, input_layout)
         if input_layout is None:
-            if input_compact:
-                raise ValueError("input_layout or input_grades is required for compact planned_linear_action")
+            if input_active_lanes:
+                raise ValueError("input_layout or input_grades is required for active-lane planned_linear_action")
             input_layout = self.default_layout()
 
         if output_layout is None:
             output_layout = self.layout(output_grades) if output_grades is not None else input_layout
 
-        if input_compact:
+        if input_active_lanes:
             active_values = values
             if active_values.shape[-1] != input_layout.dim:
-                raise ValueError(f"input compact dimension must be {input_layout.dim}, got {active_values.shape[-1]}")
+                raise ValueError(
+                    f"input active-lane dimension must be {input_layout.dim}, got {active_values.shape[-1]}"
+                )
         else:
             check_multivector(values, self, "planned_linear_action(values)")
             active_values = input_layout.compact(values)
@@ -268,7 +270,7 @@ class AlgebraRuntimeMixin:
 
         if return_layout:
             return output, output_layout
-        if compact_output:
+        if active_output:
             return output
         return materialize_dense(self, output, layout=output_layout)
 
@@ -283,9 +285,9 @@ class AlgebraRuntimeMixin:
         return self.layout(default_grades)
 
     def _execute_elementwise_product(self, left, right, request, executor):
-        if request.left_compact or request.right_compact:
-            left_values = left if request.left_compact else executor.left_layout.compact(left)
-            right_values = right if request.right_compact else executor.right_layout.compact(right)
+        if request.left_uses_active_lanes or request.right_uses_active_lanes:
+            left_values = left if request.left_uses_active_lanes else executor.left_layout.compact(left)
+            right_values = right if request.right_uses_active_lanes else executor.right_layout.compact(right)
             self._check_elementwise_prefix(left_values, right_values)
             return executor.forward_compact(left_values, right_values)
 
@@ -293,8 +295,8 @@ class AlgebraRuntimeMixin:
         return executor(left, right)
 
     def _execute_pairwise_product(self, left, right, request, executor):
-        left_values = left if request.left_compact else executor.left_layout.compact(left)
-        right_values = right if request.right_compact else executor.right_layout.compact(right)
+        left_values = left if request.left_uses_active_lanes else executor.left_layout.compact(left)
+        right_values = right if request.right_uses_active_lanes else executor.right_layout.compact(right)
         self._check_pairwise_prefix(left_values, right_values)
         return executor.forward_pairwise_compact(left_values, right_values)
 

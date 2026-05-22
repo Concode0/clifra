@@ -12,7 +12,7 @@ from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.storage import resolve_layer_storage
+from clifra.core.storage import resolve_layer_layout_contract
 
 from ..blocks.attention import GeometricProductAttention
 from ..primitives.normalization import CliffordLayerNorm
@@ -105,8 +105,8 @@ class EntropyGatedAttention(CliffordModule):
         self.channels = channels
         self.eta = eta
         self.H_base = H_base
-        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
-        self.layout = self.storage.layout
+        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout = self.layout_contract.layout
         self.base_attention = GeometricProductAttention(
             algebra,
             channels,
@@ -116,8 +116,8 @@ class EntropyGatedAttention(CliffordModule):
         )
 
         # Cache grade-2 positions and lane mask for dense and compact layouts.
-        g2_idx = self.storage.grade_positions(2, device=algebra.device)
-        g2_mask = torch.zeros(self.storage.lane_dim, device=algebra.device, dtype=torch.float32)
+        g2_idx = self.layout_contract.grade_positions(2, device=algebra.device)
+        g2_mask = torch.zeros(self.layout_contract.lane_dim, device=algebra.device, dtype=torch.float32)
         if g2_idx.numel() > 0:
             g2_mask.index_fill_(0, g2_idx, 1.0)
         self.register_buffer("g2_idx", g2_idx)
@@ -136,11 +136,11 @@ class EntropyGatedAttention(CliffordModule):
         Returns:
             Attended multivectors [B, L, C, D].
         """
-        self.storage.validate_input(
+        self.layout_contract.validate_input(
             x,
             channels=self.channels,
             name="EntropyGatedAttention input",
-            allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
+            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
         # 1. Calculate Information Entropy of Bivector Energy
         # x: [B, L, C, D]

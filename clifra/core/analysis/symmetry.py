@@ -124,7 +124,7 @@ class SymmetryDetector:
         alpha = self.algebra.grade_involution(
             mv_data,
             input_grades=full_grades(self.algebra),
-            compact_output=True,
+            active_output=True,
         )  # [N, dim]
         odd_part = (mv_data - alpha) / 2.0
         odd_energy = (odd_part**2).sum(dim=-1)
@@ -204,7 +204,7 @@ class SymmetryDetector:
             left_grades=(1,),
             right_grades=full,
             output_grades=full,
-            compact_output=True,
+            active_output=True,
         )
         reflected = -self.algebra.geometric_product(
             first,
@@ -212,8 +212,8 @@ class SymmetryDetector:
             left_grades=full,
             right_grades=(1,),
             output_grades=full,
-            left_compact=True,
-            compact_output=True,
+            left_active_lanes=True,
+            active_output=True,
         ).reshape(n, N, dim)
         return reflected, valid
 
@@ -276,7 +276,7 @@ class SymmetryDetector:
             left_grades=(2,),
             right_grades=full_grades(self.algebra),
             output_grades=full_grades(self.algebra),
-            compact_output=True,
+            active_output=True,
         )
 
         comm_norms = comm.norm(dim=-1).mean(dim=-1)  # [n_bv]

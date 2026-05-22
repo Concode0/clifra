@@ -1,4 +1,4 @@
-"""Runtime actions shared by dense and compact algebra hosts."""
+"""Runtime actions shared by full-kernel and active-lane algebra hosts."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def apply_versor_action(
     input_layout: GradeLayout | None = None,
     output_layout: GradeLayout | None = None,
     parameter_layout: GradeLayout | None = None,
-    compact_output: bool = False,
+    active_output: bool = False,
     channels: int | None = None,
     name: str = "versor_action",
     dense_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
@@ -46,14 +46,14 @@ def apply_versor_action(
         parameter_layout=parameter_layout,
     )
 
-    input_compact = _validate_action_values(
+    input_active_lanes = _validate_action_values(
         algebra,
         values,
         layout=input_layout,
         channels=channels,
         name=name,
     )
-    if input_compact:
+    if input_active_lanes:
         output = compact_versor_action(
             algebra,
             values,
@@ -62,7 +62,7 @@ def apply_versor_action(
             input_layout=input_layout,
             output_layout=output_layout,
             parameter_layout=parameter_layout,
-            compact_output=compact_output,
+            active_output=active_output,
         )
         return (output, dense_cache) if return_cache else output
 
@@ -77,7 +77,7 @@ def apply_versor_action(
         cache_dense=cache_dense,
     )
     output = algebra.per_channel_sandwich(left, values, right)
-    output = _project_dense_action_output(algebra, output, output_layout=output_layout, compact_output=compact_output)
+    output = _project_dense_action_output(algebra, output, output_layout=output_layout, active_output=active_output)
     return (output, next_cache) if return_cache else output
 
 
@@ -93,7 +93,7 @@ def apply_multi_versor_action(
     input_layout: GradeLayout | None = None,
     output_layout: GradeLayout | None = None,
     parameter_layout: GradeLayout | None = None,
-    compact_output: bool = False,
+    active_output: bool = False,
     channels: int | None = None,
     name: str = "multi_versor_action",
     dense_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
@@ -111,14 +111,14 @@ def apply_multi_versor_action(
         parameter_layout=parameter_layout,
     )
 
-    input_compact = _validate_action_values(
+    input_active_lanes = _validate_action_values(
         algebra,
         values,
         layout=input_layout,
         channels=channels,
         name=name,
     )
-    if input_compact:
+    if input_active_lanes:
         output = compact_multi_versor_action(
             algebra,
             values,
@@ -128,7 +128,7 @@ def apply_multi_versor_action(
             input_layout=input_layout,
             output_layout=output_layout,
             parameter_layout=parameter_layout,
-            compact_output=compact_output,
+            active_output=active_output,
         )
         return (output, dense_cache) if return_cache else output
 
@@ -144,7 +144,7 @@ def apply_multi_versor_action(
     )
     versored = algebra.multi_rotor_sandwich(left, values, right)
     output = torch.einsum("ck,...cke->...ce", mix.to(device=values.device, dtype=values.dtype), versored)
-    output = _project_dense_action_output(algebra, output, output_layout=output_layout, compact_output=compact_output)
+    output = _project_dense_action_output(algebra, output, output_layout=output_layout, active_output=active_output)
     return (output, next_cache) if return_cache else output
 
 
@@ -157,8 +157,8 @@ def grade_norms(
 ) -> torch.Tensor:
     """Return per-grade coefficient norms for dense or compact values."""
     layout = _declared_layout(algebra, input_grades, layout)
-    input_compact = _values_are_compact(algebra, values, layout)
-    if input_compact:
+    input_active_lanes = _values_use_active_lanes(algebra, values, layout)
+    if input_active_lanes:
         return compact_grade_norms(algebra, values, layout)
     if is_dense_kernel_host(algebra):
         return algebra.get_grade_norms(values)
@@ -177,7 +177,7 @@ def compact_versor_action(
     input_layout: GradeLayout,
     output_layout: GradeLayout,
     parameter_layout: GradeLayout,
-    compact_output: bool,
+    active_output: bool,
 ) -> torch.Tensor:
     """Apply one compact versor action to layer values."""
     matrix = versor_vector_matrix(
@@ -191,8 +191,8 @@ def compact_versor_action(
         matrix,
         input_layout=input_layout,
         output_layout=output_layout,
-        input_compact=True,
-        compact_output=compact_output,
+        input_active_lanes=True,
+        active_output=active_output,
     )
 
 
@@ -206,7 +206,7 @@ def compact_multi_versor_action(
     input_layout: GradeLayout,
     output_layout: GradeLayout,
     parameter_layout: GradeLayout,
-    compact_output: bool,
+    active_output: bool,
 ) -> torch.Tensor:
     """Apply a weighted compact superposition of versor actions."""
     matrices = versor_vector_matrix(
@@ -226,7 +226,7 @@ def compact_multi_versor_action(
         output_layout=output_layout,
     )
     result = torch.einsum("ck,...cko->...co", mix, transformed)
-    if compact_output:
+    if active_output:
         return result
     return materialize_dense(algebra, result, layout=output_layout)
 
@@ -349,7 +349,7 @@ def _validate_action_values(
     if channels is not None and values.shape[-2] != channels:
         raise ValueError(f"{name}: expected {channels} channels, got {values.shape[-2]} (shape {tuple(values.shape)})")
 
-    if _values_are_compact(algebra, values, layout):
+    if _values_use_active_lanes(algebra, values, layout):
         return True
     if values.shape[-1] == algebra.dim:
         return False
@@ -360,7 +360,7 @@ def _validate_action_values(
     raise ValueError(f"{name}: last dim must be {' or '.join(expected)}, got {values.shape[-1]}")
 
 
-def _values_are_compact(algebra, values: torch.Tensor, layout: GradeLayout | None) -> bool:
+def _values_use_active_lanes(algebra, values: torch.Tensor, layout: GradeLayout | None) -> bool:
     if layout is None or values.shape[-1] != layout.dim:
         return False
     return layout.dim != algebra.dim or not is_dense_kernel_host(algebra)
@@ -375,12 +375,12 @@ def _project_dense_action_output(
     output: torch.Tensor,
     *,
     output_layout: GradeLayout | None,
-    compact_output: bool,
+    active_output: bool,
 ) -> torch.Tensor:
     if output_layout is None:
         return output
     compact = output_layout.compact(output)
-    if compact_output:
+    if active_output:
         return compact
     return materialize_dense(algebra, compact, layout=output_layout)
 

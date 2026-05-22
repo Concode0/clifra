@@ -17,7 +17,7 @@ import torch.nn as nn
 
 from clifra.core.foundation.basis import normalize_grades, reverse_sign
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.storage import TensorStorage, check_layout_spec, resolve_tensor_storage
+from clifra.core.storage import ValueLayout, check_layout_spec, resolve_value_layout
 
 GradeUnaryOp = Literal["identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"]
 _VALID_UNARY_OPS = {"identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"}
@@ -29,22 +29,22 @@ class UnaryRequest:
 
     spec: AlgebraSpec
     op: GradeUnaryOp
-    input_storage: TensorStorage
-    output_storage: TensorStorage
+    input_value: ValueLayout
+    output_value: ValueLayout
     dtype: torch.dtype
     device: torch.device
 
     @property
     def input_layout(self) -> GradeLayout:
-        return self.input_storage.layout
+        return self.input_value.layout
 
     @property
     def output_layout(self) -> GradeLayout:
-        return self.output_storage.layout
+        return self.output_value.layout
 
     @property
-    def input_compact(self) -> bool:
-        return self.input_storage.is_compact
+    def input_uses_active_lanes(self) -> bool:
+        return self.input_value.uses_active_lanes
 
     @property
     def input_grades(self) -> tuple[int, ...]:
@@ -144,38 +144,38 @@ def build_unary_request(
     output_grades=None,
     input_layout: Optional[GradeLayout] = None,
     output_layout: Optional[GradeLayout] = None,
-    input_compact: bool = False,
+    input_active_lanes: bool = False,
     full_layout_allowed: bool = True,
 ) -> UnaryRequest:
     """Resolve caller input into a static unary request."""
     op = normalize_unary_op(op)
-    if op == "grade_projection" and input_grades is None and input_layout is None and not input_compact:
+    if op == "grade_projection" and input_grades is None and input_layout is None and not input_active_lanes:
         if output_layout is not None:
             input_layout = output_layout
         elif output_grades is not None:
             input_grades = output_grades
-    input_storage = resolve_tensor_storage(
+    input_value = resolve_value_layout(
         spec,
         values,
         grades=input_grades,
         layout=input_layout,
-        compact=input_compact,
+        active_lanes=input_active_lanes,
         side="input",
         full_layout_allowed=full_layout_allowed,
     )
     output_layout = resolve_unary_output_layout(
         spec,
         op=op,
-        input_layout=input_storage.layout,
+        input_layout=input_value.layout,
         output_grades=output_grades,
         output_layout=output_layout,
     )
-    output_storage = TensorStorage.compact(spec, output_layout)
+    output_value = ValueLayout.active(spec, output_layout)
     return UnaryRequest(
         spec=spec,
         op=op,
-        input_storage=input_storage,
-        output_storage=output_storage,
+        input_value=input_value,
+        output_value=output_value,
         dtype=values.dtype,
         device=values.device,
     )

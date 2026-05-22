@@ -51,5 +51,5 @@ def declared_full_product_kwargs(algebra) -> dict[str, Iterable[int]]:
         "left_grades": grades,
         "right_grades": grades,
         "output_grades": grades,
-        "compact_output": True,
+        "active_output": True,
     }

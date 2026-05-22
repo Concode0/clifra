@@ -326,8 +326,8 @@ class Multivector:
                 op="grade_projection",
                 input_layout=self.layout,
                 output_layout=layout,
-                input_compact=True,
-                compact_output=True,
+                input_active_lanes=True,
+                active_output=True,
                 return_layout=True,
             )
             return self._wrap_compact(values, output_layout)
@@ -340,8 +340,8 @@ class Multivector:
                 self.values,
                 op="reverse",
                 input_layout=self.layout,
-                input_compact=True,
-                compact_output=True,
+                input_active_lanes=True,
+                active_output=True,
                 return_layout=True,
             )
             return self._wrap_compact(values, layout)
@@ -354,8 +354,8 @@ class Multivector:
                 self.values,
                 op="grade_involution",
                 input_layout=self.layout,
-                input_compact=True,
-                compact_output=True,
+                input_active_lanes=True,
+                active_output=True,
                 return_layout=True,
             )
             return self._wrap_compact(values, layout)
@@ -368,8 +368,8 @@ class Multivector:
                 self.values,
                 op="clifford_conjugation",
                 input_layout=self.layout,
-                input_compact=True,
-                compact_output=True,
+                input_active_lanes=True,
+                active_output=True,
                 return_layout=True,
             )
             return self._wrap_compact(values, layout)
@@ -417,8 +417,8 @@ class Multivector:
             left_layout=left_layout,
             right_layout=right_layout,
             op=op,
-            left_compact=self.is_compact,
-            right_compact=other.is_compact,
+            left_active_lanes=self.is_compact,
+            right_active_lanes=other.is_compact,
             return_layout=True,
         )
         return self._wrap_compact(values, layout)

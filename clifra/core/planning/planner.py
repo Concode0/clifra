@@ -32,7 +32,7 @@ from clifra.core.planning.unary import (
     build_unary_request,
     normalize_unary_op,
 )
-from clifra.core.storage import TensorStorage
+from clifra.core.storage import ValueLayout
 
 
 class GradePlanner:
@@ -123,9 +123,9 @@ class GradePlanner:
         request = ProductRequest(
             spec=self.spec,
             op=normalize_product_op(op),
-            left_storage=TensorStorage.dense(self.spec, self.layout(left_grades)),
-            right_storage=TensorStorage.dense(self.spec, self.layout(right_grades)),
-            output_storage=TensorStorage.compact(self.spec, self.layout(output_grades)),
+            left_value=ValueLayout.full(self.spec, self.layout(left_grades)),
+            right_value=ValueLayout.full(self.spec, self.layout(right_grades)),
+            output_value=ValueLayout.active(self.spec, self.layout(output_grades)),
             dtype=dtype,
             device=torch.device(device),
         )
@@ -143,14 +143,18 @@ class GradePlanner:
         left_layout: GradeLayout = None,
         right_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
-        left_compact: bool = False,
-        right_compact: bool = False,
+        left_active_lanes: bool = False,
+        right_active_lanes: bool = False,
     ) -> ProductRequest:
         """Normalize product intent into a static request without executing tensors."""
         left_grades = self._default_operand_grades(left_grades, left_layout)
         right_grades = self._default_operand_grades(right_grades, right_layout)
-        if self._implicit_full_operand(left, grades=left_grades, layout=left_layout, compact=left_compact) or (
-            self._implicit_full_operand(right, grades=right_grades, layout=right_layout, compact=right_compact)
+        if self._implicit_full_operand(
+            left, grades=left_grades, layout=left_layout, active_lanes=left_active_lanes
+        ) or (
+            self._implicit_full_operand(
+                right, grades=right_grades, layout=right_layout, active_lanes=right_active_lanes
+            )
         ):
             warn_full_layout_fallback(self.algebra)
         self._validate_product_grade_cost_before_layouts(
@@ -173,8 +177,8 @@ class GradePlanner:
             left_layout=left_layout,
             right_layout=right_layout,
             output_layout=output_layout,
-            left_compact=left_compact,
-            right_compact=right_compact,
+            left_active_lanes=left_active_lanes,
+            right_active_lanes=right_active_lanes,
             full_layout_allowed=self._full_layout_allowed(),
         )
         validate_product_request(self.algebra, request)
@@ -211,12 +215,14 @@ class GradePlanner:
         output_grades=None,
         input_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
-        input_compact: bool = False,
+        input_active_lanes: bool = False,
     ) -> UnaryRequest:
         """Normalize unary intent into a static request without executing tensors."""
         if not (op == "grade_projection" and output_grades is not None):
             input_grades = self._default_operand_grades(input_grades, input_layout)
-        if self._implicit_full_operand(values, grades=input_grades, layout=input_layout, compact=input_compact):
+        if self._implicit_full_operand(
+            values, grades=input_grades, layout=input_layout, active_lanes=input_active_lanes
+        ):
             warn_full_layout_fallback(self.algebra)
         request = build_unary_request(
             self.spec,
@@ -226,7 +232,7 @@ class GradePlanner:
             output_grades=output_grades,
             input_layout=input_layout,
             output_layout=output_layout,
-            input_compact=input_compact,
+            input_active_lanes=input_active_lanes,
             full_layout_allowed=self._full_layout_allowed(),
         )
         validate_unary_request(self.algebra, request)
@@ -251,8 +257,8 @@ class GradePlanner:
         request = UnaryRequest(
             spec=self.spec,
             op=op,
-            input_storage=TensorStorage.dense(self.spec, input_layout),
-            output_storage=TensorStorage.compact(self.spec, output_layout),
+            input_value=ValueLayout.full(self.spec, input_layout),
+            output_value=ValueLayout.active(self.spec, output_layout),
             dtype=dtype,
             device=torch.device(device),
         )
@@ -293,11 +299,11 @@ class GradePlanner:
     def _full_layout_allowed(self) -> bool:
         return full_layout_allowed(self.algebra, self.spec)
 
-    def _implicit_full_operand(self, tensor: torch.Tensor, *, grades, layout, compact: bool) -> bool:
+    def _implicit_full_operand(self, tensor: torch.Tensor, *, grades, layout, active_lanes: bool) -> bool:
         return (
             grades is None
             and layout is None
-            and not compact
+            and not active_lanes
             and self._full_layout_allowed()
             and tensor.shape[-1] == self.spec.dim
         )

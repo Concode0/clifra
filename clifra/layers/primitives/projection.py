@@ -12,7 +12,7 @@ from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.foundation.numerics import covariance_regularizer
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.storage import resolve_layer_storage
+from clifra.core.storage import resolve_layer_layout_contract
 from clifra.utils.compat import safe_linalg_solve
 
 from ._utils import require_positive_int
@@ -36,9 +36,9 @@ class BladeSelector(CliffordModule):
         """
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
-        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
-        self.layout = self.storage.layout
-        self.lane_dim = self.storage.lane_dim
+        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout = self.layout_contract.layout
+        self.lane_dim = self.layout_contract.lane_dim
 
         self.weights = nn.Parameter(torch.Tensor(self.channels, self.lane_dim))
 
@@ -59,11 +59,11 @@ class BladeSelector(CliffordModule):
         Returns:
             torch.Tensor: Filtered input.
         """
-        self.storage.validate_input(
+        self.layout_contract.validate_input(
             x,
             channels=self.channels,
             name="BladeSelector input",
-            allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
+            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
         gate_shape = (1,) * (x.ndim - 2) + (self.channels, self.lane_dim)
         gate = 2.0 * torch.sigmoid(self.weights).view(gate_shape)
@@ -105,16 +105,16 @@ class GeometricNeutralizer(CliffordModule):
         self.momentum = momentum
         if not 0.0 <= momentum <= 1.0:
             raise ValueError(f"momentum must be in [0, 1], got {momentum}")
-        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
-        self.layout = self.storage.layout
-        self.lane_dim = self.storage.lane_dim
+        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout = self.layout_contract.layout
+        self.lane_dim = self.layout_contract.lane_dim
 
         if self.layout is None:
             self.register_buffer("g0_idx", algebra.grade_indices((0,)))
             self.register_buffer("g2_idx", algebra.grade_indices((2,)))
         else:
-            self.register_buffer("g0_idx", self.storage.grade_positions(0))
-            self.register_buffer("g2_idx", self.storage.grade_positions(2))
+            self.register_buffer("g0_idx", self.layout_contract.grade_positions(0))
+            self.register_buffer("g2_idx", self.layout_contract.grade_positions(2))
             if self.g0_idx.numel() == 0 or self.g2_idx.numel() == 0:
                 raise ValueError("GeometricNeutralizer layout must include grades 0 and 2")
 
@@ -141,11 +141,11 @@ class GeometricNeutralizer(CliffordModule):
         Returns:
             torch.Tensor: Neutralized multivector.
         """
-        self.storage.validate_input(
+        self.layout_contract.validate_input(
             x,
             channels=self.channels,
             name="GeometricNeutralizer input",
-            allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
+            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
 
         x_flat = x.reshape(-1, self.channels, self.lane_dim)

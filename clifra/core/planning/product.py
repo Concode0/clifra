@@ -50,8 +50,8 @@ class GradeProductPlan:
         right_indices: torch.Tensor,
         output_indices: torch.Tensor,
         output_positions: torch.Tensor,
-        left_compact_positions: torch.Tensor,
-        right_compact_positions: torch.Tensor,
+        left_active_positions: torch.Tensor,
+        right_active_positions: torch.Tensor,
         coefficients: torch.Tensor,
         active_output_indices: torch.Tensor,
         tree: GradePlanTree,
@@ -65,8 +65,8 @@ class GradeProductPlan:
         self.right_indices = right_indices
         self.output_indices = output_indices
         self.output_positions = output_positions
-        self.left_compact_positions = left_compact_positions
-        self.right_compact_positions = right_compact_positions
+        self.left_active_positions = left_active_positions
+        self.right_active_positions = right_active_positions
         self.coefficients = coefficients
         self.active_output_indices = active_output_indices
         self.tree = tree
@@ -196,8 +196,8 @@ def build_grade_product_plan_from_tree(
     plan_right: list[int] = []
     plan_output: list[int] = []
     plan_positions: list[int] = []
-    plan_left_compact_positions: list[int] = []
-    plan_right_compact_positions: list[int] = []
+    plan_left_active_positions: list[int] = []
+    plan_right_active_positions: list[int] = []
     plan_coefficients: list[float] = []
 
     for path in tree.paths:
@@ -217,8 +217,8 @@ def build_grade_product_plan_from_tree(
                 plan_right.append(right_index)
                 plan_output.append(output_index)
                 plan_positions.append(output_position)
-                plan_left_compact_positions.append(left_position_by_index[left_index])
-                plan_right_compact_positions.append(right_position_by_index[right_index])
+                plan_left_active_positions.append(left_position_by_index[left_index])
+                plan_right_active_positions.append(right_position_by_index[right_index])
                 plan_coefficients.append(coefficient)
 
     return GradeProductPlan(
@@ -233,10 +233,12 @@ def build_grade_product_plan_from_tree(
         right_indices=basis_indices_tensor(plan_right, n=n, role="right product basis indices", device=device),
         output_indices=basis_indices_tensor(plan_output, n=n, role="output product basis indices", device=device),
         output_positions=torch.tensor(plan_positions, dtype=torch.long, device=device),
-        left_compact_positions=torch.tensor(plan_left_compact_positions, dtype=torch.long, device=device),
-        right_compact_positions=torch.tensor(plan_right_compact_positions, dtype=torch.long, device=device),
+        left_active_positions=torch.tensor(plan_left_active_positions, dtype=torch.long, device=device),
+        right_active_positions=torch.tensor(plan_right_active_positions, dtype=torch.long, device=device),
         coefficients=torch.tensor(plan_coefficients, dtype=dtype, device=device),
-        active_output_indices=basis_indices_tensor(active_outputs, n=n, role="active output basis indices", device=device),
+        active_output_indices=basis_indices_tensor(
+            active_outputs, n=n, role="active output basis indices", device=device
+        ),
         tree=tree,
     )
 
@@ -271,8 +273,8 @@ class GradeProductExecutor(nn.Module):
         self.register_buffer("output_positions", plan.output_positions, persistent=False)
         self.register_buffer("coefficients", plan.coefficients, persistent=False)
         self.register_buffer("active_output_indices", plan.active_output_indices, persistent=False)
-        self.register_buffer("left_compact_positions", plan.left_compact_positions, persistent=False)
-        self.register_buffer("right_compact_positions", plan.right_compact_positions, persistent=False)
+        self.register_buffer("left_active_positions", plan.left_active_positions, persistent=False)
+        self.register_buffer("right_active_positions", plan.right_active_positions, persistent=False)
 
     @property
     def output_dim(self) -> int:
@@ -304,8 +306,8 @@ class GradeProductExecutor(nn.Module):
         if right.shape[-1] != self.right_layout.dim:
             raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
 
-        left_terms = torch.index_select(left, -1, self.left_compact_positions)
-        right_terms = torch.index_select(right, -1, self.right_compact_positions)
+        left_terms = torch.index_select(left, -1, self.left_active_positions)
+        right_terms = torch.index_select(right, -1, self.right_active_positions)
         left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
         terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
 
@@ -328,8 +330,8 @@ class GradeProductExecutor(nn.Module):
         left = left.expand(*prefix, *left.shape[-2:])
         right = right.expand(*prefix, *right.shape[-2:])
 
-        left_terms = torch.index_select(left, -1, self.left_compact_positions)
-        right_terms = torch.index_select(right, -1, self.right_compact_positions)
+        left_terms = torch.index_select(left, -1, self.left_active_positions)
+        right_terms = torch.index_select(right, -1, self.right_active_positions)
         terms = left_terms.unsqueeze(-2) * right_terms.unsqueeze(-3) * self._coefficients_for(left_terms, right_terms)
 
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)

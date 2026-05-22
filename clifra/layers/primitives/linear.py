@@ -18,7 +18,7 @@ import torch.nn as nn
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.storage import resolve_layer_storage
+from clifra.core.storage import resolve_layer_layout_contract
 
 from ._utils import require_choice, require_positive_int
 
@@ -74,9 +74,9 @@ class CliffordLinear(CliffordModule):
         self.in_channels = require_positive_int(in_channels, "in_channels")
         self.out_channels = require_positive_int(out_channels, "out_channels")
         self.backend = require_choice(backend, "backend", ("traditional", "rotor"))
-        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
-        self.layout = self.storage.layout
-        self.lane_dim = self.storage.lane_dim
+        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout = self.layout_contract.layout
+        self.lane_dim = self.layout_contract.lane_dim
 
         if self.backend == "traditional":
             self.weight = nn.Parameter(torch.Tensor(self.out_channels, self.in_channels))
@@ -118,11 +118,11 @@ class CliffordLinear(CliffordModule):
         Returns:
             torch.Tensor: Output [Batch, Out, Dim].
         """
-        self.storage.validate_input(
+        self.layout_contract.validate_input(
             x,
             channels=self.in_channels,
             name="CliffordLinear input",
-            allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
+            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
 
         if self.backend == "traditional":

@@ -13,9 +13,10 @@ from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.attention import GeometricAttentionScorer
-from clifra.core.storage import resolve_layer_storage
+from clifra.core.storage import resolve_layer_layout_contract
 
 from ..primitives.linear import CliffordLinear
+from ..primitives.product import GeometricProductLayer
 
 # Memory-bounded block size for chunked attention computation
 _BLOCK_SIZE = 64
@@ -106,9 +107,9 @@ class GeometricProductAttention(CliffordModule):
         self.bivector_weight = bivector_weight
         self.score_blade_chunk_size = max(1, int(score_blade_chunk_size))
         self.score_precompute_limit = max(0, int(score_precompute_limit))
-        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
-        self.layout = self.storage.layout
-        self.lane_dim = self.storage.lane_dim
+        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout = self.layout_contract.layout
+        self.lane_dim = self.layout_contract.lane_dim
 
         # Q, K, V projections operate on [B*L, channels, dim]
         self.q_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
@@ -118,11 +119,21 @@ class GeometricProductAttention(CliffordModule):
 
         self.attn_dropout = nn.Dropout(dropout) if dropout > 0.0 else None
 
+        score_product = None
+        if self.layout is not None and self.layout.dim != self.algebra.dim:
+            score_product = GeometricProductLayer(
+                algebra,
+                left_layout=self.layout,
+                right_layout=self.layout,
+                output_layout=algebra.layout((0, 2)),
+                pairwise=True,
+            )
         self.scorer = GeometricAttentionScorer(
             algebra,
             head_channels=self.head_channels,
             bivector_weight=bivector_weight,
             layout=self.layout,
+            pairwise_product=score_product,
             score_blade_chunk_size=self.score_blade_chunk_size,
             score_precompute_limit=self.score_precompute_limit,
         )
@@ -145,11 +156,11 @@ class GeometricProductAttention(CliffordModule):
         Returns:
             Output multivectors [B, L, C, D].
         """
-        self.storage.validate_input(
+        self.layout_contract.validate_input(
             x,
             channels=self.channels,
             name="GeometricProductAttention input",
-            allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
+            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
         B, L, C, D = x.shape
 

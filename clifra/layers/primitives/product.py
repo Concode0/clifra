@@ -88,7 +88,7 @@ class ProductLayer(CliffordModule):
         if self.output_layout is not None:
             kwargs["output_layout"] = self.output_layout
         if kwargs:
-            kwargs["compact_output"] = True
+            kwargs["active_output"] = True
         if self.pairwise:
             kwargs["pairwise"] = True
         return kwargs

@@ -112,9 +112,9 @@ class CommutatorAnalyzer:
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(2,),
-            left_compact=True,
-            right_compact=True,
-            compact_output=True,
+            left_active_lanes=True,
+            right_active_lanes=True,
+            active_output=True,
         )
         vals = comm.norm(dim=-1).mean(dim=-1)  # [n_pairs]
 
@@ -183,9 +183,9 @@ class CommutatorAnalyzer:
                 left_grades=(1,),
                 right_grades=(1,),
                 output_grades=(2,),
-                left_compact=True,
-                right_compact=True,
-                compact_output=True,
+                left_active_lanes=True,
+                right_active_lanes=True,
+                active_output=True,
             )
             return comm.norm(dim=-1).mean().item()
 
@@ -220,7 +220,7 @@ class CommutatorAnalyzer:
             }
 
         # Extract compact grade-2 part of mean per-sample
-        bv_data = self.algebra.grade_projection(mv_data, 2, compact_output=True)  # [N, grade2_dim]
+        bv_data = self.algebra.grade_projection(mv_data, 2, active_output=True)  # [N, grade2_dim]
         mean_bv = bv_data.mean(dim=0)  # [grade2_dim]
 
         bv_blade_indices = self.algebra.grade_indices((2,), device=device)
@@ -252,9 +252,9 @@ class CommutatorAnalyzer:
             left_grades=(2,),
             right_grades=(2,),
             output_grades=(2,),
-            left_compact=True,
-            right_compact=True,
-            compact_output=True,
+            left_active_lanes=True,
+            right_active_lanes=True,
+            active_output=True,
         )  # [n_pairs, grade2_dim]
 
         # Project onto basis: coeffs[p, c] = <bracket_bv_p, B_c>
@@ -315,9 +315,9 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(2,),
-        left_compact=True,
-        right_compact=True,
-        compact_output=True,
+        left_active_lanes=True,
+        right_active_lanes=True,
+        active_output=True,
     )
 
     U = torch.norm(comm, p=2, dim=-1).mean().item()

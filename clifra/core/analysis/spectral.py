@@ -118,7 +118,7 @@ class SpectralAnalyzer:
 
         # Extract grade-2 (bivector) part
         bv_layout = self.algebra.layout((2,))
-        mean_bv_compact = self.algebra.grade_projection(mean_mv, 2, compact_output=True)
+        mean_bv_compact = self.algebra.grade_projection(mean_mv, 2, active_output=True)
 
         bv_norm = mean_bv_compact.norm()
         if bv_norm < eps_like(mean_bv_compact):

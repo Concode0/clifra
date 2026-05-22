@@ -1,9 +1,9 @@
-"""Central storage contracts for dense and compact multivector values.
+"""Layout and lane-width contracts for multivector tensors.
 
-Dense and compact are physical storage modes, not separate algebraic planning
-concepts. A value always has a logical :class:`GradeLayout`; storage only says
-whether the tensor stores all canonical basis lanes or just that layout's
-active lanes.
+The public framework contract is layout-first: values are tensors over a
+logical :class:`GradeLayout`. Whether a tensor carries every basis lane or only
+the declared active lanes is a lane-width detail used by the planner, not a
+separate algebra concept.
 """
 
 from __future__ import annotations
@@ -19,58 +19,57 @@ from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.planning.action import metric_self_signs
 
 
-class StorageMode(str, Enum):
-    """Physical tensor storage mode for a multivector value."""
+class LaneFormat(str, Enum):
+    """Tensor lane width relative to a logical layout."""
 
-    DENSE = "dense"
-    COMPACT = "compact"
+    FULL = "full"
+    ACTIVE = "active"
 
 
-class DispatchPath(str, Enum):
-    """Execution path selected after storage and layout resolution."""
+class ExecutorPath(str, Enum):
+    """Execution path selected after layout and lane-width resolution."""
 
-    DENSE_KERNEL = "dense_kernel"
-    PLANNED_COMPACT = "planned_compact"
-    PLANNED_DENSE_OUTPUT = "planned_dense_output"
+    PLANNED_ACTIVE = "planned_active"
+    PLANNED_FULL = "planned_full"
 
 
 @dataclass(frozen=True)
-class TensorStorage:
-    """Resolved physical storage for a tensor plus its logical grade layout."""
+class ValueLayout:
+    """Resolved lane contract for one tensor plus its logical grade layout."""
 
     spec: AlgebraSpec
     layout: GradeLayout
-    mode: StorageMode
+    lane_format: LaneFormat
 
     @classmethod
-    def dense(cls, spec: AlgebraSpec, layout: GradeLayout) -> "TensorStorage":
-        """Return dense full-width storage with declared active layout metadata."""
+    def full(cls, spec: AlgebraSpec, layout: GradeLayout) -> "ValueLayout":
+        """Return a full-basis lane contract with declared layout metadata."""
         check_layout_spec(spec, layout, "layout")
-        return cls(spec=spec, layout=layout, mode=StorageMode.DENSE)
+        return cls(spec=spec, layout=layout, lane_format=LaneFormat.FULL)
 
     @classmethod
-    def compact(cls, spec: AlgebraSpec, layout: GradeLayout) -> "TensorStorage":
-        """Return compact active-lane storage for ``layout``."""
+    def active(cls, spec: AlgebraSpec, layout: GradeLayout) -> "ValueLayout":
+        """Return an active-lane contract for ``layout``."""
         check_layout_spec(spec, layout, "layout")
-        return cls(spec=spec, layout=layout, mode=StorageMode.COMPACT)
+        return cls(spec=spec, layout=layout, lane_format=LaneFormat.ACTIVE)
 
     @property
-    def is_compact(self) -> bool:
-        """Return whether tensors use compact active lanes."""
-        return self.mode is StorageMode.COMPACT
+    def uses_active_lanes(self) -> bool:
+        """Return whether tensors use only declared layout lanes."""
+        return self.lane_format is LaneFormat.ACTIVE
 
     @property
-    def is_dense(self) -> bool:
-        """Return whether tensors use full canonical basis lanes."""
-        return self.mode is StorageMode.DENSE
+    def uses_full_lanes(self) -> bool:
+        """Return whether tensors use all canonical basis lanes."""
+        return self.lane_format is LaneFormat.FULL
 
     @property
     def lane_dim(self) -> int:
-        """Return the tensor last-dimension width for this storage."""
-        return self.layout.dim if self.is_compact else self.spec.dim
+        """Return the tensor last-dimension width for this lane contract."""
+        return self.layout.dim if self.uses_active_lanes else self.spec.dim
 
     @property
-    def dense_dim(self) -> int:
+    def full_dim(self) -> int:
         """Return the full canonical basis width."""
         return self.spec.dim
 
@@ -80,43 +79,45 @@ class TensorStorage:
         return self.layout.grades
 
     def validate_tensor(self, values: torch.Tensor, *, name: str = "value") -> None:
-        """Validate that ``values`` matches this storage width."""
+        """Validate that ``values`` matches this lane contract."""
         if values.ndim < 1:
             raise ValueError(f"{name} must include a coefficient lane dimension, got shape {tuple(values.shape)}")
         if values.shape[-1] != self.lane_dim:
-            raise ValueError(f"{name} {self.mode.value} last dimension must be {self.lane_dim}, got {values.shape[-1]}")
+            raise ValueError(
+                f"{name} {self.lane_format.value} last dimension must be {self.lane_dim}, got {values.shape[-1]}"
+            )
 
-    def compact_values(self, values: torch.Tensor) -> torch.Tensor:
-        """Return compact active lanes from values in this storage."""
+    def active_values(self, values: torch.Tensor) -> torch.Tensor:
+        """Return declared layout lanes from values following this contract."""
         self.validate_tensor(values)
-        return values if self.is_compact else self.layout.compact(values)
+        return values if self.uses_active_lanes else self.layout.compact(values)
 
-    def dense_values(self, values: torch.Tensor) -> torch.Tensor:
-        """Return dense full-width values from values in this storage."""
+    def full_values(self, values: torch.Tensor) -> torch.Tensor:
+        """Return full-basis values from values following this contract."""
         self.validate_tensor(values)
-        return self.layout.dense(values) if self.is_compact else values
+        return self.layout.dense(values) if self.uses_active_lanes else values
 
 
 @dataclass(frozen=True)
-class LayerStorage:
-    """Resolved storage contract for layer inputs and outputs."""
+class LayerLayout:
+    """Resolved lane contract for layer inputs and outputs."""
 
     algebra: object
     layout: GradeLayout | None = None
 
     @property
     def lane_dim(self) -> int:
-        """Return the coefficient lane count accepted by this storage."""
+        """Return the coefficient lane count accepted by this contract."""
         return self.algebra.dim if self.layout is None else self.layout.dim
 
     @property
-    def is_compact(self) -> bool:
-        """Return whether this storage is compact relative to the full algebra."""
+    def uses_active_lanes(self) -> bool:
+        """Return whether this layer contract uses only declared layout lanes."""
         return self.layout is not None and self.layout.dim != self.algebra.dim
 
     @property
     def grades(self) -> tuple[int, ...] | None:
-        """Return active grades when compact metadata is known."""
+        """Return active grades when layout metadata is known."""
         return None if self.layout is None else self.layout.grades
 
     def validate_input(
@@ -125,9 +126,9 @@ class LayerStorage:
         *,
         channels: int,
         name: str,
-        allow_dense: bool | None = None,
+        allow_full: bool | None = None,
     ) -> bool:
-        """Validate layer input and return whether it is compact."""
+        """Validate layer input and return whether it uses active layout lanes."""
         if values.ndim < 3:
             raise ValueError(f"{name}: expected ndim >= 3, got shape {tuple(values.shape)}")
         if values.shape[-2] != channels:
@@ -136,20 +137,20 @@ class LayerStorage:
             )
 
         if self.layout is not None and values.shape[-1] == self.layout.dim:
-            return self.is_compact
+            return self.uses_active_lanes
 
-        if allow_dense is None:
-            allow_dense = self.layout is None or self.layout.dim == self.algebra.dim
-        if allow_dense and values.shape[-1] == self.algebra.dim:
+        if allow_full is None:
+            allow_full = self.layout is None or self.layout.dim == self.algebra.dim
+        if allow_full and values.shape[-1] == self.algebra.dim:
             return False
 
-        expected = [str(self.algebra.dim)] if allow_dense else []
+        expected = [str(self.algebra.dim)] if allow_full else []
         if self.layout is not None:
             expected.insert(0, f"{self.layout.dim} for grades {self.layout.grades}")
         raise ValueError(f"{name}: last dim must be {' or '.join(expected)}, got {values.shape[-1]}")
 
     def scalar_mask(self, *, device=None, dtype=None) -> torch.Tensor:
-        """Return a scalar-lane mask for this storage."""
+        """Return a scalar-lane mask for this contract."""
         dtype = torch.float32 if dtype is None else dtype
         if self.layout is None:
             mask = torch.zeros(self.algebra.dim, device=device, dtype=dtype)
@@ -162,7 +163,7 @@ class LayerStorage:
         )
 
     def grade_positions(self, grade: int, *, device=None) -> torch.Tensor:
-        """Return compact lane positions for one grade."""
+        """Return lane positions for one grade."""
         if self.layout is None:
             return self.algebra.grade_indices((grade,), device=device)
         positions = [
@@ -170,8 +171,8 @@ class LayerStorage:
         ]
         return torch.tensor(positions, dtype=torch.long, device=device)
 
-    def compact_grade_norms(self, values: torch.Tensor) -> torch.Tensor:
-        """Return per-grade coefficient norms for compact values."""
+    def active_grade_norms(self, values: torch.Tensor) -> torch.Tensor:
+        """Return per-grade coefficient norms for active-lane values."""
         from clifra.core.runtime.actions import compact_grade_norms
 
         if self.layout is None:
@@ -179,55 +180,54 @@ class LayerStorage:
         return compact_grade_norms(self.algebra, values, self.layout)
 
     def metric_signs(self, *, device=None, dtype=None) -> torch.Tensor:
-        """Return basis self-product signs for this storage."""
+        """Return basis self-product signs for this contract."""
         if self.layout is None:
             return metric_self_signs(self.algebra.default_layout(), device=device, dtype=dtype)
         return metric_self_signs(self.layout, device=device, dtype=dtype)
 
 
 @dataclass(frozen=True)
-class DispatchDecision:
-    """Storage-aware execution choice for a planned operation."""
+class ExecutionBoundary:
+    """Output lane boundary chosen for a planned operation."""
 
-    path: DispatchPath
-    output_storage: TensorStorage
+    path: ExecutorPath
+    output_value: ValueLayout
     reason: str
 
     @property
-    def materializes_dense(self) -> bool:
-        """Return whether the path crosses a dense materialization boundary."""
-        return self.output_storage.is_dense
-
-    @property
-    def uses_planned_executor(self) -> bool:
-        """Return whether execution goes through static planned kernels."""
-        return self.path in {DispatchPath.PLANNED_COMPACT, DispatchPath.PLANNED_DENSE_OUTPUT}
+    def materializes_full(self) -> bool:
+        """Return whether the path crosses a full-basis materialization boundary."""
+        return self.output_value.uses_full_lanes
 
 
-def resolve_tensor_storage(
+def resolve_value_layout(
     spec: AlgebraSpec,
     tensor: torch.Tensor,
     *,
     grades=None,
     layout: Optional[GradeLayout] = None,
-    compact: bool = False,
+    active_lanes: bool = False,
     side: str = "value",
     full_layout_allowed: bool = True,
-) -> TensorStorage:
-    """Resolve a tensor's logical layout and physical storage mode."""
+) -> ValueLayout:
+    """Resolve a tensor's logical layout and lane-width contract."""
     layout = resolve_operand_layout(
         spec,
         tensor,
         grades=grades,
         layout=layout,
-        compact=compact,
+        active_lanes=active_lanes,
         side=side,
         full_layout_allowed=full_layout_allowed,
     )
-    mode = StorageMode.COMPACT if compact or tensor_is_compact(spec, tensor, layout) else StorageMode.DENSE
-    storage = TensorStorage.compact(spec, layout) if mode is StorageMode.COMPACT else TensorStorage.dense(spec, layout)
-    storage.validate_tensor(tensor, name=side)
-    return storage
+    lane_format = (
+        LaneFormat.ACTIVE if active_lanes or tensor_uses_active_lanes(spec, tensor, layout) else LaneFormat.FULL
+    )
+    value_layout = (
+        ValueLayout.active(spec, layout) if lane_format is LaneFormat.ACTIVE else ValueLayout.full(spec, layout)
+    )
+    value_layout.validate_tensor(tensor, name=side)
+    return value_layout
 
 
 def resolve_operand_layout(
@@ -236,7 +236,7 @@ def resolve_operand_layout(
     *,
     grades=None,
     layout: Optional[GradeLayout] = None,
-    compact: bool = False,
+    active_lanes: bool = False,
     side: str,
     full_layout_allowed: bool = True,
 ) -> GradeLayout:
@@ -245,20 +245,20 @@ def resolve_operand_layout(
         check_layout_spec(spec, layout, f"{side}_layout")
         if grades is not None and layout.grades != normalize_grades(grades, spec.n, name=f"{side}_grades"):
             raise ValueError(f"{side}_layout and {side}_grades disagree")
-        _check_operand_shape(spec, tensor, layout, compact=compact, side=side)
+        _check_operand_shape(spec, tensor, layout, active_lanes=active_lanes, side=side)
         return layout
 
     if grades is not None:
         layout = spec.layout(grades)
-        _check_operand_shape(spec, tensor, layout, compact=compact, side=side)
+        _check_operand_shape(spec, tensor, layout, active_lanes=active_lanes, side=side)
         return layout
 
-    if compact:
-        raise ValueError(f"{side}_layout or {side}_grades is required for compact {side} input")
+    if active_lanes:
+        raise ValueError(f"{side}_layout or {side}_grades is required for active-lane {side} input")
     if tensor.shape[-1] != spec.dim:
         raise ValueError(
             f"{side} input has last dimension {tensor.shape[-1]}; declare {side}_layout or "
-            f"{side}_grades for compact planned execution"
+            f"{side}_grades for layout-planned execution"
         )
     if not full_layout_allowed:
         raise ValueError(
@@ -268,13 +268,13 @@ def resolve_operand_layout(
     return spec.layout(range(spec.n + 1))
 
 
-def resolve_layer_storage(algebra, *, layout: GradeLayout = None, grades=None) -> LayerStorage:
-    """Resolve optional layer grade/layout metadata into a storage contract."""
-    return LayerStorage(algebra, resolve_layer_layout(algebra, layout=layout, grades=grades))
+def resolve_layer_layout_contract(algebra, *, layout: GradeLayout = None, grades=None) -> LayerLayout:
+    """Resolve optional layer grade/layout metadata into a layer lane contract."""
+    return LayerLayout(algebra, resolve_layer_layout(algebra, layout=layout, grades=grades))
 
 
 def resolve_layer_layout(algebra, *, layout: GradeLayout = None, grades=None) -> GradeLayout | None:
-    """Resolve an optional layer storage layout."""
+    """Resolve optional layer layout metadata."""
     if layout is not None:
         spec = algebra.planner.spec
         check_layout_spec(spec, layout, "layout")
@@ -293,44 +293,40 @@ def check_layout_spec(spec: AlgebraSpec, layout: GradeLayout, name: str) -> None
         raise ValueError(f"{name} signature {layout.spec} does not match algebra signature {spec}")
 
 
-def tensor_is_compact(spec: AlgebraSpec, tensor: torch.Tensor, layout: GradeLayout) -> bool:
-    """Return whether ``tensor`` already uses ``layout``'s compact lane count."""
+def tensor_uses_active_lanes(spec: AlgebraSpec, tensor: torch.Tensor, layout: GradeLayout) -> bool:
+    """Return whether ``tensor`` already uses ``layout``'s active lane count."""
     return layout.dim != spec.dim and tensor.shape[-1] == layout.dim
 
 
-def storage_for_values(
+def layout_for_values(
     spec: AlgebraSpec,
     values: torch.Tensor,
     *,
     layout: Optional[GradeLayout] = None,
     grades: Optional[Iterable[int]] = None,
-    compact: bool = False,
+    active_lanes: bool = False,
     side: str = "value",
     full_layout_allowed: bool = True,
-) -> TensorStorage:
+) -> ValueLayout:
     """Alias for readability at runtime call sites."""
-    return resolve_tensor_storage(
+    return resolve_value_layout(
         spec,
         values,
         layout=layout,
         grades=grades,
-        compact=compact,
+        active_lanes=active_lanes,
         side=side,
         full_layout_allowed=full_layout_allowed,
     )
 
 
-def resolve_planned_dispatch(request, *, compact_output: bool, reason: str | None = None) -> DispatchDecision:
-    """Resolve the output storage boundary for a planned operation request."""
-    output_storage = (
-        request.output_storage
-        if compact_output
-        else TensorStorage.dense(request.spec, request.output_layout)
-    )
-    path = DispatchPath.PLANNED_COMPACT if output_storage.is_compact else DispatchPath.PLANNED_DENSE_OUTPUT
+def resolve_output_boundary(request, *, active_output: bool, reason: str | None = None) -> ExecutionBoundary:
+    """Resolve the output lane boundary for a planned operation request."""
+    output_value = request.output_value if active_output else ValueLayout.full(request.spec, request.output_layout)
+    path = ExecutorPath.PLANNED_ACTIVE if output_value.uses_active_lanes else ExecutorPath.PLANNED_FULL
     if reason is None:
-        reason = "compact_output=True" if compact_output else "caller requested dense output materialization"
-    return DispatchDecision(path=path, output_storage=output_storage, reason=reason)
+        reason = "active output layout" if active_output else "caller requested full-basis output materialization"
+    return ExecutionBoundary(path=path, output_value=output_value, reason=reason)
 
 
 def _check_operand_shape(
@@ -338,12 +334,12 @@ def _check_operand_shape(
     tensor: torch.Tensor,
     layout: GradeLayout,
     *,
-    compact: bool,
+    active_lanes: bool,
     side: str,
 ) -> None:
     if tensor.ndim < 1:
         raise ValueError(f"{side} must include a coefficient lane dimension, got shape {tuple(tensor.shape)}")
-    expected = layout.dim if compact or tensor_is_compact(spec, tensor, layout) else spec.dim
+    expected = layout.dim if active_lanes or tensor_uses_active_lanes(spec, tensor, layout) else spec.dim
     if tensor.shape[-1] != expected:
-        storage = "compact" if expected == layout.dim else "dense"
-        raise ValueError(f"{side} {storage} last dimension must be {expected}, got {tensor.shape[-1]}")
+        lane_width = "active" if expected == layout.dim else "full"
+        raise ValueError(f"{side} {lane_width} last dimension must be {expected}, got {tensor.shape[-1]}")

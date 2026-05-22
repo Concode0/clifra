@@ -11,7 +11,7 @@ import torch.nn as nn
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.storage import resolve_layer_storage
+from clifra.core.storage import resolve_layer_layout_contract
 
 from ._utils import require_positive_int
 
@@ -55,13 +55,13 @@ class CliffordLayerNorm(CliffordModule):
             raise ValueError(f"eps must be positive, got {eps}")
         self.eps = eps
         self.recover = recover
-        self.storage = resolve_layer_storage(algebra, layout=layout, grades=grades)
-        self.layout = self.storage.layout
-        self.lane_dim = self.storage.lane_dim
+        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout = self.layout_contract.layout
+        self.lane_dim = self.layout_contract.lane_dim
 
         self.weight = nn.Parameter(torch.ones(self.channels))
         self.bias = nn.Parameter(torch.zeros(self.channels))
-        self.register_buffer("scalar_mask", self.storage.scalar_mask())
+        self.register_buffer("scalar_mask", self.layout_contract.scalar_mask())
         if recover:
             self.norm_scale = nn.Parameter(torch.zeros(self.channels))
         else:
@@ -76,11 +76,11 @@ class CliffordLayerNorm(CliffordModule):
         Returns:
             torch.Tensor: Normalized input.
         """
-        self.storage.validate_input(
+        self.layout_contract.validate_input(
             x,
             channels=self.channels,
             name="CliffordLayerNorm input",
-            allow_dense=self.layout is None or self.layout.dim == self.algebra.dim,
+            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
         channel_shape = (1,) * (x.ndim - 2) + (self.channels, 1)
 

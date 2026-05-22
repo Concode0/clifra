@@ -7,7 +7,7 @@
 
 """Runtime algebra hosts and dense reference operations."""
 
-from ..storage import LayerStorage, resolve_layer_layout, resolve_layer_storage
+from ..storage import LayerLayout, resolve_layer_layout, resolve_layer_layout_contract
 from .accessors import as_multivector, compact_values, grade_indices, hermitian_signs, materialize_dense, resolve_layout
 from .actions import (
     apply_multi_versor_action,
@@ -40,8 +40,8 @@ __all__ = [
     "hermitian_signs",
     "materialize_dense",
     "resolve_layer_layout",
-    "resolve_layer_storage",
+    "resolve_layer_layout_contract",
     "resolve_layout",
-    "LayerStorage",
+    "LayerLayout",
     "versor_vector_matrix",
 ]

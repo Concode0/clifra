@@ -95,7 +95,7 @@ class GeodesicFlow:
         _, idx = dists.topk(k, dim=-1, largest=False)
         return idx  # [N, k]
 
-    def _connection_bivectors(self, mv: torch.Tensor, *, compact_output: bool = False) -> torch.Tensor:
+    def _connection_bivectors(self, mv: torch.Tensor, *, active_output: bool = False) -> torch.Tensor:
         """Computes unit connection bivectors for all (point, neighbour) pairs.
 
         The connection bivector from x_i to x_j encodes the rotational "turn"
@@ -112,11 +112,11 @@ class GeodesicFlow:
         N, D = mv.shape
         k = min(self.k, N - 1)
         if self.algebra.n < 2:
-            width = 0 if compact_output else D
+            width = 0 if active_output else D
             return mv.new_zeros(N, 0, width)
         layout = self.algebra.layout((2,))
         if k <= 0 or layout.dim == 0:
-            width = layout.dim if compact_output else D
+            width = layout.dim if active_output else D
             return mv.new_zeros(N, 0, width)
         nn_idx = self._knn(mv)
 
@@ -131,11 +131,11 @@ class GeodesicFlow:
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(2,),
-            compact_output=True,
+            active_output=True,
         )  # [N*k, dim]
         bv_norm = bv_raw.norm(dim=-1, keepdim=True).clamp_min(eps_like(bv_raw))
         compact = (bv_raw / bv_norm).reshape(N, k, layout.dim)
-        if compact_output:
+        if active_output:
             return compact
         return layout.dense(compact)  # [N, k, dim]
 
@@ -173,7 +173,7 @@ class GeodesicFlow:
         Returns:
             torch.Tensor: Scalar coherence in [0, 1].
         """
-        bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
+        bv = self._connection_bivectors(mv, active_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
         if k < 2 or D == 0:
             return mv.new_zeros(())
@@ -219,7 +219,7 @@ class GeodesicFlow:
         Returns:
             torch.Tensor: Scalar curvature in [0, 1].
         """
-        bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
+        bv = self._connection_bivectors(mv, active_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
         if k == 0 or D == 0:
             return mv.new_zeros(())
@@ -373,7 +373,7 @@ class GeodesicFlow:
         Returns:
             torch.Tensor: ``[N]`` coherence scores in [0, 1].
         """
-        bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
+        bv = self._connection_bivectors(mv, active_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
         if k < 2 or D == 0:
             return mv.new_zeros(N)

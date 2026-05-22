@@ -3,26 +3,26 @@ import torch
 
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.planning.layouts import build_product_request
-from clifra.core.storage import DispatchPath, StorageMode, resolve_planned_dispatch, resolve_tensor_storage
+from clifra.core.storage import ExecutorPath, LaneFormat, resolve_output_boundary, resolve_value_layout
 
 pytestmark = pytest.mark.unit
 
 
-def test_tensor_storage_distinguishes_logical_layout_from_physical_mode():
+def test_value_layout_distinguishes_logical_layout_from_lane_format():
     spec = AlgebraSpec(5, 0, 0)
     vector_layout = spec.layout((1,))
-    dense = torch.zeros(2, spec.dim)
-    compact = torch.zeros(2, vector_layout.dim)
+    full = torch.zeros(2, spec.dim)
+    active = torch.zeros(2, vector_layout.dim)
 
-    dense_storage = resolve_tensor_storage(spec, dense, layout=vector_layout, side="value")
-    compact_storage = resolve_tensor_storage(spec, compact, layout=vector_layout, side="value")
+    full_value = resolve_value_layout(spec, full, layout=vector_layout, side="value")
+    active_value = resolve_value_layout(spec, active, layout=vector_layout, side="value")
 
-    assert dense_storage.layout is vector_layout
-    assert dense_storage.mode is StorageMode.DENSE
-    assert dense_storage.lane_dim == spec.dim
-    assert compact_storage.layout is vector_layout
-    assert compact_storage.mode is StorageMode.COMPACT
-    assert compact_storage.lane_dim == vector_layout.dim
+    assert full_value.layout is vector_layout
+    assert full_value.lane_format is LaneFormat.FULL
+    assert full_value.lane_dim == spec.dim
+    assert active_value.layout is vector_layout
+    assert active_value.lane_format is LaneFormat.ACTIVE
+    assert active_value.lane_dim == vector_layout.dim
 
 
 def test_grade_layout_returns_compact_positions_for_grades():
@@ -37,7 +37,7 @@ def test_grade_layout_returns_compact_positions_for_grades():
     assert set(bivector_positions.tolist()).isdisjoint(scalar_positions.tolist())
 
 
-def test_product_request_carries_resolved_operand_storage():
+def test_product_request_carries_resolved_operand_layouts():
     spec = AlgebraSpec(6, 0, 0)
     vector_layout = spec.layout((1,))
     bivector_layout = spec.layout((2,))
@@ -53,15 +53,15 @@ def test_product_request_carries_resolved_operand_storage():
         op="gp",
     )
 
-    assert request.left_storage.mode is StorageMode.COMPACT
-    assert request.right_storage.mode is StorageMode.DENSE
+    assert request.left_value.lane_format is LaneFormat.ACTIVE
+    assert request.right_value.lane_format is LaneFormat.FULL
     assert request.left_grades == (1,)
     assert request.right_grades == (2,)
-    assert request.output_storage.mode is StorageMode.COMPACT
+    assert request.output_value.lane_format is LaneFormat.ACTIVE
     assert request.output_grades == (1, 3)
 
 
-def test_planned_dispatch_resolves_compact_or_dense_output_boundary():
+def test_planned_boundary_resolves_active_or_full_output_lanes():
     spec = AlgebraSpec(4, 0, 0)
     vector_layout = spec.layout((1,))
     values = torch.zeros(2, vector_layout.dim)
@@ -74,12 +74,12 @@ def test_planned_dispatch_resolves_compact_or_dense_output_boundary():
         op="gp",
     )
 
-    compact_dispatch = resolve_planned_dispatch(request, compact_output=True)
-    dense_dispatch = resolve_planned_dispatch(request, compact_output=False)
+    active_boundary = resolve_output_boundary(request, active_output=True)
+    full_boundary = resolve_output_boundary(request, active_output=False)
 
-    assert compact_dispatch.path is DispatchPath.PLANNED_COMPACT
-    assert compact_dispatch.output_storage.is_compact
-    assert not compact_dispatch.materializes_dense
-    assert dense_dispatch.path is DispatchPath.PLANNED_DENSE_OUTPUT
-    assert dense_dispatch.output_storage.is_dense
-    assert dense_dispatch.materializes_dense
+    assert active_boundary.path is ExecutorPath.PLANNED_ACTIVE
+    assert active_boundary.output_value.uses_active_lanes
+    assert not active_boundary.materializes_full
+    assert full_boundary.path is ExecutorPath.PLANNED_FULL
+    assert full_boundary.output_value.uses_full_lanes
+    assert full_boundary.materializes_full

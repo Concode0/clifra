@@ -1,4 +1,4 @@
-"""Core geometric attention score routing for dense and compact storage."""
+"""Core geometric attention score routing for full and active-lane layouts."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ class GeometricAttentionScorer(nn.Module):
         head_channels: int,
         bivector_weight: float,
         layout: GradeLayout = None,
+        pairwise_product: nn.Module | None = None,
         score_blade_chunk_size: int = 16,
         score_precompute_limit: int = 8_000_000,
     ):
@@ -33,6 +34,7 @@ class GeometricAttentionScorer(nn.Module):
         self.head_channels = int(head_channels)
         self.bivector_weight = float(bivector_weight)
         self.layout = layout
+        self.score_pairwise_product = pairwise_product
         self.score_blade_chunk_size = max(1, int(score_blade_chunk_size))
         self.score_precompute_limit = max(0, int(score_precompute_limit))
         self._precompute_score_tables()
@@ -48,6 +50,19 @@ class GeometricAttentionScorer(nn.Module):
                 )
             self._score_mode = "compact"
             self.score_output_layout = alg.layout((0, 2))
+            declared_output = getattr(self.score_pairwise_product, "output_layout", None)
+            if declared_output is not None and declared_output != self.score_output_layout:
+                raise ValueError("attention pairwise product output_layout must resolve to grades (0, 2)")
+            if self.score_pairwise_product is None:
+                self.score_pairwise_product = alg.product_executor(
+                    left_grades=self.layout.grades,
+                    right_grades=self.layout.grades,
+                    output_grades=self.score_output_layout.grades,
+                    op="gp",
+                    dtype=alg.dtype,
+                    device=alg.device,
+                    cache=True,
+                )
             scalar_positions = self.score_output_layout.positions_for_grades((0,), device=alg.device)
             bivector_positions = self.score_output_layout.positions_for_grades((2,), device=alg.device)
             self.register_buffer("_score_scalar_positions", scalar_positions)
@@ -77,15 +92,10 @@ class GeometricAttentionScorer(nn.Module):
         Lk = k_head.shape[2]
         q_by_channel = q_head.permute(0, 1, 3, 2, 4).reshape(B, H, Hc, Lq, lane_dim)
         k_by_channel = k_head.permute(0, 1, 3, 2, 4).reshape(B, H, Hc, Lk, lane_dim)
-        product = self.algebra.geometric_product(
-            q_by_channel,
-            k_by_channel,
-            left_layout=self.layout,
-            right_layout=self.layout,
-            output_layout=self.score_output_layout,
-            compact_output=True,
-            pairwise=True,
-        )
+        if hasattr(self.score_pairwise_product, "forward_pairwise_compact"):
+            product = self.score_pairwise_product.forward_pairwise_compact(q_by_channel, k_by_channel)
+        else:
+            product = self.score_pairwise_product(q_by_channel, k_by_channel)
 
         scalar = torch.index_select(product, -1, self._score_scalar_positions.to(device=product.device))
         score_g0 = scalar.sum(dim=(-1, 2))

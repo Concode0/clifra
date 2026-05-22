@@ -241,7 +241,7 @@ def _context_compact_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(0, 2),
-            compact_output=True,
+            active_output=True,
         ),
         reference_fn=reference_fn,
     )
@@ -288,7 +288,7 @@ def _pairwise_context_case(args, dtype: torch.dtype, device: str) -> BenchmarkCa
             left_grades=(2,),
             right_grades=(1,),
             output_grades=(3,),
-            compact_output=True,
+            active_output=True,
             pairwise=True,
         ),
         reference_fn=reference_fn,
@@ -373,7 +373,7 @@ def _compact_wedge_chain_case(args, dtype: torch.dtype, device: str) -> Benchmar
                 left_layout=left_layout,
                 right_layout=vector_layout,
                 output_layout=next_layout,
-                compact_output=True,
+                active_output=True,
             )
             left_layout = next_layout
         return value

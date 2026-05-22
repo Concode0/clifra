@@ -1137,7 +1137,7 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
             left_grades=(2,),
             right_grades=(2,),
             output_grades=(4,),
-            compact_output=True,
+            active_output=True,
         )
         non_scalar_energy = grade4.norm(dim=-1, keepdim=True)
         is_simple = non_scalar_energy < self.eps * SIMPLE_BIVECTOR_RESIDUAL_EPS_MULTIPLIER

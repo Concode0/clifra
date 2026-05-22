@@ -13,7 +13,7 @@ from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.actions import dense_versor_factors
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.storage import resolve_layer_storage
+from clifra.core.storage import resolve_layer_layout_contract
 
 from ._utils import (
     grade_indices,
@@ -63,14 +63,14 @@ class RotorLayer(CliffordModule):
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
         self.grade = int(grade)
-        self.input_storage = resolve_layer_storage(algebra, layout=input_layout, grades=input_grades)
-        self.output_storage = (
-            resolve_layer_storage(algebra, layout=output_layout, grades=output_grades)
+        self.input_contract = resolve_layer_layout_contract(algebra, layout=input_layout, grades=input_grades)
+        self.output_contract = (
+            resolve_layer_layout_contract(algebra, layout=output_layout, grades=output_grades)
             if output_layout is not None or output_grades is not None
-            else self.input_storage
+            else self.input_contract
         )
-        self.input_layout = self.input_storage.layout
-        self.output_layout = self.output_storage.layout
+        self.input_layout = self.input_contract.layout
+        self.output_layout = self.output_contract.layout
 
         self.register_buffer("grade_indices", grade_indices(algebra, self.grade))
         self.num_grade_elements = self.grade_indices.numel()
@@ -153,7 +153,7 @@ class RotorLayer(CliffordModule):
             input_layout=self.input_layout,
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
-            compact_output=self.output_layout is not None,
+            active_output=self.output_layout is not None,
             channels=self.channels,
             name="RotorLayer input",
             dense_cache=cache,

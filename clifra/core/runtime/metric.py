@@ -56,7 +56,7 @@ def inner_product(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> tor
     Returns:
         torch.Tensor: Scalar part [Batch, 1].
     """
-    return algebra.projected_geometric_product(A, B, output_grades=(0,), compact_output=True)
+    return algebra.projected_geometric_product(A, B, output_grades=(0,), active_output=True)
 
 
 def induced_norm(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
