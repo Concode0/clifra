@@ -13,10 +13,10 @@ Implements versor-based transformations using weighted sums of sandwich products
 import torch
 import torch.nn as nn
 
+from clifra.core.execution.action import dense_versor_factors
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.actions import dense_versor_factors
 from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.storage import resolve_layer_layout_contract
 
@@ -89,27 +89,7 @@ class MultiRotorLayer(CliffordModule):
         # Mixing weights (Euclidean — intentionally untagged)
         self.weights = nn.Parameter(torch.Tensor(self.channels, self.num_rotors))
 
-        # Versor cache for eval mode
-        self._cached_V_left = None
-        self._cached_V_right = None
-
         self.reset_parameters()
-
-    # --- Backward-compat aliases (grade == 2 usage) ---
-
-    @property
-    def bivector_indices(self):
-        return self.grade_indices
-
-    @property
-    def num_bivectors(self):
-        return self.num_grade_elements
-
-    @property
-    def rotor_bivectors(self):
-        return self.rotor_grade_weights
-
-    # ---------------------------------------------------
 
     def reset_parameters(self):
         """Initialize with small transforms and uniform mixing weights."""
@@ -136,8 +116,6 @@ class MultiRotorLayer(CliffordModule):
     def forward(self, x: torch.Tensor, return_invariants: bool = False) -> torch.Tensor:
         """Apply weighted multi-versor superposition.
 
-        Caches versors during eval mode for faster inference.
-
         Args:
             x (torch.Tensor): Input [Batch, Channels, Dim].
             return_invariants (bool): If True, returns per-grade norms instead of output.
@@ -145,12 +123,7 @@ class MultiRotorLayer(CliffordModule):
         Returns:
             torch.Tensor: Transformed output [Batch, Channels, Dim].
         """
-        cache = (
-            (self._cached_V_left, self._cached_V_right)
-            if not self.training and self._cached_V_left is not None and self._cached_V_right is not None
-            else None
-        )
-        out, next_cache = self.algebra.multi_versor_action(
+        out = self.algebra.multi_versor_action(
             x,
             self.rotor_grade_weights,
             self.weights,
@@ -158,27 +131,14 @@ class MultiRotorLayer(CliffordModule):
             input_layout=self.input_layout,
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
-            active_output=self.output_layout is not None,
             channels=self.channels,
             name="MultiRotorLayer input",
-            dense_cache=cache,
-            cache_dense=not self.training,
-            return_cache=True,
         )
-        if not self.training and next_cache is not None:
-            self._cached_V_left, self._cached_V_right = next_cache
 
         if return_invariants:
             return self.algebra.grade_norms(out, layout=self.output_layout)
 
         return out
-
-    def train(self, mode: bool = True):
-        """Invalidate versor cache when switching to train mode."""
-        if mode:
-            self._cached_V_left = None
-            self._cached_V_right = None
-        return super().train(mode)
 
     def sparsity_loss(self) -> torch.Tensor:
         """Compute L1 sparsity loss for versor weights and mixing weights."""

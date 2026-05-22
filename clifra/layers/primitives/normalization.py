@@ -80,7 +80,6 @@ class CliffordLayerNorm(CliffordModule):
             x,
             channels=self.channels,
             name="CliffordLayerNorm input",
-            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
         channel_shape = (1,) * (x.ndim - 2) + (self.channels, 1)
 

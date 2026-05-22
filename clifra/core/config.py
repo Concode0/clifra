@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 #
 
-"""Algebra construction config and dense/planned context dispatch."""
+"""Algebra construction config and backend selection."""
 
 from __future__ import annotations
 
@@ -17,8 +17,7 @@ import torch
 from clifra.core.foundation.device import resolve_device, resolve_dtype
 from clifra.core.foundation.module import AlgebraLike
 from clifra.core.planning.policy import DENSE_AUTO_MAX_N, PlanningLimits
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.context import AlgebraContext
+from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
 
 AlgebraKernel = Literal["auto", "dense", "context"]
 
@@ -37,7 +36,6 @@ class AlgebraConfig:
     exp_policy: str = "balanced"
     fixed_iterations: Optional[int] = None
     default_grades: Optional[tuple[int, ...]] = None
-    allow_full_layout_products: Optional[bool] = None
     planning_limits: Optional[PlanningLimits] = None
 
     @classmethod
@@ -54,7 +52,6 @@ class AlgebraConfig:
             "exp_policy": _mapping_get(config, "exp_policy", "balanced"),
             "fixed_iterations": _optional_int(_mapping_get(config, "fixed_iterations", None)),
             "default_grades": _optional_grades(_mapping_get(config, "default_grades", None)),
-            "allow_full_layout_products": _optional_bool(_mapping_get(config, "allow_full_layout_products", None)),
         }
         values.update({key: value for key, value in overrides.items() if value is not None})
         values["dtype"] = resolve_dtype(values["dtype"])
@@ -73,17 +70,11 @@ def make_algebra(
     exp_policy: str = "balanced",
     fixed_iterations: Optional[int] = None,
     default_grades: Optional[Iterable[int]] = None,
-    allow_full_layout_products: Optional[bool] = None,
     planning_limits: Optional[PlanningLimits] = None,
-    **deprecated_options,
 ) -> AlgebraLike:
     """Construct a dense low-dimensional algebra or high-dimensional planning context."""
     kernel = _normalize_kernel(kernel)
     n = p + q + r
-    if deprecated_options:
-        unknown = ", ".join(sorted(deprecated_options))
-        raise TypeError(f"Unsupported algebra construction option(s): {unknown}")
-
     selected_kernel = "context" if kernel == "auto" and n > dense_threshold else kernel
     if selected_kernel == "auto":
         selected_kernel = "dense"
@@ -111,7 +102,6 @@ def make_algebra(
         device=resolved_device,
         dtype=resolved_dtype,
         default_grades=default_grades,
-        allow_full_layout_products=allow_full_layout_products,
         planning_limits=planning_limits,
     )
 
@@ -130,7 +120,6 @@ def make_algebra_from_config(config: Mapping[str, Any], **overrides) -> AlgebraL
         exp_policy=algebra_config.exp_policy,
         fixed_iterations=algebra_config.fixed_iterations,
         default_grades=algebra_config.default_grades,
-        allow_full_layout_products=algebra_config.allow_full_layout_products,
         planning_limits=algebra_config.planning_limits,
     )
 
@@ -161,15 +150,3 @@ def _optional_grades(value) -> Optional[tuple[int, ...]]:
         return None
     return tuple(int(grade) for grade in value)
 
-
-def _optional_bool(value) -> Optional[bool]:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"true", "1", "yes", "on"}:
-            return True
-        if lowered in {"false", "0", "no", "off"}:
-            return False
-        raise ValueError(f"Cannot parse boolean value {value!r}")
-    return bool(value)

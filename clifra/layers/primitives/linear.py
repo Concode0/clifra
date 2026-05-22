@@ -27,8 +27,8 @@ class CliffordLinear(CliffordModule):
     """Fully connected layer with optional rotor-based backend.
 
     Can use either:
-    - Traditional scalar weight matrix (default, backward compatible)
-    - Rotor-based transformation (new, parameter efficient via RotorGadget)
+    - Traditional scalar weight matrix (default)
+    - Rotor-based transformation (parameter efficient via RotorGadget)
 
     The traditional backend uses O(in_channels x out_channels) parameters,
     while the rotor backend uses O(num_rotor_pairs x n(n-1)/2) parameters
@@ -77,6 +77,8 @@ class CliffordLinear(CliffordModule):
         self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
+        self.output_layout = self.layout
+        self.output_lane_dim = self.lane_dim
 
         if self.backend == "traditional":
             self.weight = nn.Parameter(torch.Tensor(self.out_channels, self.in_channels))
@@ -85,10 +87,6 @@ class CliffordLinear(CliffordModule):
             self.gadget = None
 
         elif self.backend == "rotor":
-            if self.layout is not None:
-                raise ValueError(
-                    "CliffordLinear rotor backend is dense-only; use traditional backend for compact lanes."
-                )
             from .rotor_gadget import RotorGadget
 
             self.gadget = RotorGadget(
@@ -99,7 +97,10 @@ class CliffordLinear(CliffordModule):
                 aggregation=aggregation,
                 shuffle=shuffle,
                 bias=True,  # Include bias in rotor gadget
+                layout=self.layout,
             )
+            self.output_layout = self.gadget.output_layout
+            self.output_lane_dim = self.gadget.output_lane_dim
             self.weight = None
             self.bias = None
 
@@ -122,7 +123,6 @@ class CliffordLinear(CliffordModule):
             x,
             channels=self.in_channels,
             name="CliffordLinear input",
-            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
 
         if self.backend == "traditional":
@@ -139,6 +139,8 @@ class CliffordLinear(CliffordModule):
             str: Layer parameters description
         """
         parts = [f"in_channels={self.in_channels}", f"out_channels={self.out_channels}", f"backend={self.backend}"]
-        if self.layout is not None:
+        if self.layout.dim != self.algebra.dim:
             parts.append(f"grades={self.layout.grades}")
+        if self.output_layout != self.layout:
+            parts.append(f"output_grades={self.output_layout.grades}")
         return ", ".join(parts)

@@ -8,7 +8,7 @@ from clifra.core.storage import ExecutorPath, LaneFormat, resolve_output_boundar
 pytestmark = pytest.mark.unit
 
 
-def test_value_layout_distinguishes_logical_layout_from_lane_format():
+def test_value_layout_records_declared_layout_and_lane_format():
     spec = AlgebraSpec(5, 0, 0)
     vector_layout = spec.layout((1,))
     full = torch.zeros(2, spec.dim)
@@ -61,7 +61,7 @@ def test_product_request_carries_resolved_operand_layouts():
     assert request.output_grades == (1, 3)
 
 
-def test_planned_boundary_resolves_active_or_full_output_lanes():
+def test_planned_boundary_returns_planner_output_lanes():
     spec = AlgebraSpec(4, 0, 0)
     vector_layout = spec.layout((1,))
     values = torch.zeros(2, vector_layout.dim)
@@ -75,11 +75,7 @@ def test_planned_boundary_resolves_active_or_full_output_lanes():
     )
 
     active_boundary = resolve_output_boundary(request, active_output=True)
-    full_boundary = resolve_output_boundary(request, active_output=False)
 
     assert active_boundary.path is ExecutorPath.PLANNED_ACTIVE
     assert active_boundary.output_value.uses_active_lanes
     assert not active_boundary.materializes_full
-    assert full_boundary.path is ExecutorPath.PLANNED_FULL
-    assert full_boundary.output_value.uses_full_lanes
-    assert full_boundary.materializes_full

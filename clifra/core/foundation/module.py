@@ -29,7 +29,6 @@ class AlgebraLike(Protocol):
     eps_sq: float
     planner: object
     planning_limits: object
-    allow_full_layout_products: bool
 
     @property
     def device(self):
@@ -59,8 +58,6 @@ class AlgebraLike(Protocol):
         layout: Optional[GradeLayout] = None,
         grades: Optional[Iterable[int]] = None,
         mv=None,
-        allow_full: bool = True,
-        warn_full: bool = True,
     ) -> GradeLayout:
         """Resolve static layout metadata for tensors or multivectors."""
         ...
@@ -120,8 +117,23 @@ class AlgebraLike(Protocol):
         """Apply Clifford conjugation."""
         ...
 
+    def exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Exponentiate a declared bivector."""
+        ...
+
     def planned_linear_action(self, values: torch.Tensor, matrix: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply a vector-space linear action to dense or compact grade lanes."""
+        ...
+
+    def paired_bivector_action(
+        self,
+        values: torch.Tensor,
+        left_weights: torch.Tensor,
+        right_weights: torch.Tensor,
+        channel_to_pair: torch.Tensor,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Apply independent left/right bivector rotor pairs."""
         ...
 
 

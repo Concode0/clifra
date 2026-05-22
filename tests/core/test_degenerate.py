@@ -5,7 +5,7 @@ Covers:
 - Cayley table zeros for null self-products
 - Bivector exp with null components (parabolic branch)
 - Adaptive exp on n=4: simple vs non-simple bivectors
-- r=0 backward compatibility
+- r=0 canonical signature
 - Cache isolation: Cl(2,0,1) != Cl(2,1,0)
 - Wedge with null vectors (non-zero)
 """
@@ -132,7 +132,7 @@ class TestDegenerate:
         # e13 = index 5 (0b101)
         assert abs(wedge[0, 5].item()) > 0.1, "e1 ^ e3 should be non-zero"
 
-    def test_r0_backward_compatible(self):
+    def test_r0_canonical_signature(self):
         """Cl(p, q, 0) should behave identically to Cl(p, q)."""
         alg_old = CliffordAlgebra(3, 0, device=DEVICE)
         alg_new = CliffordAlgebra(3, 0, 0, device=DEVICE)

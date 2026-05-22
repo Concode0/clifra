@@ -8,10 +8,10 @@
 import torch
 import torch.nn as nn
 
+from clifra.core.execution.action import dense_versor_factors
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.actions import dense_versor_factors
 from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.storage import resolve_layer_layout_contract
 
@@ -80,27 +80,7 @@ class RotorLayer(CliffordModule):
         if self.grade == 2:
             tag_manifold(self.grade_weights, MANIFOLD_SPIN)
 
-        # Versor cache for eval mode
-        self._cached_V_left = None
-        self._cached_V_right = None
-
         self.reset_parameters()
-
-    # --- Backward-compat aliases (grade == 2 usage) ---
-
-    @property
-    def bivector_indices(self):
-        return self.grade_indices
-
-    @property
-    def num_bivectors(self):
-        return self.num_grade_elements
-
-    @property
-    def bivector_weights(self):
-        return self.grade_weights
-
-    # ---------------------------------------------------
 
     def reset_parameters(self):
         """Initialize with near-identity transform (small weights)."""
@@ -133,43 +113,22 @@ class RotorLayer(CliffordModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply versor product x' = hat(V) x V^{-1} (= RxR~ for grade=2).
 
-        Caches versors during eval mode for faster inference.
-
         Args:
             x (torch.Tensor): Input [Batch, Channels, Dim].
 
         Returns:
             torch.Tensor: Transformed input [Batch, Channels, Dim].
         """
-        cache = (
-            (self._cached_V_left, self._cached_V_right)
-            if not self.training and self._cached_V_left is not None and self._cached_V_right is not None
-            else None
-        )
-        out, next_cache = self.algebra.versor_action(
+        return self.algebra.versor_action(
             x,
             self.grade_weights,
             grade=self.grade,
             input_layout=self.input_layout,
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
-            active_output=self.output_layout is not None,
             channels=self.channels,
             name="RotorLayer input",
-            dense_cache=cache,
-            cache_dense=not self.training,
-            return_cache=True,
         )
-        if not self.training and next_cache is not None:
-            self._cached_V_left, self._cached_V_right = next_cache
-        return out
-
-    def train(self, mode: bool = True):
-        """Invalidate versor cache when switching to train mode."""
-        if mode:
-            self._cached_V_left = None
-            self._cached_V_right = None
-        return super().train(mode)
 
     def prune_bivectors(self, threshold: float = 1e-4) -> int:
         """Zero out grade weights below threshold.

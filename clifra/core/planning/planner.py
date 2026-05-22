@@ -13,15 +13,22 @@ import torch
 
 from clifra.core.foundation.basis import operation_coefficient
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.planning.action import (
+    LinearActionPlan,
+    PairedBivectorActionPlan,
+    VersorActionPlan,
+    build_linear_action_plan,
+    build_paired_bivector_action_plan,
+    build_versor_action_plan,
+)
+from clifra.core.planning.decomposition import BivectorDecompositionPlan, build_bivector_decomposition_plan
 from clifra.core.planning.layouts import ProductRequest, build_product_request, normalize_product_op
 from clifra.core.planning.policy import (
-    full_layout_allowed,
     validate_grades_cost,
     validate_layout_cost,
     validate_product_grades_cost,
     validate_product_request,
     validate_unary_request,
-    warn_full_layout_fallback,
 )
 from clifra.core.planning.product import GradeProductExecutor, build_grade_product_plan_from_request
 from clifra.core.planning.tree import build_grade_plan_tree
@@ -55,7 +62,7 @@ class GradePlanner:
 
     def full_layout(self) -> GradeLayout:
         """Return the full dense basis layout."""
-        return self.layout(range(self.spec.n + 1))
+        return self.spec.full_layout()
 
     def grade_indices(self, grades, *, device=None) -> torch.Tensor:
         """Return canonical dense basis indices for ``grades``."""
@@ -123,8 +130,8 @@ class GradePlanner:
         request = ProductRequest(
             spec=self.spec,
             op=normalize_product_op(op),
-            left_value=ValueLayout.full(self.spec, self.layout(left_grades)),
-            right_value=ValueLayout.full(self.spec, self.layout(right_grades)),
+            left_value=ValueLayout.active(self.spec, self.layout(left_grades)),
+            right_value=ValueLayout.active(self.spec, self.layout(right_grades)),
             output_value=ValueLayout.active(self.spec, self.layout(output_grades)),
             dtype=dtype,
             device=torch.device(device),
@@ -149,14 +156,6 @@ class GradePlanner:
         """Normalize product intent into a static request without executing tensors."""
         left_grades = self._default_operand_grades(left_grades, left_layout)
         right_grades = self._default_operand_grades(right_grades, right_layout)
-        if self._implicit_full_operand(
-            left, grades=left_grades, layout=left_layout, active_lanes=left_active_lanes
-        ) or (
-            self._implicit_full_operand(
-                right, grades=right_grades, layout=right_layout, active_lanes=right_active_lanes
-            )
-        ):
-            warn_full_layout_fallback(self.algebra)
         self._validate_product_grade_cost_before_layouts(
             op=op,
             left_grades=left_grades,
@@ -179,7 +178,6 @@ class GradePlanner:
             output_layout=output_layout,
             left_active_lanes=left_active_lanes,
             right_active_lanes=right_active_lanes,
-            full_layout_allowed=self._full_layout_allowed(),
         )
         validate_product_request(self.algebra, request)
         return request
@@ -220,10 +218,6 @@ class GradePlanner:
         """Normalize unary intent into a static request without executing tensors."""
         if not (op == "grade_projection" and output_grades is not None):
             input_grades = self._default_operand_grades(input_grades, input_layout)
-        if self._implicit_full_operand(
-            values, grades=input_grades, layout=input_layout, active_lanes=input_active_lanes
-        ):
-            warn_full_layout_fallback(self.algebra)
         request = build_unary_request(
             self.spec,
             values,
@@ -233,7 +227,6 @@ class GradePlanner:
             input_layout=input_layout,
             output_layout=output_layout,
             input_active_lanes=input_active_lanes,
-            full_layout_allowed=self._full_layout_allowed(),
         )
         validate_unary_request(self.algebra, request)
         return request
@@ -257,12 +250,69 @@ class GradePlanner:
         request = UnaryRequest(
             spec=self.spec,
             op=op,
-            input_value=ValueLayout.full(self.spec, input_layout),
+            input_value=ValueLayout.active(self.spec, input_layout),
             output_value=ValueLayout.active(self.spec, output_layout),
             dtype=dtype,
             device=torch.device(device),
         )
         return self.unary_executor_for_request(request, cache=cache)
+
+    def linear_action_plan(
+        self,
+        *,
+        input_layout: GradeLayout,
+        output_layout: GradeLayout = None,
+    ) -> LinearActionPlan:
+        """Return a plan-only contract for a grade-preserving linear action."""
+        return build_linear_action_plan(input_layout=input_layout, output_layout=output_layout)
+
+    def versor_action_plan(
+        self,
+        *,
+        grade: int,
+        input_layout: GradeLayout,
+        output_layout: GradeLayout = None,
+        parameter_layout: GradeLayout = None,
+    ) -> VersorActionPlan:
+        """Return a plan-only contract for a grade-1 or grade-2 versor action."""
+        return build_versor_action_plan(
+            self.algebra,
+            grade=grade,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+        )
+
+    def paired_bivector_action_plan(
+        self,
+        *,
+        input_layout: GradeLayout,
+        output_layout: GradeLayout = None,
+        parameter_layout: GradeLayout = None,
+    ) -> PairedBivectorActionPlan:
+        """Return a plan-only contract for independent bivector rotor pairs."""
+        return build_paired_bivector_action_plan(
+            self.algebra,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+        )
+
+    def bivector_decomposition_plan(
+        self,
+        *,
+        input_layout: GradeLayout = None,
+        components: int = None,
+        fixed_iterations: int = None,
+    ) -> BivectorDecompositionPlan:
+        """Return static layouts and loop sizes for bivector decomposition."""
+        input_layout = self.layout((2,)) if input_layout is None else input_layout
+        return build_bivector_decomposition_plan(
+            self.algebra,
+            input_layout=input_layout,
+            components=components,
+            fixed_iterations=fixed_iterations,
+        )
 
     def unary_executor_for_request(self, request: UnaryRequest, *, cache: bool = True) -> GradeUnaryExecutor:
         """Return an executor for an already normalized unary request."""
@@ -294,18 +344,6 @@ class GradePlanner:
             executor.op,
             executor.input_layout.grades,
             executor.output_layout.grades,
-        )
-
-    def _full_layout_allowed(self) -> bool:
-        return full_layout_allowed(self.algebra, self.spec)
-
-    def _implicit_full_operand(self, tensor: torch.Tensor, *, grades, layout, active_lanes: bool) -> bool:
-        return (
-            grades is None
-            and layout is None
-            and not active_lanes
-            and self._full_layout_allowed()
-            and tensor.shape[-1] == self.spec.dim
         )
 
     def _default_operand_grades(self, grades, layout: GradeLayout = None):

@@ -12,8 +12,8 @@ Tests cover:
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.context import AlgebraContext
+from clifra.core.config import make_algebra
+from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
 from clifra.layers import CliffordLinear, RotorGadget
 
 pytestmark = pytest.mark.unit
@@ -37,6 +37,77 @@ class TestRotorGadgetShapes:
         out = layer(x)
 
         assert out.shape == (batch_size, 8, algebra_2d.dim)
+
+    def test_pair_matrix_path_matches_per_channel_sandwich(self, algebra_3d):
+        """Optimized pair-level action matrices preserve the previous channel action."""
+        layer = RotorGadget(
+            algebra=algebra_3d,
+            in_channels=7,
+            out_channels=5,
+            num_rotor_pairs=3,
+            aggregation="sum",
+        )
+        x = torch.randn(2, 7, algebra_3d.dim)
+
+        R_left, R_right_rev = layer._compute_rotors(x.device, x.dtype)
+        ch2pair = layer._ch2pair.to(device=x.device)
+        expected_channels = algebra_3d.per_channel_sandwich(R_left[ch2pair], x, R_right_rev[ch2pair])
+        actual_channels = torch.einsum(
+            "...cj,ckj->...ck",
+            x,
+            torch.index_select(algebra_3d.sandwich_action_matrices(R_left, R_right_rev), 0, ch2pair),
+        )
+
+        assert torch.allclose(actual_channels, expected_channels, atol=1e-6, rtol=1e-6)
+        assert torch.allclose(layer(x), layer._aggregate_to_output_channels(expected_channels), atol=1e-6, rtol=1e-6)
+
+    def test_compact_pair_action_matches_dense_reference(self, algebra_3d):
+        """Compact RotorGadget uses planned pair products without changing dense semantics."""
+        input_layout = algebra_3d.layout((1,))
+        layer = RotorGadget(
+            algebra=algebra_3d,
+            in_channels=5,
+            out_channels=4,
+            num_rotor_pairs=3,
+            aggregation="sum",
+            input_layout=input_layout,
+        )
+        x_dense = torch.randn(2, 5, algebra_3d.dim)
+        x = input_layout.compact(x_dense)
+        x_reference = input_layout.dense(x)
+
+        R_left, R_right_rev = layer._compute_rotors(x.device, x.dtype)
+        ch2pair = layer._ch2pair.to(device=x.device)
+        expected_channels_dense = algebra_3d.per_channel_sandwich(R_left[ch2pair], x_reference, R_right_rev[ch2pair])
+        expected_channels = layer.output_layout.compact(expected_channels_dense)
+
+        assert layer.output_layout.grades == (1, 3)
+        assert torch.allclose(
+            layer.action(x, layer.bivector_left, layer.bivector_right, layer._ch2pair),
+            expected_channels,
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        assert torch.allclose(
+            layer(x),
+            layer._aggregate_to_output_channels(expected_channels),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+
+    def test_context_rotor_gadget_uses_planned_compact_products(self):
+        """RotorGadget is available on planning contexts when layouts are compact."""
+        context = make_algebra(4, 0, kernel="context", device="cpu", dtype=torch.float32, default_grades=(1,))
+        input_layout = context.layout((1,))
+        layer = RotorGadget(context, in_channels=3, out_channels=2, num_rotor_pairs=2)
+        x = torch.randn(2, 3, input_layout.dim)
+
+        out = layer(x)
+
+        assert layer.input_layout.grades == (1,)
+        assert layer.output_layout.grades == (1, 3)
+        assert out.shape == (2, 2, context.layout((1, 3)).dim)
+        assert torch.isfinite(out).all()
 
     @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
     def test_fullgraph_compile(self, algebra_3d):
@@ -718,15 +789,20 @@ class TestCliffordLinearBackend:
                 backend="invalid",
             )
 
-    def test_rotor_backend_rejects_compact_context(self):
-        """RotorGadget backend is dense-only until compact aggregation semantics are explicit."""
+    def test_rotor_backend_accepts_compact_context(self):
+        """Rotor backend delegates compact lane execution to the planned action path."""
         context = AlgebraContext(4, 0, device="cpu", default_grades=(1,))
+        x = torch.randn(2, 4, context.layout((1,)).dim)
 
-        with pytest.raises(ValueError, match="dense-only"):
-            CliffordLinear(context, in_channels=4, out_channels=4, backend="rotor")
+        layer = CliffordLinear(context, in_channels=4, out_channels=4, backend="rotor")
+        out = layer(x)
 
-    def test_backward_compatibility(self, algebra_3d):
-        """Test that default behavior is unchanged (traditional)."""
+        assert layer.output_layout.grades == (1, 3)
+        assert out.shape == (2, 4, context.layout((1, 3)).dim)
+        assert torch.isfinite(out).all()
+
+    def test_default_backend_is_traditional(self, algebra_3d):
+        """Test that default behavior uses the traditional backend."""
         layer = CliffordLinear(
             algebra=algebra_3d,
             in_channels=4,

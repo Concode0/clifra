@@ -48,6 +48,14 @@ class AlgebraSpec:
         """Return a compact layout for ``grades``."""
         return GradeLayout(self, normalize_grades(grades, self.n))
 
+    def full_layout(self) -> "GradeLayout":
+        """Return the canonical all-grades layout.
+
+        ``Full`` is only a grade set: grades ``0..n`` in canonical basis order.
+        It is not a separate runtime storage mode.
+        """
+        return self.layout(range(self.n + 1))
+
 
 @dataclass(frozen=True)
 class GradeLayout:

@@ -1,8 +1,7 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.context import AlgebraContext
+from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
 from clifra.layers.blocks.attention import GeometricProductAttention
 
 pytestmark = pytest.mark.unit

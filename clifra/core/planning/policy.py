@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 #
 
-"""Static planning policy for layout fallback and plan-cost diagnostics."""
+"""Static planning policy for plan-cost diagnostics."""
 
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 
 DENSE_AUTO_MAX_N = 8
 DENSE_EXPLICIT_MAX_N = 12
-FULL_LAYOUT_WARN_N = DENSE_AUTO_MAX_N
-FULL_LAYOUT_MAX_N = DENSE_EXPLICIT_MAX_N
 
 
 @dataclass(frozen=True)
@@ -58,34 +56,12 @@ class PlanCost:
 
 
 DEFAULT_PLANNING_LIMITS = PlanningLimits()
-_WARNED_FULL_LAYOUT_SIGNATURES: set[tuple[int, int, int]] = set()
 _WARNED_PLAN_COSTS: set[tuple[object, ...]] = set()
 
 
 def planning_limits_for(algebra) -> PlanningLimits:
     """Return per-algebra planning limits, falling back to defaults."""
     return getattr(algebra, "planning_limits", DEFAULT_PLANNING_LIMITS)
-
-
-def full_layout_allowed(algebra, spec: AlgebraSpec) -> bool:
-    """Return whether implicit full-layout planning is enabled for this algebra."""
-    return bool(getattr(algebra, "allow_full_layout_products", False)) and spec.n <= FULL_LAYOUT_MAX_N
-
-
-def warn_full_layout_fallback(algebra) -> None:
-    """Warn once per signature when implicit full layout is used at n>=8."""
-    if getattr(algebra, "n", 0) < FULL_LAYOUT_WARN_N:
-        return
-    signature = (int(algebra.p), int(algebra.q), int(algebra.r))
-    if signature in _WARNED_FULL_LAYOUT_SIGNATURES:
-        return
-    _WARNED_FULL_LAYOUT_SIGNATURES.add(signature)
-    warnings.warn(
-        f"Using implicit full Cl({algebra.p},{algebra.q},{algebra.r}) layout at n={algebra.n}. "
-        "Declare active grades or default_grades to avoid full-layout planning.",
-        RuntimeWarning,
-        stacklevel=3,
-    )
 
 
 def validate_layout_cost(algebra, layout: GradeLayout, *, role: str = "layout") -> GradeLayout:

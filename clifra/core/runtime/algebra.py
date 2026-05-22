@@ -12,26 +12,204 @@ for arbitrary signatures Cl(p, q, r).
 """
 
 import math
-from typing import Optional
+from typing import Iterable, Optional
 
 import torch
 import torch.nn as nn
 
+from clifra.core.foundation.basis import normalize_grades
+from clifra.core.foundation.device import resolve_device, resolve_dtype
+from clifra.core.foundation.host import AlgebraHostMixin
+from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.foundation.validation import check_multivector
+from clifra.core.planning.planner import GradePlanner
 from clifra.core.planning.policy import (
     DEFAULT_PLANNING_LIMITS,
     DENSE_AUTO_MAX_N,
     DENSE_EXPLICIT_MAX_N,
     PlanningLimits,
 )
-from clifra.core.runtime.projected import AlgebraRuntimeMixin
 
 EXP_TAYLOR_DEFAULT_ORDER = 8
 SIMPLE_BIVECTOR_RESIDUAL_EPS_MULTIPLIER = 100.0
 
 
-class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
+class AlgebraContext(AlgebraHostMixin):
+    """Signature and planning host without dense Cayley-table materialization."""
+
+    def __init__(
+        self,
+        p: int,
+        q: int = 0,
+        r: int = 0,
+        *,
+        device="cuda",
+        dtype: torch.dtype = torch.float32,
+        default_grades: Optional[Iterable[int]] = None,
+        planning_limits: Optional[PlanningLimits] = None,
+    ):
+        if p < 0 or q < 0 or r < 0:
+            raise ValueError(f"signature counts must be non-negative, got Cl({p},{q},{r})")
+
+        self.p = int(p)
+        self.q = int(q)
+        self.r = int(r)
+        self.n = self.p + self.q + self.r
+        self.dim = 1 << self.n
+        self.num_grades = self.n + 1
+        self.spec = AlgebraSpec(self.p, self.q, self.r)
+        self._device = torch.device(resolve_device(device) if str(device) == "auto" else device)
+        self._dtype = resolve_dtype(dtype)
+        self.planning_limits = DEFAULT_PLANNING_LIMITS if planning_limits is None else planning_limits
+        self._default_grades = None if default_grades is None else normalize_grades(default_grades, self.n)
+        self._default_layout: Optional[GradeLayout] = None
+        self._g1_indices_cache: dict[str, torch.Tensor] = {}
+        self.planner = GradePlanner(self)
+        self._sync_eps()
+
+    @property
+    def device(self):
+        """Return the context device used for planned executor buffers."""
+        return self._device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """Return the context floating-point dtype."""
+        return self._dtype
+
+    def bivector_squared_signs(self, *, device=None, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
+        """Return ``(e_ab)^2`` signs in canonical grade-2 layout order."""
+        return self.planner.bivector_squared_signs(
+            device=self.device if device is None else device,
+            dtype=self.dtype if dtype is None else dtype,
+        )
+
+    def _apply(self, fn):
+        """Apply a PyTorch module-style device/dtype transform to cached executors."""
+        probe = fn(torch.empty((), device=self.device, dtype=self.dtype))
+        self._device = probe.device
+        if probe.dtype.is_floating_point:
+            self._dtype = probe.dtype
+        self._sync_eps()
+        self._g1_indices_cache.clear()
+        self.planner._apply(fn)
+        return self
+
+    def to(self, device=None, dtype=None):
+        """Move the context and cached executors."""
+        if device is not None:
+            self._device = torch.device(resolve_device(device) if str(device) == "auto" else device)
+        if dtype is not None:
+            self._dtype = resolve_dtype(dtype)
+        self._sync_eps()
+        self._g1_indices_cache.clear()
+        self.planner.clear_cache()
+        return self
+
+    def geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Plan and execute a geometric product."""
+        return self.projected_product(A, B, op="gp", **kwargs)
+
+    def wedge(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Plan and execute an exterior product."""
+        return self.projected_product(A, B, op="wedge", **kwargs)
+
+    def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Plan and execute the symmetric inner product route."""
+        return self.projected_product(A, B, op="inner", **kwargs)
+
+    def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Plan and execute a commutator product."""
+        return self.projected_product(A, B, op="commutator", **kwargs)
+
+    def anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Plan and execute an anti-commutator product."""
+        return self.projected_product(A, B, op="anti_commutator", **kwargs)
+
+    def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
+        """Project declared multivector coefficients to one grade."""
+        kwargs.setdefault("output_grades", (int(grade),))
+        return self.planned_unary(mv, op="grade_projection", **kwargs)
+
+    def embed_vector(self, vectors: torch.Tensor) -> torch.Tensor:
+        """Embed grade-1 vector coordinates into dense multivector coefficients."""
+        if vectors.shape[-1] != self.n:
+            raise ValueError(f"vectors last dimension must be {self.n}, got {vectors.shape[-1]}")
+        output = vectors.new_zeros(*vectors.shape[:-1], self.dim)
+        return output.index_copy(-1, self._basis_vector_indices(vectors.device), vectors)
+
+    def reverse(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Reverse dense or compact multivector coefficients."""
+        return self.planned_unary(mv, op="reverse", **kwargs)
+
+    def grade_involution(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply grade involution to dense or compact multivector coefficients."""
+        return self.planned_unary(mv, op="grade_involution", **kwargs)
+
+    def clifford_conjugation(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply Clifford conjugation to dense or compact multivector coefficients."""
+        return self.planned_unary(mv, op="clifford_conjugation", **kwargs)
+
+    def exp(
+        self,
+        mv: torch.Tensor,
+        *,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        return_layout: bool = False,
+    ) -> torch.Tensor:
+        """Exponentiate a declared compact bivector with the planner.
+
+        Context algebras do not own dense Cayley tables, so bivector exp is
+        lowered to ``torch.matrix_exp`` of the planned left-product operator on
+        the even subalgebra. The dense kernel keeps its specialized
+        closed/decomposed implementation.
+        """
+        input_layout = self._declared_layout(input_grades, input_layout)
+        if input_layout.grades != (2,):
+            raise ValueError(f"AlgebraContext.exp requires grade-2 input, got grades {input_layout.grades}")
+        output_layout = self._optional_layout(output_grades, output_layout)
+        if output_layout is None:
+            output_layout = self.layout(range(0, self.n + 1, 2))
+        if output_layout.spec != input_layout.spec:
+            raise ValueError(f"output layout signature {output_layout.spec} does not match input signature")
+        if any(grade % 2 for grade in output_layout.grades):
+            raise ValueError(f"AlgebraContext.exp output must contain only even grades, got {output_layout.grades}")
+
+        values = mv if mv.shape[-1] == input_layout.dim else input_layout.compact(mv)
+        basis = torch.eye(output_layout.dim, device=values.device, dtype=values.dtype)
+        columns = self.geometric_product(
+            values.unsqueeze(-2),
+            basis,
+            left_layout=input_layout,
+            right_layout=output_layout,
+            output_layout=output_layout,
+        )
+        operator = columns.transpose(-1, -2)
+        exp_operator = torch.matrix_exp(operator)
+        scalar_position = output_layout.basis_indices.index(0)
+        output = exp_operator[..., :, scalar_position]
+        return (output, output_layout) if return_layout else output
+
+    def _basis_vector_indices(self, device) -> torch.Tensor:
+        resolved = torch.device(device)
+        key = str(resolved)
+        cached = self._g1_indices_cache.get(key)
+        if cached is None:
+            cached = torch.tensor([1 << bit for bit in range(self.n)], dtype=torch.long, device=resolved)
+            self._g1_indices_cache[key] = cached
+        return cached
+
+    def _sync_eps(self) -> None:
+        finfo = torch.finfo(self.dtype)
+        self.eps = float(finfo.eps)
+        self.eps_sq = float(finfo.eps**2)
+
+
+class CliffordAlgebra(AlgebraHostMixin, nn.Module):
     """Differentiable Clifford algebra kernel with memory-optimized blocked accumulation.
 
     Extends ``nn.Module`` so that all Cayley tables are registered as
@@ -99,7 +277,6 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         self.p, self.q, self.r = p, q, r
         self.n = p + q + r
         self.dim = 2**self.n
-        self.allow_full_layout_products = True
         self.planning_limits = DEFAULT_PLANNING_LIMITS if planning_limits is None else planning_limits
 
         # Exp regime: dispatch at init
@@ -183,8 +360,6 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         _finfo = torch.finfo(self.cayley_signs.dtype)
         self.eps: float = float(_finfo.eps)
         self.eps_sq: float = float(_finfo.eps**2)
-
-        from clifra.core.planning.planner import GradePlanner
 
         self.planner = GradePlanner(self)
 
@@ -732,22 +907,34 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         if R_rev is None:
             R_rev = self.reverse(R)
 
-        ci = self.cayley_indices  # [D, D], ci[i, j] = i ^ j
-
-        # Left-multiplication matrix L_R:  L_R[n, k, j] = R[n, j^k] * gp_signs[j^k, k]
-        R_gathered = R[:, ci]  # [N, D(j), D(k)]
-        L_R = R_gathered.permute(0, 2, 1) * self._left_sign_T.unsqueeze(0)
-
-        # Right-multiplication matrix R_{R~}:  R_Rr[n, k, i] = R~[n, i^k] * gp_signs[i, k]
-        gp_T = self.gp_signs.T
-        Rr_gathered = R_rev[:, ci]  # [N, D(i), D(k)]
-        R_Rr = Rr_gathered.permute(0, 2, 1) * gp_T.unsqueeze(0)
-
-        # Sandwich matrix:  M = R_Rr @ L_R   ->   (R x R~)[k] = sum_j M[k, j] * x[j]
-        M = torch.bmm(R_Rr, L_R)  # [N, D, D]
+        M = self.sandwich_action_matrices(R, R_rev)
 
         # Apply to all channels:  result[n, c, k] = sum_j M[n, k, j] * x[n, c, j]
         return torch.matmul(x, M.transpose(-2, -1))
+
+    def sandwich_action_matrices(self, R: torch.Tensor, R_rev: torch.Tensor = None) -> torch.Tensor:
+        """Build dense action matrices for ``R x R_rev``.
+
+        Returns matrices ``M[..., k, j]`` satisfying
+        ``output[..., k] = sum_j M[..., k, j] * x[..., j]``.
+        """
+        if R_rev is None:
+            R_rev = self.reverse(R)
+
+        ci = self.cayley_indices
+        left_sign_t = self._left_sign_T
+        gp_t = self.gp_signs.T
+        if left_sign_t.dtype != R.dtype:
+            left_sign_t = left_sign_t.to(dtype=R.dtype)
+            gp_t = gp_t.to(dtype=R.dtype)
+
+        R_gathered = R[:, ci]
+        L_R = R_gathered.permute(0, 2, 1) * left_sign_t.unsqueeze(0)
+
+        Rr_gathered = R_rev[:, ci]
+        R_Rr = Rr_gathered.permute(0, 2, 1) * gp_t.unsqueeze(0)
+
+        return torch.bmm(R_Rr, L_R)
 
     def per_channel_sandwich(self, R: torch.Tensor, x: torch.Tensor, R_rev: torch.Tensor = None) -> torch.Tensor:
         """Sandwich product with per-channel rotors via action matrices.
@@ -768,19 +955,8 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         if R_rev is None:
             R_rev = self.reverse(R)
 
-        ci = self.cayley_indices  # [D, D]
-
-        # Build per-channel action matrices M[c, k, j]
-        R_gathered = R[:, ci]  # [C, D, D]
-        L_R = R_gathered.permute(0, 2, 1) * self._left_sign_T.unsqueeze(0)
-
-        gp_T = self.gp_signs.T
-        Rr_gathered = R_rev[:, ci]  # [C, D, D]
-        R_Rr = Rr_gathered.permute(0, 2, 1) * gp_T.unsqueeze(0)
-
-        M = torch.bmm(R_Rr, L_R)  # [C, D, D]
-
-        return torch.einsum("...cd,cdk->...ck", x, M.transpose(-2, -1))
+        M = self.sandwich_action_matrices(R, R_rev)
+        return torch.einsum("...cj,ckj->...ck", x, M)
 
     def multi_rotor_sandwich(self, R: torch.Tensor, x: torch.Tensor, R_rev: torch.Tensor = None) -> torch.Tensor:
         """Sandwich product with K rotors applied to C-channel input.
@@ -803,18 +979,8 @@ class CliffordAlgebra(AlgebraRuntimeMixin, nn.Module):
         if R_rev is None:
             R_rev = self.reverse(R)
 
-        ci = self.cayley_indices  # [D, D]
-
-        R_gathered = R[:, ci]  # [K, D, D]
-        L_R = R_gathered.permute(0, 2, 1) * self._left_sign_T.unsqueeze(0)
-
-        gp_T = self.gp_signs.T
-        Rr_gathered = R_rev[:, ci]  # [K, D, D]
-        R_Rr = Rr_gathered.permute(0, 2, 1) * gp_T.unsqueeze(0)
-
-        M = torch.bmm(R_Rr, L_R)  # [K, D, D]
-
-        return torch.einsum("...cd,kde->...cke", x, M.transpose(-2, -1))
+        M = self.sandwich_action_matrices(R, R_rev)
+        return torch.einsum("...cj,kej->...cke", x, M)
 
     def pseudoscalar_product(self, x: torch.Tensor) -> torch.Tensor:
         """Multiply by the unit pseudoscalar: x * I.

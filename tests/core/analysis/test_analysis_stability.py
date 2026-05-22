@@ -32,7 +32,6 @@ def test_analysis_modules_accept_context_without_dense_fallback():
         device="cpu",
         dtype=torch.float32,
         default_grades=(1,),
-        allow_full_layout_products=False,
     )
     mv = algebra.embed_vector(torch.randn(16, algebra.n))
 

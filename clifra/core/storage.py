@@ -14,9 +14,8 @@ from typing import Iterable, Optional
 
 import torch
 
-from clifra.core.foundation.basis import normalize_grades
+from clifra.core.foundation.basis import normalize_grades, operation_coefficient, reverse_sign
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.planning.action import metric_self_signs
 
 
 class LaneFormat(str, Enum):
@@ -103,22 +102,22 @@ class LayerLayout:
     """Resolved lane contract for layer inputs and outputs."""
 
     algebra: object
-    layout: GradeLayout | None = None
+    layout: GradeLayout
 
     @property
     def lane_dim(self) -> int:
         """Return the coefficient lane count accepted by this contract."""
-        return self.algebra.dim if self.layout is None else self.layout.dim
+        return self.layout.dim
 
     @property
     def uses_active_lanes(self) -> bool:
-        """Return whether this layer contract uses only declared layout lanes."""
-        return self.layout is not None and self.layout.dim != self.algebra.dim
+        """Return whether this layer contract uses the declared layout lanes."""
+        return True
 
     @property
-    def grades(self) -> tuple[int, ...] | None:
+    def grades(self) -> tuple[int, ...]:
         """Return active grades when layout metadata is known."""
-        return None if self.layout is None else self.layout.grades
+        return self.layout.grades
 
     def validate_input(
         self,
@@ -126,36 +125,23 @@ class LayerLayout:
         *,
         channels: int,
         name: str,
-        allow_full: bool | None = None,
-    ) -> bool:
-        """Validate layer input and return whether it uses active layout lanes."""
+    ) -> None:
+        """Validate layer input against this declared layout contract."""
         if values.ndim < 3:
             raise ValueError(f"{name}: expected ndim >= 3, got shape {tuple(values.shape)}")
         if values.shape[-2] != channels:
             raise ValueError(
                 f"{name}: expected {channels} channels, got {values.shape[-2]} (shape {tuple(values.shape)})"
             )
-
-        if self.layout is not None and values.shape[-1] == self.layout.dim:
-            return self.uses_active_lanes
-
-        if allow_full is None:
-            allow_full = self.layout is None or self.layout.dim == self.algebra.dim
-        if allow_full and values.shape[-1] == self.algebra.dim:
-            return False
-
-        expected = [str(self.algebra.dim)] if allow_full else []
-        if self.layout is not None:
-            expected.insert(0, f"{self.layout.dim} for grades {self.layout.grades}")
-        raise ValueError(f"{name}: last dim must be {' or '.join(expected)}, got {values.shape[-1]}")
+        if values.shape[-1] != self.layout.dim:
+            raise ValueError(
+                f"{name}: last dim must be {self.layout.dim} for grades {self.layout.grades}, "
+                f"got {values.shape[-1]}"
+            )
 
     def scalar_mask(self, *, device=None, dtype=None) -> torch.Tensor:
         """Return a scalar-lane mask for this contract."""
         dtype = torch.float32 if dtype is None else dtype
-        if self.layout is None:
-            mask = torch.zeros(self.algebra.dim, device=device, dtype=dtype)
-            mask[0] = 1.0
-            return mask
         return torch.tensor(
             [1.0 if index == 0 else 0.0 for index in self.layout.basis_indices],
             device=device,
@@ -164,8 +150,6 @@ class LayerLayout:
 
     def grade_positions(self, grade: int, *, device=None) -> torch.Tensor:
         """Return lane positions for one grade."""
-        if self.layout is None:
-            return self.algebra.grade_indices((grade,), device=device)
         positions = [
             position for position, index in enumerate(self.layout.basis_indices) if index.bit_count() == int(grade)
         ]
@@ -173,16 +157,10 @@ class LayerLayout:
 
     def active_grade_norms(self, values: torch.Tensor) -> torch.Tensor:
         """Return per-grade coefficient norms for active-lane values."""
-        from clifra.core.runtime.actions import compact_grade_norms
-
-        if self.layout is None:
-            return self.algebra.grade_norms(values)
         return compact_grade_norms(self.algebra, values, self.layout)
 
     def metric_signs(self, *, device=None, dtype=None) -> torch.Tensor:
         """Return basis self-product signs for this contract."""
-        if self.layout is None:
-            return metric_self_signs(self.algebra.default_layout(), device=device, dtype=dtype)
         return metric_self_signs(self.layout, device=device, dtype=dtype)
 
 
@@ -208,7 +186,6 @@ def resolve_value_layout(
     layout: Optional[GradeLayout] = None,
     active_lanes: bool = False,
     side: str = "value",
-    full_layout_allowed: bool = True,
 ) -> ValueLayout:
     """Resolve a tensor's logical layout and lane-width contract."""
     layout = resolve_operand_layout(
@@ -218,14 +195,16 @@ def resolve_value_layout(
         layout=layout,
         active_lanes=active_lanes,
         side=side,
-        full_layout_allowed=full_layout_allowed,
     )
-    lane_format = (
-        LaneFormat.ACTIVE if active_lanes or tensor_uses_active_lanes(spec, tensor, layout) else LaneFormat.FULL
-    )
-    value_layout = (
-        ValueLayout.active(spec, layout) if lane_format is LaneFormat.ACTIVE else ValueLayout.full(spec, layout)
-    )
+    if tensor.shape[-1] == layout.dim:
+        value_layout = ValueLayout.active(spec, layout)
+    elif tensor.shape[-1] == spec.dim:
+        value_layout = ValueLayout.full(spec, layout)
+    else:
+        raise ValueError(
+            f"{side} last dimension must be {layout.dim} for grades {layout.grades} or {spec.dim} full lanes, "
+            f"got {tensor.shape[-1]}"
+        )
     value_layout.validate_tensor(tensor, name=side)
     return value_layout
 
@@ -238,7 +217,6 @@ def resolve_operand_layout(
     layout: Optional[GradeLayout] = None,
     active_lanes: bool = False,
     side: str,
-    full_layout_allowed: bool = True,
 ) -> GradeLayout:
     """Resolve one operand's logical grade layout from metadata or tensor shape."""
     if layout is not None:
@@ -253,19 +231,12 @@ def resolve_operand_layout(
         _check_operand_shape(spec, tensor, layout, active_lanes=active_lanes, side=side)
         return layout
 
-    if active_lanes:
-        raise ValueError(f"{side}_layout or {side}_grades is required for active-lane {side} input")
     if tensor.shape[-1] != spec.dim:
         raise ValueError(
             f"{side} input has last dimension {tensor.shape[-1]}; declare {side}_layout or "
             f"{side}_grades for layout-planned execution"
         )
-    if not full_layout_allowed:
-        raise ValueError(
-            f"{side} input would require a full Cl({spec.p},{spec.q},{spec.r}) layout. "
-            "Declare active grades or enable an explicit low-dimensional full-layout fallback."
-        )
-    return spec.layout(range(spec.n + 1))
+    return spec.full_layout()
 
 
 def resolve_layer_layout_contract(algebra, *, layout: GradeLayout = None, grades=None) -> LayerLayout:
@@ -275,8 +246,8 @@ def resolve_layer_layout_contract(algebra, *, layout: GradeLayout = None, grades
 
 def resolve_layer_layout(algebra, *, layout: GradeLayout = None, grades=None) -> GradeLayout | None:
     """Resolve optional layer layout metadata."""
+    spec = AlgebraSpec.from_algebra(algebra)
     if layout is not None:
-        spec = algebra.planner.spec
         check_layout_spec(spec, layout, "layout")
         return layout
     if grades is not None:
@@ -284,7 +255,9 @@ def resolve_layer_layout(algebra, *, layout: GradeLayout = None, grades=None) ->
     default_grades = getattr(algebra, "_default_grades", None)
     if default_grades is not None:
         return algebra.layout(default_grades)
-    return None
+    if hasattr(algebra, "default_layout"):
+        return algebra.default_layout()
+    return spec.full_layout()
 
 
 def check_layout_spec(spec: AlgebraSpec, layout: GradeLayout, name: str) -> None:
@@ -294,8 +267,8 @@ def check_layout_spec(spec: AlgebraSpec, layout: GradeLayout, name: str) -> None
 
 
 def tensor_uses_active_lanes(spec: AlgebraSpec, tensor: torch.Tensor, layout: GradeLayout) -> bool:
-    """Return whether ``tensor`` already uses ``layout``'s active lane count."""
-    return layout.dim != spec.dim and tensor.shape[-1] == layout.dim
+    """Return whether ``tensor`` uses ``layout``'s lane count."""
+    return tensor.shape[-1] == layout.dim
 
 
 def layout_for_values(
@@ -306,7 +279,6 @@ def layout_for_values(
     grades: Optional[Iterable[int]] = None,
     active_lanes: bool = False,
     side: str = "value",
-    full_layout_allowed: bool = True,
 ) -> ValueLayout:
     """Alias for readability at runtime call sites."""
     return resolve_value_layout(
@@ -316,16 +288,15 @@ def layout_for_values(
         grades=grades,
         active_lanes=active_lanes,
         side=side,
-        full_layout_allowed=full_layout_allowed,
     )
 
 
 def resolve_output_boundary(request, *, active_output: bool, reason: str | None = None) -> ExecutionBoundary:
     """Resolve the output lane boundary for a planned operation request."""
-    output_value = request.output_value if active_output else ValueLayout.full(request.spec, request.output_layout)
-    path = ExecutorPath.PLANNED_ACTIVE if output_value.uses_active_lanes else ExecutorPath.PLANNED_FULL
+    output_value = request.output_value
+    path = ExecutorPath.PLANNED_ACTIVE
     if reason is None:
-        reason = "active output layout" if active_output else "caller requested full-basis output materialization"
+        reason = "planner resolved output layout"
     return ExecutionBoundary(path=path, output_value=output_value, reason=reason)
 
 
@@ -339,7 +310,96 @@ def _check_operand_shape(
 ) -> None:
     if tensor.ndim < 1:
         raise ValueError(f"{side} must include a coefficient lane dimension, got shape {tuple(tensor.shape)}")
-    expected = layout.dim if active_lanes or tensor_uses_active_lanes(spec, tensor, layout) else spec.dim
-    if tensor.shape[-1] != expected:
-        lane_width = "active" if expected == layout.dim else "full"
-        raise ValueError(f"{side} {lane_width} last dimension must be {expected}, got {tensor.shape[-1]}")
+    if tensor.shape[-1] not in {layout.dim, spec.dim}:
+        raise ValueError(
+            f"{side} last dimension must be {layout.dim} for grades {layout.grades} or {spec.dim} full lanes, "
+            f"got {tensor.shape[-1]}"
+        )
+
+
+def active_values(
+    algebra,
+    value: torch.Tensor,
+    *,
+    layout: Optional[GradeLayout] = None,
+    grades: Optional[Iterable[int]] = None,
+) -> tuple[torch.Tensor, GradeLayout]:
+    """Return tensor values and their resolved layout without materializing hidden lanes."""
+    if not isinstance(value, torch.Tensor):
+        raise TypeError(f"Expected Tensor value, got {type(value)!r}")
+    resolved = resolve_layer_layout(algebra, layout=layout, grades=grades)
+    if value.shape[-1] == resolved.dim:
+        return value, resolved
+    if value.shape[-1] == resolved.spec.dim:
+        return resolved.compact(value), resolved
+    raise ValueError(
+        f"value last dimension must be {resolved.dim} for grades {resolved.grades} or {resolved.spec.dim} full lanes, "
+        f"got {value.shape[-1]}"
+    )
+
+
+def materialize_full(
+    algebra,
+    value: torch.Tensor,
+    *,
+    layout: Optional[GradeLayout] = None,
+    grades: Optional[Iterable[int]] = None,
+) -> torch.Tensor:
+    """Explicitly materialize values into the canonical all-grades basis."""
+    values, resolved = active_values(algebra, value, layout=layout, grades=grades)
+    if resolved.dim == resolved.spec.dim and resolved.grades == tuple(range(resolved.spec.n + 1)):
+        return values
+    return resolved.dense(values)
+
+
+def metric_self_signs(layout: GradeLayout, *, device=None, dtype=None) -> torch.Tensor:
+    """Return basis self-product signs for a layout."""
+    signs = [
+        operation_coefficient(index, index, layout.spec.p, layout.spec.q, layout.spec.r, "gp")
+        for index in layout.basis_indices
+    ]
+    return torch.tensor(signs, device=device, dtype=torch.float32 if dtype is None else dtype)
+
+
+def hermitian_signs(
+    algebra,
+    layout: Optional[GradeLayout] = None,
+    *,
+    grades: Optional[Iterable[int]] = None,
+    device=None,
+    dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    """Return Hermitian metric signs for a declared layout."""
+    resolved = resolve_layer_layout(algebra, layout=layout, grades=grades)
+    if device is None:
+        device = getattr(algebra, "device", None)
+    if dtype is None:
+        dtype = getattr(algebra, "dtype", torch.float32)
+
+    full_signs = getattr(algebra, "_hermitian_signs", None)
+    if full_signs is not None:
+        indices = resolved.indices_tensor(device=full_signs.device)
+        signs = torch.index_select(full_signs, -1, indices)
+        return signs.to(device=device, dtype=dtype)
+
+    values = [_hermitian_sign_for_index(resolved.spec, index) for index in resolved.basis_indices]
+    return torch.tensor(values, dtype=dtype, device=device)
+
+
+def compact_grade_norms(algebra, values: torch.Tensor, layout: GradeLayout) -> torch.Tensor:
+    """Return per-grade coefficient norms for declared-layout values."""
+    if values.shape[-1] != layout.dim:
+        raise ValueError(f"values last dimension must be {layout.dim}, got {values.shape[-1]}")
+    flat = values.pow(2).reshape(-1, layout.dim)
+    grade_ids = layout.grade_indices_tensor(device=values.device).unsqueeze(0).expand_as(flat)
+    result = values.new_zeros(flat.shape[0], layout.spec.n + 1)
+    result.scatter_add_(1, grade_ids, flat)
+    eps = getattr(algebra, "eps", torch.finfo(values.dtype).eps)
+    return result.reshape(*values.shape[:-1], layout.spec.n + 1).clamp(min=eps).sqrt()
+
+
+def _hermitian_sign_for_index(spec: AlgebraSpec, index: int) -> float:
+    grade = int(index).bit_count()
+    grade_sign = -1.0 if grade % 2 else 1.0
+    metric_sign = operation_coefficient(index, index, spec.p, spec.q, spec.r, "gp")
+    return grade_sign * reverse_sign(index) * metric_sign

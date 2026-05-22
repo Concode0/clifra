@@ -72,10 +72,6 @@ class ReflectionLayer(CliffordModule):
         self.vector_weights = nn.Parameter(torch.Tensor(self.channels, self.num_vectors))
         tag_manifold(self.vector_weights, MANIFOLD_SPHERE)
 
-        # Cache for eval mode
-        self._cached_n = None
-        self._cached_n_inv = None
-
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -112,35 +108,16 @@ class ReflectionLayer(CliffordModule):
         Returns:
             torch.Tensor: Reflected input [Batch, Channels, Dim].
         """
-        cache = (
-            (self._cached_n, self._cached_n_inv)
-            if not self.training and self._cached_n is not None and self._cached_n_inv is not None
-            else None
-        )
-        out, next_cache = self.algebra.versor_action(
+        return self.algebra.versor_action(
             x,
             self.vector_weights,
             grade=1,
             input_layout=self.input_layout,
             output_layout=self.output_layout,
             parameter_layout=self.vector_layout,
-            active_output=self.output_layout is not None,
             channels=self.channels,
             name="ReflectionLayer input",
-            dense_cache=cache,
-            cache_dense=not self.training,
-            return_cache=True,
         )
-        if not self.training and next_cache is not None:
-            self._cached_n, self._cached_n_inv = next_cache
-        return out
-
-    def train(self, mode: bool = True):
-        """Override to invalidate cache when switching to train mode."""
-        if mode:
-            self._cached_n = None
-            self._cached_n_inv = None
-        return super().train(mode)
 
     def sparsity_loss(self) -> torch.Tensor:
         """Compute L1 sparsity regularization on vector weights."""

@@ -3,7 +3,7 @@
 
 """Core mathematical kernel for Geometric Algebra.
 
-Provides the Clifford algebra, conformal algebra, multivector wrapper,
+Provides Clifford algebra hosts, layout contracts, planner/executor utilities,
 metric functions, bivector decomposition, and signature search utilities.
 
 The ``clifra.core.analysis`` sub-package (``MetricSearch``, ``GeodesicFlow``,
@@ -12,6 +12,14 @@ until first access, keeping ``import clifra.core`` lightweight.
 """
 
 from .config import AlgebraConfig, make_algebra, make_algebra_from_config
+from .execution import (
+    GeometricAttentionScoreExecutor,
+    GradedLinearActionExecutor,
+    MultiVersorActionExecutor,
+    PairedBivectorActionExecutor,
+    VersorActionExecutor,
+)
+from .formatting import Multivector, basis_blade_label, format_multivector
 from .foundation.basis import (
     GradeProductOp,
     basis_indices_for_grades,
@@ -29,6 +37,7 @@ from .foundation.layout import AlgebraSpec, GradeLayout
 from .foundation.module import AlgebraLike, CliffordModule, is_dense_kernel_host, require_dense_kernel_host
 from .foundation.numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
 from .foundation.validation import check_channels, check_multivector
+from .planning.decomposition import BivectorDecompositionPlan
 from .planning.flow import GradeFlow
 from .planning.layouts import ProductRequest, build_product_request
 from .planning.planner import GradePlanner
@@ -36,17 +45,7 @@ from .planning.policy import DEFAULT_PLANNING_LIMITS, PlanCost, PlanningLimits
 from .planning.product import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
 from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .planning.unary import GradeUnaryExecutor, GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
-from .runtime.accessors import (
-    active_values,
-    as_multivector,
-    grade_indices,
-    hermitian_signs,
-    materialize_full,
-    resolve_layout,
-)
-from .runtime.algebra import CliffordAlgebra
-from .runtime.attention import GeometricAttentionScorer
-from .runtime.context import AlgebraContext
+from .runtime.algebra import AlgebraContext, CliffordAlgebra
 from .runtime.decomposition import (
     ExpPolicy,
     compiled_safe_decomposed_exp,
@@ -70,14 +69,18 @@ from .runtime.metric import (
     signature_norm_squared,
     signature_trace_form,
 )
-from .runtime.multivector import Multivector
 from .storage import (
     ExecutionBoundary,
     ExecutorPath,
     LaneFormat,
     LayerLayout,
     ValueLayout,
+    active_values,
+    compact_grade_norms,
+    hermitian_signs,
     layout_for_values,
+    materialize_full,
+    metric_self_signs,
     resolve_layer_layout,
     resolve_layer_layout_contract,
     resolve_operand_layout,
@@ -94,8 +97,12 @@ __all__ = [
     "CliffordModule",
     "is_dense_kernel_host",
     "require_dense_kernel_host",
+    "GeometricAttentionScoreExecutor",
+    "GradedLinearActionExecutor",
+    "VersorActionExecutor",
+    "MultiVersorActionExecutor",
+    "PairedBivectorActionExecutor",
     "Multivector",
-    "GeometricAttentionScorer",
     "AlgebraSpec",
     "GradeLayout",
     "GradePlanner",
@@ -104,6 +111,7 @@ __all__ = [
     "ValueLayout",
     "LayerLayout",
     "ExecutionBoundary",
+    "BivectorDecompositionPlan",
     "PlanningLimits",
     "PlanCost",
     "DEFAULT_PLANNING_LIMITS",
@@ -121,6 +129,8 @@ __all__ = [
     "covariance_regularizer",
     "check_multivector",
     "check_channels",
+    "basis_blade_label",
+    "format_multivector",
     "resolve_value_layout",
     "resolve_operand_layout",
     "resolve_output_boundary",
@@ -142,12 +152,11 @@ __all__ = [
     "hermitian_grade_spectrum",
     "signature_trace_form",
     "signature_norm_squared",
-    "as_multivector",
     "active_values",
-    "grade_indices",
+    "compact_grade_norms",
     "hermitian_signs",
     "materialize_full",
-    "resolve_layout",
+    "metric_self_signs",
     # decomposition
     "ExpPolicy",
     "ga_power_iteration",

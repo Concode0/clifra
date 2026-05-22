@@ -8,8 +8,7 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.context import AlgebraContext
+from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
 from clifra.layers import (
     BladeSelector,
     CliffordLayerNorm,
@@ -282,12 +281,12 @@ class TestLayers:
         loss.backward()
 
         assert x.grad is not None
-        assert layer.rotor_bivectors.grad is not None
+        assert layer.rotor_grade_weights.grad is not None
         assert layer.weights.grad is not None
         assert not torch.isnan(x.grad).any()
         assert not torch.isinf(x.grad).any()
-        assert not torch.isnan(layer.rotor_bivectors.grad).any()
-        assert not torch.isinf(layer.rotor_bivectors.grad).any()
+        assert not torch.isnan(layer.rotor_grade_weights.grad).any()
+        assert not torch.isinf(layer.rotor_grade_weights.grad).any()
 
         algebra_3d.exp_policy = ExpPolicy.BALANCED
 
@@ -382,17 +381,16 @@ class TestLayers:
         assert layer.vector_weights.grad is not None
         assert not torch.all(layer.vector_weights.grad == 0)
 
-    def test_reflection_eval_caching(self, algebra_3d):
+    def test_reflection_eval_has_no_dense_cache(self, algebra_3d):
         C = 3
         layer = ReflectionLayer(algebra_3d, channels=C)
         layer.eval()
         x = torch.randn(2, C, 8)
-        _ = layer(x)
-        assert layer._cached_n is not None
-        assert layer._cached_n_inv is not None
+        y = layer(x)
+        assert y.shape == x.shape
+        assert not hasattr(layer, "_cached_n")
+        assert not hasattr(layer, "_cached_n_inv")
         layer.train()
-        assert layer._cached_n is None
-        assert layer._cached_n_inv is None
 
     def test_reflection_different_signatures(self):
         for p, q in [(2, 0), (3, 0), (2, 1), (3, 1)]:

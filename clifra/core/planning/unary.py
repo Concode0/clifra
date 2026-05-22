@@ -145,7 +145,6 @@ def build_unary_request(
     input_layout: Optional[GradeLayout] = None,
     output_layout: Optional[GradeLayout] = None,
     input_active_lanes: bool = False,
-    full_layout_allowed: bool = True,
 ) -> UnaryRequest:
     """Resolve caller input into a static unary request."""
     op = normalize_unary_op(op)
@@ -161,7 +160,6 @@ def build_unary_request(
         layout=input_layout,
         active_lanes=input_active_lanes,
         side="input",
-        full_layout_allowed=full_layout_allowed,
     )
     output_layout = resolve_unary_output_layout(
         spec,

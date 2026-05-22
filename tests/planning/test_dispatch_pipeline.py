@@ -3,8 +3,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.planning import PlanningLimits
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.context import AlgebraContext
+from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
 from clifra.layers import ProductLayer, WedgeLayer
 from clifra.layers.blocks.multi_rotor_ffn import MultiRotorFFN
 from clifra.optimizers import make_riemannian_optimizer
@@ -35,9 +34,7 @@ def test_wedge_layer_declared_grades_return_output_layout_lanes(algebra_3d):
     )
 
     actual = layer(left, right)
-    expected = output_layout.compact(
-        algebra_3d.wedge(left, right, left_grades=(1,), right_grades=(1,), output_grades=(2,))
-    )
+    expected = algebra_3d.wedge(left, right, left_grades=(1,), right_grades=(1,), output_grades=(2,))
 
     assert actual.shape[-1] == output_layout.dim
     assert torch.allclose(actual, expected)
@@ -70,7 +67,7 @@ def test_product_layer_pairwise_compact_widths_match_dense_reference():
         right_grades=(1,),
         output_grades=(3,),
     )
-    expected = output_layout.compact(expected_dense)
+    expected = expected_dense
 
     assert actual.shape == (2, 3, 4, output_layout.dim)
     assert torch.allclose(actual, expected)

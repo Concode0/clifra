@@ -22,9 +22,9 @@ class TestOptimization:
 
         # Manually set weights: one large, one small
         with torch.no_grad():
-            layer.bivector_weights.fill_(0.0)
-            layer.bivector_weights[0, 0] = 1.0  # Large
-            layer.bivector_weights[0, 1] = 1e-5  # Small
+            layer.grade_weights.fill_(0.0)
+            layer.grade_weights[0, 0] = 1.0  # Large
+            layer.grade_weights[0, 1] = 1e-5  # Small
 
         # Prune
         num_pruned = layer.prune_bivectors(threshold=1e-3)
@@ -33,8 +33,8 @@ class TestOptimization:
         # We set index 0 to 1.0, index 1 to 1e-5. Index 2 is 0.0.
         # Both index 1 and 2 are < 1e-3, so they are pruned.
         assert num_pruned == 2
-        assert layer.bivector_weights[0, 0] == 1.0
-        assert layer.bivector_weights[0, 1] == 0.0
+        assert layer.grade_weights[0, 0] == 1.0
+        assert layer.grade_weights[0, 1] == 0.0
 
     def test_sparsity_loss(self):
         """Test that sparsity loss returns L1 norm."""
@@ -42,7 +42,7 @@ class TestOptimization:
         layer = RotorLayer(algebra, channels=1)
 
         with torch.no_grad():
-            layer.bivector_weights.fill_(0.5)
+            layer.grade_weights.fill_(0.5)
 
         loss = layer.sparsity_loss()
         # Num bivectors in 2D (e12) is 1.

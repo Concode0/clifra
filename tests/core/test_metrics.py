@@ -5,7 +5,6 @@ import torch
 
 from clifra.core.config import make_algebra
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.multivector import Multivector
 
 pytestmark = pytest.mark.unit
 from clifra.core.runtime.metric import (
@@ -308,11 +307,11 @@ class TestHermitianGradeSpectrum:
 
     def test_active_multivector_norm_uses_layout_without_full_materialization(self):
         context = make_algebra(9, 0, 0, kernel="context", device="cpu", dtype=torch.float32)
-        mv = Multivector.from_vectors(context, torch.ones(3, context.n))
+        layout = context.layout((1,))
+        values = torch.ones(3, layout.dim)
 
-        norm = hermitian_norm(context, mv)
+        norm = hermitian_norm(context, values, layout=layout)
 
-        assert mv.uses_active_lanes
         assert norm.shape == (3, 1)
         assert torch.allclose(norm, torch.full((3, 1), context.n**0.5))
 

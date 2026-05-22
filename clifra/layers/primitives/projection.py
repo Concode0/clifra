@@ -63,7 +63,6 @@ class BladeSelector(CliffordModule):
             x,
             channels=self.channels,
             name="BladeSelector input",
-            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
         gate_shape = (1,) * (x.ndim - 2) + (self.channels, self.lane_dim)
         gate = 2.0 * torch.sigmoid(self.weights).view(gate_shape)
@@ -109,14 +108,10 @@ class GeometricNeutralizer(CliffordModule):
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
 
-        if self.layout is None:
-            self.register_buffer("g0_idx", algebra.grade_indices((0,)))
-            self.register_buffer("g2_idx", algebra.grade_indices((2,)))
-        else:
-            self.register_buffer("g0_idx", self.layout_contract.grade_positions(0))
-            self.register_buffer("g2_idx", self.layout_contract.grade_positions(2))
-            if self.g0_idx.numel() == 0 or self.g2_idx.numel() == 0:
-                raise ValueError("GeometricNeutralizer layout must include grades 0 and 2")
+        self.register_buffer("g0_idx", self.layout_contract.grade_positions(0))
+        self.register_buffer("g2_idx", self.layout_contract.grade_positions(2))
+        if self.g0_idx.numel() == 0 or self.g2_idx.numel() == 0:
+            raise ValueError("GeometricNeutralizer layout must include grades 0 and 2")
 
         self.d0 = self.g0_idx.numel()
         self.d2 = self.g2_idx.numel()
@@ -145,7 +140,6 @@ class GeometricNeutralizer(CliffordModule):
             x,
             channels=self.channels,
             name="GeometricNeutralizer input",
-            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
 
         x_flat = x.reshape(-1, self.channels, self.lane_dim)

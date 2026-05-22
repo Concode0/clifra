@@ -115,7 +115,6 @@ def build_product_request(
     output_layout: Optional[GradeLayout] = None,
     left_active_lanes: bool = False,
     right_active_lanes: bool = False,
-    full_layout_allowed: bool = True,
 ) -> ProductRequest:
     """Resolve caller input into a static product request."""
     normalized_op = normalize_product_op(op)
@@ -126,7 +125,6 @@ def build_product_request(
         layout=left_layout,
         active_lanes=left_active_lanes,
         side="left",
-        full_layout_allowed=full_layout_allowed,
     )
     right_value = resolve_value_layout(
         spec,
@@ -135,7 +133,6 @@ def build_product_request(
         layout=right_layout,
         active_lanes=right_active_lanes,
         side="right",
-        full_layout_allowed=full_layout_allowed,
     )
     output_layout = resolve_output_layout(
         spec,

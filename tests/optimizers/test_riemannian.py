@@ -53,7 +53,7 @@ def rotor_gadget(algebra_3d):
 
 def test_exponential_sgd_gradient_flow(algebra_3d, rotor_layer):
     """Verify gradients exist and flow correctly."""
-    optimizer = ExponentialSGD(rotor_layer.parameters(), lr=0.01, algebra=algebra_3d)
+    optimizer = ExponentialSGD.from_model(rotor_layer, lr=0.01, algebra=algebra_3d)
 
     x = torch.randn(8, 4, 8, requires_grad=True)
     y = rotor_layer(x)
@@ -61,21 +61,21 @@ def test_exponential_sgd_gradient_flow(algebra_3d, rotor_layer):
     loss.backward()
 
     # Check gradients exist
-    assert rotor_layer.bivector_weights.grad is not None
-    assert not torch.isnan(rotor_layer.bivector_weights.grad).any()
-    assert not torch.isinf(rotor_layer.bivector_weights.grad).any()
+    assert rotor_layer.grade_weights.grad is not None
+    assert not torch.isnan(rotor_layer.grade_weights.grad).any()
+    assert not torch.isinf(rotor_layer.grade_weights.grad).any()
 
     # Take step
     optimizer.step()
 
     # Check parameters remain finite
-    assert not torch.isnan(rotor_layer.bivector_weights).any()
-    assert not torch.isinf(rotor_layer.bivector_weights).any()
+    assert not torch.isnan(rotor_layer.grade_weights).any()
+    assert not torch.isinf(rotor_layer.grade_weights).any()
 
 
 def test_riemannian_adam_gradient_flow(algebra_3d, rotor_layer):
     """Verify gradients exist and flow correctly with Adam."""
-    optimizer = RiemannianAdam(rotor_layer.parameters(), lr=0.001, algebra=algebra_3d)
+    optimizer = RiemannianAdam.from_model(rotor_layer, lr=0.001, algebra=algebra_3d)
 
     x = torch.randn(8, 4, 8, requires_grad=True)
     y = rotor_layer(x)
@@ -83,21 +83,21 @@ def test_riemannian_adam_gradient_flow(algebra_3d, rotor_layer):
     loss.backward()
 
     # Check gradients exist
-    assert rotor_layer.bivector_weights.grad is not None
-    assert not torch.isnan(rotor_layer.bivector_weights.grad).any()
-    assert not torch.isinf(rotor_layer.bivector_weights.grad).any()
+    assert rotor_layer.grade_weights.grad is not None
+    assert not torch.isnan(rotor_layer.grade_weights.grad).any()
+    assert not torch.isinf(rotor_layer.grade_weights.grad).any()
 
     # Take step
     optimizer.step()
 
     # Check parameters remain finite
-    assert not torch.isnan(rotor_layer.bivector_weights).any()
-    assert not torch.isinf(rotor_layer.bivector_weights).any()
+    assert not torch.isnan(rotor_layer.grade_weights).any()
+    assert not torch.isinf(rotor_layer.grade_weights).any()
 
 
 def test_exponential_sgd_momentum(algebra_3d, rotor_layer):
     """Verify momentum accumulation works."""
-    optimizer = ExponentialSGD(rotor_layer.parameters(), lr=0.01, momentum=0.9, algebra=algebra_3d)
+    optimizer = ExponentialSGD.from_model(rotor_layer, lr=0.01, momentum=0.9, algebra=algebra_3d)
 
     x = torch.randn(8, 4, 8)
 
@@ -108,7 +108,7 @@ def test_exponential_sgd_momentum(algebra_3d, rotor_layer):
     optimizer.step()
 
     # Check momentum buffer created
-    param = rotor_layer.bivector_weights
+    param = rotor_layer.grade_weights
     assert "momentum_buffer" in optimizer.state[param]
 
     optimizer.zero_grad()
@@ -125,7 +125,7 @@ def test_exponential_sgd_momentum(algebra_3d, rotor_layer):
 
 def test_riemannian_adam_momentum(algebra_3d, rotor_layer):
     """Verify Adam momentum accumulation works."""
-    optimizer = RiemannianAdam(rotor_layer.parameters(), lr=0.001, algebra=algebra_3d)
+    optimizer = RiemannianAdam.from_model(rotor_layer, lr=0.001, algebra=algebra_3d)
 
     x = torch.randn(8, 4, 8)
 
@@ -136,7 +136,7 @@ def test_riemannian_adam_momentum(algebra_3d, rotor_layer):
     optimizer.step()
 
     # Check state created
-    param = rotor_layer.bivector_weights
+    param = rotor_layer.grade_weights
     state = optimizer.state[param]
     assert "exp_avg" in state
     assert "exp_avg_sq" in state
@@ -161,11 +161,11 @@ def test_riemannian_adam_momentum(algebra_3d, rotor_layer):
 def test_bivector_norm_clipping_sgd(algebra_3d, rotor_layer):
     """Verify bivector norm clipping prevents overflow."""
     max_norm = 5.0
-    optimizer = ExponentialSGD(rotor_layer.parameters(), lr=0.1, algebra=algebra_3d, max_bivector_norm=max_norm)
+    optimizer = ExponentialSGD.from_model(rotor_layer, lr=0.1, algebra=algebra_3d, max_bivector_norm=max_norm)
 
     # Intentionally set large bivector norms
     with torch.no_grad():
-        rotor_layer.bivector_weights.fill_(10.0)
+        rotor_layer.grade_weights.fill_(10.0)
 
     x = torch.randn(4, 4, 8)
     y = rotor_layer(x)
@@ -174,18 +174,18 @@ def test_bivector_norm_clipping_sgd(algebra_3d, rotor_layer):
     optimizer.step()
 
     # After clipping, norms should be bounded
-    norms = rotor_layer.bivector_weights.norm(dim=-1)
+    norms = rotor_layer.grade_weights.norm(dim=-1)
     assert norms.max() <= max_norm + 0.1  # Small tolerance for numerical precision
 
 
 def test_bivector_norm_clipping_adam(algebra_3d, rotor_layer):
     """Verify bivector norm clipping prevents overflow with Adam."""
     max_norm = 5.0
-    optimizer = RiemannianAdam(rotor_layer.parameters(), lr=0.1, algebra=algebra_3d, max_bivector_norm=max_norm)
+    optimizer = RiemannianAdam.from_model(rotor_layer, lr=0.1, algebra=algebra_3d, max_bivector_norm=max_norm)
 
     # Intentionally set large bivector norms
     with torch.no_grad():
-        rotor_layer.bivector_weights.fill_(10.0)
+        rotor_layer.grade_weights.fill_(10.0)
 
     x = torch.randn(4, 4, 8)
     y = rotor_layer(x)
@@ -194,14 +194,14 @@ def test_bivector_norm_clipping_adam(algebra_3d, rotor_layer):
     optimizer.step()
 
     # After clipping, norms should be bounded
-    norms = rotor_layer.bivector_weights.norm(dim=-1)
+    norms = rotor_layer.grade_weights.norm(dim=-1)
     assert norms.max() <= max_norm + 0.1
 
 
 def test_no_clipping_when_disabled(algebra_3d, rotor_layer):
     """Verify clipping can be disabled."""
-    optimizer = ExponentialSGD(
-        rotor_layer.parameters(),
+    optimizer = ExponentialSGD.from_model(
+        rotor_layer,
         lr=0.01,
         algebra=algebra_3d,
         max_bivector_norm=None,  # Disable clipping
@@ -209,9 +209,9 @@ def test_no_clipping_when_disabled(algebra_3d, rotor_layer):
 
     # Set moderate norms
     with torch.no_grad():
-        rotor_layer.bivector_weights.fill_(2.0)
+        rotor_layer.grade_weights.fill_(2.0)
 
-    initial_norms = rotor_layer.bivector_weights.norm(dim=-1).clone()
+    initial_norms = rotor_layer.grade_weights.norm(dim=-1).clone()
 
     x = torch.randn(4, 4, 8)
     y = rotor_layer(x)
@@ -220,7 +220,7 @@ def test_no_clipping_when_disabled(algebra_3d, rotor_layer):
     optimizer.step()
 
     # Norms can change freely without clipping
-    final_norms = rotor_layer.bivector_weights.norm(dim=-1)
+    final_norms = rotor_layer.grade_weights.norm(dim=-1)
     # At least one should differ (update occurred)
     assert not torch.allclose(initial_norms, final_norms)
 
@@ -243,7 +243,7 @@ def test_convergence_synthetic_rotation_sgd(algebra_3d):
 
     # Train
     layer = RotorLayer(algebra_3d, channels=1)
-    optimizer = ExponentialSGD(layer.parameters(), lr=0.1, algebra=algebra_3d)
+    optimizer = ExponentialSGD.from_model(layer, lr=0.1, algebra=algebra_3d)
 
     for _ in range(200):
         optimizer.zero_grad()
@@ -275,7 +275,7 @@ def test_convergence_synthetic_rotation_adam(algebra_3d):
 
     # Train
     layer = RotorLayer(algebra_3d, channels=1)
-    optimizer = RiemannianAdam(layer.parameters(), lr=0.01, algebra=algebra_3d)
+    optimizer = RiemannianAdam.from_model(layer, lr=0.01, algebra=algebra_3d)
 
     for _ in range(200):
         optimizer.zero_grad()
@@ -305,7 +305,7 @@ def test_compare_sgd_convergence(algebra_3d):
 
     # Train with ExponentialSGD
     layer1 = RotorLayer(algebra_3d, channels=4)
-    opt1 = ExponentialSGD(layer1.parameters(), lr=0.01, algebra=algebra_3d)
+    opt1 = ExponentialSGD.from_model(layer1, lr=0.01, algebra=algebra_3d)
 
     losses1 = []
     for _ in range(100):
@@ -341,7 +341,7 @@ def test_compare_sgd_convergence(algebra_3d):
 def test_rotor_manifold_membership_after_optimization(algebra_3d):
     """Verify rotors remain on manifold: ~RR ~= 1 after optimization."""
     layer = RotorLayer(algebra_3d, channels=4)
-    optimizer = RiemannianAdam(layer.parameters(), lr=0.01, algebra=algebra_3d)
+    optimizer = RiemannianAdam.from_model(layer, lr=0.01, algebra=algebra_3d)
 
     x = torch.randn(20, 4, 8)
     y_target = torch.randn(20, 4, 8)
@@ -357,8 +357,8 @@ def test_rotor_manifold_membership_after_optimization(algebra_3d):
     # Extract rotors using the same logic as RotorLayer.forward()
     # RotorLayer stores only bivector components, need to embed in full space
     B_full = torch.zeros(layer.channels, algebra_3d.dim)
-    bivector_indices = layer.bivector_indices.unsqueeze(0).expand(layer.channels, -1)
-    B_full.scatter_(1, bivector_indices, layer.bivector_weights)
+    grade_indices = layer.grade_indices.unsqueeze(0).expand(layer.channels, -1)
+    B_full.scatter_(1, grade_indices, layer.grade_weights)
 
     R = algebra_3d.exp(-0.5 * B_full)
     R_rev = algebra_3d.reverse(R)
@@ -375,7 +375,7 @@ def test_rotor_manifold_membership_after_optimization(algebra_3d):
 def test_isometry_preservation(algebra_3d):
     """Verify rotors preserve norms: ||R.x.~R|| = ||x||."""
     layer = RotorLayer(algebra_3d, channels=4)
-    optimizer = ExponentialSGD(layer.parameters(), lr=0.01, algebra=algebra_3d)
+    optimizer = ExponentialSGD.from_model(layer, lr=0.01, algebra=algebra_3d)
 
     x = torch.randn(20, 4, 8)
     y_target = torch.randn(20, 4, 8)
@@ -402,7 +402,7 @@ def test_isometry_preservation(algebra_3d):
 
 def test_integration_with_multi_rotor_layer(algebra_3d, multi_rotor_layer):
     """Verify optimizers work with MultiRotorLayer."""
-    optimizer = RiemannianAdam(multi_rotor_layer.parameters(), lr=0.001, algebra=algebra_3d)
+    optimizer = RiemannianAdam.from_model(multi_rotor_layer, lr=0.001, algebra=algebra_3d)
 
     x = torch.randn(8, 4, 8)
     y_target = torch.randn(8, 4, 8)
@@ -415,15 +415,14 @@ def test_integration_with_multi_rotor_layer(algebra_3d, multi_rotor_layer):
         loss.backward()
         optimizer.step()
 
-    # Should complete without errors and have finite parameters
-    # MultiRotorLayer uses 'rotor_bivectors', not 'bivector_weights'
-    assert not torch.isnan(multi_rotor_layer.rotor_bivectors).any()
-    assert not torch.isinf(multi_rotor_layer.rotor_bivectors).any()
+    # Should complete without errors and have finite parameters.
+    assert not torch.isnan(multi_rotor_layer.rotor_grade_weights).any()
+    assert not torch.isinf(multi_rotor_layer.rotor_grade_weights).any()
 
 
 def test_integration_with_rotor_gadget(algebra_3d, rotor_gadget):
     """Verify optimizers work with RotorGadget."""
-    optimizer = ExponentialSGD(rotor_gadget.parameters(), lr=0.01, algebra=algebra_3d)
+    optimizer = ExponentialSGD.from_model(rotor_gadget, lr=0.01, algebra=algebra_3d)
 
     x = torch.randn(8, 4, 8)
     y_target = torch.randn(8, 8, 8)
@@ -442,7 +441,7 @@ def test_integration_with_rotor_gadget(algebra_3d, rotor_gadget):
         assert not torch.isinf(param).any()
 
 
-def test_backward_compatibility_with_standard_params(algebra_3d):
+def test_direct_parameter_groups_keep_standard_params_euclidean(algebra_3d):
     """Verify optimizers work with non-bivector parameters (e.g., scalars)."""
 
     # Model with both bivector and scalar parameters
@@ -477,7 +476,7 @@ def test_backward_compatibility_with_standard_params(algebra_3d):
 
 def test_optimizer_state_dict(algebra_3d, rotor_layer):
     """Verify optimizer state can be saved and loaded."""
-    optimizer = RiemannianAdam(rotor_layer.parameters(), lr=0.001, algebra=algebra_3d)
+    optimizer = RiemannianAdam.from_model(rotor_layer, lr=0.001, algebra=algebra_3d)
 
     x = torch.randn(4, 4, 8)
 
@@ -492,7 +491,7 @@ def test_optimizer_state_dict(algebra_3d, rotor_layer):
 
     # Create new optimizer and load state
     new_layer = RotorLayer(algebra_3d, channels=4)
-    new_optimizer = RiemannianAdam(new_layer.parameters(), lr=0.001, algebra=algebra_3d)
+    new_optimizer = RiemannianAdam.from_model(new_layer, lr=0.001, algebra=algebra_3d)
     new_optimizer.load_state_dict(state_dict)
 
     # Check state transferred
@@ -506,10 +505,10 @@ def test_optimizer_state_dict(algebra_3d, rotor_layer):
 
 def test_zero_learning_rate(algebra_3d, rotor_layer):
     """Verify optimizer handles zero learning rate gracefully."""
-    optimizer = ExponentialSGD(rotor_layer.parameters(), lr=0.0, algebra=algebra_3d)
+    optimizer = ExponentialSGD.from_model(rotor_layer, lr=0.0, algebra=algebra_3d)
 
     x = torch.randn(4, 4, 8)
-    initial_params = rotor_layer.bivector_weights.clone()
+    initial_params = rotor_layer.grade_weights.clone()
 
     y = rotor_layer(x)
     loss = y.sum()
@@ -517,7 +516,7 @@ def test_zero_learning_rate(algebra_3d, rotor_layer):
     optimizer.step()
 
     # Parameters should not change with lr=0
-    assert torch.allclose(rotor_layer.bivector_weights, initial_params)
+    assert torch.allclose(rotor_layer.grade_weights, initial_params)
 
 
 def test_invalid_parameters():
@@ -557,13 +556,13 @@ def test_manifold_tagging(algebra_3d):
     from clifra.layers.primitives.reflection import ReflectionLayer
 
     rotor = RotorLayer(algebra_3d, channels=4)
-    assert getattr(rotor.bivector_weights, "_manifold", None) == MANIFOLD_SPIN
+    assert getattr(rotor.grade_weights, "_manifold", None) == MANIFOLD_SPIN
 
     reflection = ReflectionLayer(algebra_3d, channels=4)
     assert getattr(reflection.vector_weights, "_manifold", None) == MANIFOLD_SPHERE
 
     multi = MultiRotorLayer(algebra_3d, channels=4, num_rotors=2)
-    assert getattr(multi.rotor_bivectors, "_manifold", None) == MANIFOLD_SPIN
+    assert getattr(multi.rotor_grade_weights, "_manifold", None) == MANIFOLD_SPIN
     assert not hasattr(multi.weights, "_manifold")  # Euclidean, untagged
 
     gadget = RotorGadget(algebra_3d, in_channels=4, out_channels=8)
@@ -613,7 +612,7 @@ def test_from_model_groups(algebra_3d):
     model = MixedModel()
     groups = group_parameters_by_manifold(model)
 
-    assert len(groups["spin"]) == 1  # bivector_weights
+    assert len(groups["spin"]) == 1  # grade_weights
     assert len(groups["sphere"]) == 1  # vector_weights
     assert len(groups["euclidean"]) >= 2  # linear weight + bias
 
@@ -685,19 +684,17 @@ def test_euclidean_no_retraction(algebra_3d):
     assert model.w.abs().min() > 50.0, "Euclidean params should not be clipped"
 
 
-def test_legacy_backward_compat(algebra_3d):
-    """Verify old-style constructor still applies bivector clip to all params."""
+def test_direct_parameter_groups_do_not_apply_spin_retraction_implicitly(algebra_3d):
+    """Direct parameter groups require an explicit manifold tag for spin clipping."""
     layer = RotorLayer(algebra_3d, channels=4)
-    # Old API: pass model.parameters() directly (not from_model)
     opt = RiemannianAdam(layer.parameters(), lr=0.001, algebra=algebra_3d)
 
-    # No 'manifold' key in param_groups (legacy mode)
     for g in opt.param_groups:
         assert "manifold" not in g
 
     # Set large bivector norms
     with torch.no_grad():
-        layer.bivector_weights.fill_(20.0)
+        layer.grade_weights.fill_(20.0)
 
     x = torch.randn(8, 4, algebra_3d.dim)
     y = layer(x)
@@ -705,9 +702,8 @@ def test_legacy_backward_compat(algebra_3d):
     loss.backward()
     opt.step()
 
-    # Bivector norm clipping should still be active (default max_bivector_norm=10.0)
-    norms = layer.bivector_weights.norm(dim=-1)
-    assert norms.max() <= 10.0 + 0.1
+    norms = layer.grade_weights.norm(dim=-1)
+    assert norms.max() > 10.0
 
 
 @pytest.mark.slow

@@ -140,7 +140,6 @@ class EntropyGatedAttention(CliffordModule):
             x,
             channels=self.channels,
             name="EntropyGatedAttention input",
-            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
         # 1. Calculate Information Entropy of Bivector Energy
         # x: [B, L, C, D]

@@ -42,13 +42,6 @@ def dense_from_indices(coefficients: torch.Tensor, indices: torch.Tensor, dense_
     return dense.scatter(-1, index, coefficients)
 
 
-def cache_matches(cache: tuple[torch.Tensor, ...] | None, reference: torch.Tensor) -> bool:
-    """Return True when cached tensors can be reused for ``reference``."""
-    if cache is None:
-        return False
-    return all(tensor.device == reference.device and tensor.dtype == reference.dtype for tensor in cache)
-
-
 def channel_mix(in_channels: int, out_channels: int, *, normalize: bool) -> torch.Tensor:
     """Build a deterministic channel routing matrix [out_channels, in_channels].
 

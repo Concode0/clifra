@@ -9,19 +9,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from clifra.core.execution.attention import GeometricAttentionScoreExecutor
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
-from clifra.core.foundation.numerics import eps_like
-from clifra.core.runtime.attention import GeometricAttentionScorer
 from clifra.core.storage import resolve_layer_layout_contract
 
 from ..primitives.linear import CliffordLinear
-from ..primitives.product import GeometricProductLayer
-
-# Memory-bounded block size for chunked attention computation
-_BLOCK_SIZE = 64
-_G2_BLADE_CHUNK_SIZE = 16
-_SCORE_PRECOMPUTE_LIMIT = 8_000_000
 
 
 def _merge_attention_mask(left: torch.Tensor | None, right: torch.Tensor | None) -> torch.Tensor | None:
@@ -32,17 +25,35 @@ def _merge_attention_mask(left: torch.Tensor | None, right: torch.Tensor | None)
     return left | right
 
 
-def _safe_masked_softmax(scores: torch.Tensor, mask: torch.Tensor | None, dim: int = -1) -> torch.Tensor:
-    """Softmax with finite zero output for fully masked rows."""
+def _score_bias(scores: torch.Tensor, mask: torch.Tensor | None) -> torch.Tensor:
+    """Return additive SDPA score bias with masked keys removed."""
     if mask is None:
-        return F.softmax(scores, dim=dim)
+        return scores
+    return scores.masked_fill(mask, float("-inf"))
 
-    masked_scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min)
-    weights = F.softmax(masked_scores, dim=dim).masked_fill(mask, 0.0)
-    normalizer = weights.sum(dim=dim, keepdim=True)
-    eps = eps_like(weights, min_value=torch.finfo(weights.dtype).tiny)
-    weights = weights / normalizer.clamp_min(eps)
-    return torch.where(normalizer > 0, weights, torch.zeros_like(weights))
+
+def _sdpa_from_scores(scores: torch.Tensor, values: torch.Tensor, *, dropout_p: float) -> torch.Tensor:
+    """Aggregate ``values`` with precomputed GA scores through Torch SDPA.
+
+    SDPA cannot compute the geometric algebra score itself. Zero query/key
+    tensors make the dot-product contribution vanish, while ``scores`` enters
+    as the float attention bias. This keeps the softmax/dropout/value matmul on
+    Torch's attention primitive without changing the GA scoring contract.
+    """
+    B, H, Lq, Lk = scores.shape
+    value_shape = values.shape
+    flat_values = values.reshape(B, H, Lk, -1)
+    query = scores.new_zeros(B, H, Lq, 1)
+    key = scores.new_zeros(B, H, Lk, 1)
+    output = F.scaled_dot_product_attention(
+        query,
+        key,
+        flat_values,
+        attn_mask=scores,
+        dropout_p=dropout_p,
+        scale=1.0,
+    )
+    return output.reshape(*value_shape[:2], Lq, *value_shape[3:])
 
 
 class GeometricProductAttention(CliffordModule):
@@ -56,9 +67,6 @@ class GeometricProductAttention(CliffordModule):
 
     The grade-0 (scalar) part measures alignment (like dot product).
     The grade-2 (bivector) part measures relative orientation - novel.
-
-    Memory: naive [B, H, L, L, H_c, D] is too large. We chunk over L_q
-    in blocks of BLOCK_SIZE to bound peak VRAM.
 
     Attributes:
         num_heads (int): Number of attention heads.
@@ -75,8 +83,6 @@ class GeometricProductAttention(CliffordModule):
         causal: bool = True,
         bivector_weight: float = 0.5,
         dropout: float = 0.0,
-        score_blade_chunk_size: int = _G2_BLADE_CHUNK_SIZE,
-        score_precompute_limit: int = _SCORE_PRECOMPUTE_LIMIT,
         grades=None,
         layout: GradeLayout = None,
     ):
@@ -89,12 +95,7 @@ class GeometricProductAttention(CliffordModule):
             causal: Apply causal mask for autoregressive generation.
             bivector_weight: lambda_ weight on bivector score component.
             dropout: Dropout rate on attention weights.
-            score_blade_chunk_size: Grade-2 output blades processed per dense
-                chunk when exact dense scoring is used.
-            score_precompute_limit: Maximum temporary ``K_g2`` elements allowed
-                before exact dense scoring switches to chunked grade-2 blades.
-            grades: Optional compact input/output grades. Compact attention is
-                currently grade-1 only and uses planned pairwise products.
+            grades: Optional compact input/output grades.
             layout: Optional compact input/output layout.
         """
         super().__init__(algebra)
@@ -105,8 +106,6 @@ class GeometricProductAttention(CliffordModule):
         self.head_channels = channels // num_heads
         self.causal = causal
         self.bivector_weight = bivector_weight
-        self.score_blade_chunk_size = max(1, int(score_blade_chunk_size))
-        self.score_precompute_limit = max(0, int(score_precompute_limit))
         self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
@@ -119,23 +118,11 @@ class GeometricProductAttention(CliffordModule):
 
         self.attn_dropout = nn.Dropout(dropout) if dropout > 0.0 else None
 
-        score_product = None
-        if self.layout is not None and self.layout.dim != self.algebra.dim:
-            score_product = GeometricProductLayer(
-                algebra,
-                left_layout=self.layout,
-                right_layout=self.layout,
-                output_layout=algebra.layout((0, 2)),
-                pairwise=True,
-            )
-        self.scorer = GeometricAttentionScorer(
+        self.scorer = GeometricAttentionScoreExecutor(
             algebra,
             head_channels=self.head_channels,
             bivector_weight=bivector_weight,
             layout=self.layout,
-            pairwise_product=score_product,
-            score_blade_chunk_size=self.score_blade_chunk_size,
-            score_precompute_limit=self.score_precompute_limit,
         )
 
     def _compute_score(
@@ -160,7 +147,6 @@ class GeometricProductAttention(CliffordModule):
             x,
             channels=self.channels,
             name="GeometricProductAttention input",
-            allow_full=self.layout is None or self.layout.dim == self.algebra.dim,
         )
         B, L, C, D = x.shape
 
@@ -178,48 +164,22 @@ class GeometricProductAttention(CliffordModule):
         K = K.reshape(B, L, H, Hc, D).permute(0, 2, 1, 3, 4)
         V = V.reshape(B, L, H, Hc, D).permute(0, 2, 1, 3, 4)
 
-        # Build causal mask once [L, L]
+        # Build score mask once [B, H, L, L], where True means masked out.
+        score_mask = None
         if self.causal:
             causal_mask = torch.triu(
                 torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1
             )  # True = masked (future)
-        else:
-            causal_mask = None
+            score_mask = causal_mask.unsqueeze(0).unsqueeze(0)
 
-        # Chunked attention over query positions to bound memory
-        output_chunks = []
-        for q_start in range(0, L, _BLOCK_SIZE):
-            q_end = min(q_start + _BLOCK_SIZE, L)
+        if key_padding_mask is not None:
+            # key_padding_mask: [B, L] -> [B, 1, 1, L]
+            padding_mask = key_padding_mask.unsqueeze(1).unsqueeze(2)
+            score_mask = _merge_attention_mask(score_mask, padding_mask)
 
-            Q_block = Q[:, :, q_start:q_end]  # [B, H, Lq, Hc, D]
-
-            # Compute scores: [B, H, Lq, L]
-            scores = self._compute_score(Q_block, K)
-
-            score_mask = None
-            if causal_mask is not None:
-                mask_block = causal_mask[q_start:q_end, :]  # [Lq, L]
-                score_mask = mask_block.unsqueeze(0).unsqueeze(0)
-
-            if key_padding_mask is not None:
-                # key_padding_mask: [B, L] -> [B, 1, 1, L]
-                padding_mask = key_padding_mask.unsqueeze(1).unsqueeze(2)
-                score_mask = _merge_attention_mask(score_mask, padding_mask)
-
-            # Softmax + dropout
-            attn_weights = _safe_masked_softmax(scores, score_mask, dim=-1)  # [B, H, Lq, L]
-            if self.attn_dropout is not None:
-                attn_weights = self.attn_dropout(attn_weights)
-
-            # Aggregate values: sum_k attn[b,h,i,k] * V[b,h,k,Hc,D]
-            # attn_weights: [B, H, Lq, L]
-            # V:            [B, H, L,  Hc, D]
-            # out:          [B, H, Lq, Hc, D]
-            out_block = torch.einsum("bhij,bhjcd->bhicd", attn_weights, V)
-            output_chunks.append(out_block)
-
-        # Reassemble: [B, H, L, Hc, D]
-        output = torch.cat(output_chunks, dim=2)
+        scores = _score_bias(self._compute_score(Q, K), score_mask)
+        dropout_p = self.attn_dropout.p if self.attn_dropout is not None and self.training else 0.0
+        output = _sdpa_from_scores(scores, V, dropout_p=dropout_p)
 
         # Merge heads back: [B, L, C, D]
         output = output.permute(0, 2, 1, 3, 4).reshape(B, L, C, D)

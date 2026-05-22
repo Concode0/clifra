@@ -11,7 +11,7 @@ Provides analyzers for effective dimension, metric signature, spectral
 structure, symmetry / null detection, and commutator (exchange) analysis,
 orchestrated by :class:`GeometricAnalyzer`.
 
-Also re-exports the legacy classes :class:`MetricSearch`,
+Also re-exports :class:`MetricSearch`,
 :class:`GeodesicFlow`, :class:`DimensionLifter`, and the standalone
 :func:`compute_uncertainty_and_alignment` that were previously in
 ``clifra.core.search``.

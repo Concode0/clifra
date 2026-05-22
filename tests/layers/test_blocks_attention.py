@@ -3,8 +3,7 @@ import math
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.context import AlgebraContext
+from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
 from clifra.layers.blocks.attention import GeometricProductAttention
 from clifra.layers.blocks.transformer import GeometricTransformerBlock
 
@@ -13,7 +12,7 @@ pytestmark = pytest.mark.unit
 DEVICE = "cpu"
 
 
-def _reference_attention_score(algebra, q_head, k_head, bivector_weight):
+def _reference_attention_score(algebra, q_head, k_head, bivector_weight, *, scale_dim: int | None = None):
     product = algebra.geometric_product(q_head.unsqueeze(3), algebra.reverse(k_head).unsqueeze(2))
     score_g0 = product[..., 0].sum(-1)
 
@@ -24,11 +23,11 @@ def _reference_attention_score(algebra, q_head, k_head, bivector_weight):
     else:
         score_g2 = torch.zeros_like(score_g0)
 
-    scale = math.sqrt(q_head.shape[3] * algebra.dim)
+    scale = math.sqrt(q_head.shape[3] * (algebra.dim if scale_dim is None else scale_dim))
     return (score_g0 + bivector_weight * score_g2) / scale
 
 
-def test_attention_dense_chunked_score_matches_direct_product():
+def test_attention_dense_score_matches_direct_product():
     algebra = CliffordAlgebra(3, 0, 0, device=DEVICE, dtype=torch.float64)
     attn = GeometricProductAttention(
         algebra,
@@ -36,8 +35,6 @@ def test_attention_dense_chunked_score_matches_direct_product():
         num_heads=2,
         causal=False,
         bivector_weight=0.25,
-        score_blade_chunk_size=1,
-        score_precompute_limit=0,
     )
     q_head = torch.randn(2, 2, 3, 2, algebra.dim, dtype=torch.float64)
     k_head = torch.randn(2, 2, 4, 2, algebra.dim, dtype=torch.float64)
@@ -74,7 +71,13 @@ def test_attention_compact_context_score_matches_dense_reference():
     k_head = torch.randn(2, 2, 4, 2, layout.dim, dtype=torch.float64)
 
     actual = attn._compute_score(q_head, k_head)
-    expected = _reference_attention_score(dense, layout.dense(q_head), layout.dense(k_head), attn.bivector_weight)
+    expected = _reference_attention_score(
+        dense,
+        layout.dense(q_head),
+        layout.dense(k_head),
+        attn.bivector_weight,
+        scale_dim=layout.dim,
+    )
 
     assert actual.shape == expected.shape
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)

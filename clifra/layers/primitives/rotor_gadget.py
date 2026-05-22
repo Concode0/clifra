@@ -14,20 +14,21 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
+from clifra.core.execution.action import PairedBivectorActionExecutor, dense_paired_bivector_factors
+from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
-from clifra.core.foundation.module import CliffordModule, require_dense_kernel_host
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.validation import check_channels, check_multivector
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.storage import LayerLayout, resolve_layer_layout, resolve_layer_layout_contract
 
 from ._utils import (
-    cache_matches,
     channel_mix,
-    dense_from_indices,
-    grade_indices,
     pair_mean,
     require_choice,
     require_positive_int,
 )
+
+ROTOR_GADGET_INIT_STD = 0.01
 
 
 class RotorGadget(CliffordModule):
@@ -56,13 +57,20 @@ class RotorGadget(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         in_channels: int,
         out_channels: int,
         num_rotor_pairs: int = 4,
         aggregation: Literal["mean", "sum", "learned"] = "mean",
         shuffle: Literal["none", "fixed", "random"] = "none",
         bias: bool = False,
+        *,
+        grades=None,
+        layout: GradeLayout = None,
+        input_grades=None,
+        output_grades=None,
+        input_layout: GradeLayout = None,
+        output_layout: GradeLayout = None,
     ):
         """Initialize rotor gadget layer.
 
@@ -79,26 +87,56 @@ class RotorGadget(CliffordModule):
             bias: Whether to include bias term (applied after transformation)
         """
         super().__init__(algebra)
-        require_dense_kernel_host(algebra, "RotorGadget")
 
         self.in_channels = require_positive_int(in_channels, "in_channels")
         self.out_channels = require_positive_int(out_channels, "out_channels")
         self.num_rotor_pairs = require_positive_int(num_rotor_pairs, "num_rotor_pairs")
         self.aggregation = require_choice(aggregation, "aggregation", ("mean", "sum", "learned"))
         self.shuffle = require_choice(shuffle, "shuffle", ("none", "fixed", "random"))
+        if input_layout is None:
+            input_layout = layout
+        if input_grades is None:
+            input_grades = grades
 
         if algebra.num_grades <= 2:
             raise ValueError(f"Algebra has no bivectors. RotorGadget requires at least one bivector for rotation.")
-        self.register_buffer("bivector_indices", grade_indices(algebra, 2, name="bivector grade"))
-        self.num_bivectors = self.bivector_indices.numel()
+        self.input_contract = resolve_layer_layout_contract(algebra, layout=input_layout, grades=input_grades)
+        resolved_output_layout = (
+            resolve_layer_layout(algebra, layout=output_layout, grades=output_grades)
+            if output_layout is not None or output_grades is not None
+            else None
+        )
+        self.parameter_layout = algebra.layout((2,))
+        self.action_plan = algebra.planner.paired_bivector_action_plan(
+            input_layout=self.input_contract.layout,
+            output_layout=resolved_output_layout,
+            parameter_layout=self.parameter_layout,
+        )
+        self.output_contract = LayerLayout(algebra, self.action_plan.output_layout)
+        self.input_layout = self.input_contract.layout
+        self.output_layout = self.output_contract.layout
+        self.rotor_layout = self.action_plan.rotor_layout
+        self.middle_layout = self.action_plan.middle_layout
+        self.input_lane_dim = self.input_contract.lane_dim
+        self.output_lane_dim = self.output_contract.lane_dim
+        self.num_bivectors = self.parameter_layout.dim
+        self.action = PairedBivectorActionExecutor(
+            algebra,
+            input_layout=self.input_layout,
+            output_layout=self.output_layout,
+            parameter_layout=self.parameter_layout,
+            rotor_layout=self.rotor_layout,
+            middle_layout=self.middle_layout,
+        )
 
         # Rotor parameters: bivector coefficients for exponential map
         # Left rotors: [num_rotor_pairs, num_bivectors]
-        self.bivector_left = nn.Parameter(torch.randn(self.num_rotor_pairs, self.num_bivectors) * 0.1)
+        self.bivector_left = nn.Parameter(torch.empty(self.num_rotor_pairs, self.num_bivectors))
         tag_manifold(self.bivector_left, MANIFOLD_SPIN)
         # Right rotors: [num_rotor_pairs, num_bivectors]
-        self.bivector_right = nn.Parameter(torch.randn(self.num_rotor_pairs, self.num_bivectors) * 0.1)
+        self.bivector_right = nn.Parameter(torch.empty(self.num_rotor_pairs, self.num_bivectors))
         tag_manifold(self.bivector_right, MANIFOLD_SPIN)
+        self.reset_parameters()
 
         # Channel routing: block diagonal partitioning (paper style)
         # Each rotor pair processes a subset of input channels
@@ -112,12 +150,14 @@ class RotorGadget(CliffordModule):
 
         # Optional bias
         if bias:
-            self.bias = nn.Parameter(torch.zeros(self.out_channels, algebra.dim))
+            self.bias = nn.Parameter(torch.zeros(self.out_channels, self.output_lane_dim))
         else:
             self.register_buffer("bias", None)
 
-        # Rotor cache for eval mode
-        self._cached_rotors = None
+    def reset_parameters(self) -> None:
+        """Initialize paired bivector parameters near the identity action."""
+        nn.init.normal_(self.bivector_left, std=ROTOR_GADGET_INIT_STD)
+        nn.init.normal_(self.bivector_right, std=ROTOR_GADGET_INIT_STD)
 
     def _setup_channel_routing(self):
         """Set up block diagonal channel routing with optional shuffle.
@@ -172,17 +212,6 @@ class RotorGadget(CliffordModule):
             # No shuffle - identity permutation
             self.register_buffer("channel_permutation", None)
 
-    def _bivector_to_multivector(self, bivector_coeffs: torch.Tensor) -> torch.Tensor:
-        """Convert bivector coefficients to full multivector via vectorized scatter.
-
-        Args:
-            bivector_coeffs: Tensor of shape [..., num_bivectors]
-
-        Returns:
-            Multivector tensor of shape [..., algebra.dim]
-        """
-        return dense_from_indices(bivector_coeffs, self.bivector_indices, self.algebra.dim)
-
     def _compute_rotors(self, device=None, dtype=None):
         """Compute rotor multivectors from bivector parameters.
 
@@ -195,19 +224,14 @@ class RotorGadget(CliffordModule):
         if device is not None or dtype is not None:
             left = left.to(device=device, dtype=dtype)
             right = right.to(device=device, dtype=dtype)
-
-        # Convert bivector parameters to multivectors
-        B_left = self._bivector_to_multivector(left)  # [pairs, dim]
-        B_right = self._bivector_to_multivector(right)  # [pairs, dim]
-
-        # Compute rotors via exponential map: R = exp(-0.5 * B)
-        R_left = self.algebra.exp(-0.5 * B_left)  # [pairs, dim]
-        R_right = self.algebra.exp(-0.5 * B_right)  # [pairs, dim]
-
-        # Compute reverse of right rotors for sandwich product
-        R_right_rev = self.algebra.reverse(R_right)  # [pairs, dim]
-
-        return R_left, R_right_rev
+        if not hasattr(self.algebra, "sandwich_action_matrices"):
+            raise ValueError("dense rotor materialization requires dense sandwich action matrices")
+        return dense_paired_bivector_factors(
+            self.algebra,
+            left,
+            right,
+            parameter_layout=self.parameter_layout,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply rotor-based transformation.
@@ -221,8 +245,15 @@ class RotorGadget(CliffordModule):
         Returns:
             Output tensor of shape [Batch, Out_Channels, Dim]
         """
-        check_multivector(x, self.algebra, "RotorGadget input")
-        check_channels(x, self.in_channels, "RotorGadget input")
+        if self.input_layout.dim == self.algebra.dim:
+            check_multivector(x, self.algebra, "RotorGadget input")
+            check_channels(x, self.in_channels, "RotorGadget input")
+        else:
+            self.input_contract.validate_input(
+                x,
+                channels=self.in_channels,
+                name="RotorGadget input",
+            )
 
         # Apply input channel shuffle if enabled
         if self.shuffle == "fixed":
@@ -231,24 +262,18 @@ class RotorGadget(CliffordModule):
             perm = torch.randperm(self.in_channels, device=x.device)
             x = x.index_select(-2, perm)
 
-        # Compute rotors (cached in eval mode)
-        if not self.training and cache_matches(self._cached_rotors, x):
-            R_left, R_right_rev = self._cached_rotors
-        else:
-            R_left, R_right_rev = self._compute_rotors(x.device, x.dtype)
-            if not self.training:
-                self._cached_rotors = (R_left, R_right_rev)
-
-        ch2pair = self._ch2pair.to(device=R_left.device)
-        R_left_by_channel = R_left[ch2pair]
-        R_right_by_channel = R_right_rev[ch2pair]
-        concat_out = self.algebra.per_channel_sandwich(R_left_by_channel, x, R_right_by_channel)
+        concat_out = self.action(
+            x,
+            self.bivector_left,
+            self.bivector_right,
+            self._ch2pair,
+        )
 
         # Map to output channels
         out = self._aggregate_to_output_channels(concat_out)
 
         if self.bias is not None:
-            bias_shape = (1,) * (out.ndim - 2) + (self.out_channels, self.algebra.dim)
+            bias_shape = (1,) * (out.ndim - 2) + (self.out_channels, self.output_lane_dim)
             out = out + self.bias.view(bias_shape)
 
         return out
@@ -268,12 +293,6 @@ class RotorGadget(CliffordModule):
 
         mix = self._channel_mix_sum if self.aggregation == "sum" else self._channel_mix_mean
         return torch.einsum("oi,...id->...od", mix.to(device=x.device, dtype=x.dtype), x)
-
-    def train(self, mode: bool = True):
-        """Override to invalidate rotor cache when switching to train mode."""
-        if mode:
-            self._cached_rotors = None
-        return super().train(mode)
 
     def extra_repr(self) -> str:
         """String representation for debugging."""

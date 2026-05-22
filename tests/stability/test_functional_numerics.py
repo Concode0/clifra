@@ -1,8 +1,7 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.core.runtime.context import AlgebraContext
+from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
 from clifra.functional.activation import GeometricGELU, GradeSwish
 from clifra.layers.adapters.mother import EntropyGatedAttention
 

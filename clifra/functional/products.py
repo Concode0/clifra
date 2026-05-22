@@ -41,7 +41,7 @@ def product(algebra, left: torch.Tensor, right: torch.Tensor, *, op: str = "gp",
     """Apply a binary geometric algebra product.
 
     Args:
-        algebra: Dense ``CliffordAlgebra`` or planned ``AlgebraContext``.
+        algebra: Algebra host.
         left: Left operand.
         right: Right operand.
         op: ``"gp"``, ``"wedge"``, ``"inner"``, ``"commutator"``, or

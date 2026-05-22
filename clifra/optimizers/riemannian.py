@@ -9,9 +9,8 @@ Each parameter can be tagged with a manifold type via ``p._manifold``:
     - ``'sphere'``: Unit vectors on S^{n-1} — retracted via L2 normalization
     - ``'euclidean'`` (or untagged): Standard unconstrained parameters
 
-Use ``from_model()`` to auto-group parameters by manifold tag, or pass
-``model.parameters()`` directly for legacy behavior (all params get spin
-retraction).
+Use ``from_model()`` to auto-group parameters by manifold tag. Parameters
+without a tag are treated as Euclidean.
 
 References:
     - Absil et al. "Optimization Algorithms on Matrix Manifolds" (2008)
@@ -197,7 +196,7 @@ class ExponentialSGD(Optimizer):
         for group in self.param_groups:
             lr = group["lr"]
             momentum = group["momentum"]
-            manifold = group.get("manifold", None)
+            manifold = validate_manifold(group.get("manifold", MANIFOLD_EUCLIDEAN))
 
             for p in group["params"]:
                 if p.grad is None:
@@ -225,8 +224,7 @@ class ExponentialSGD(Optimizer):
                     p.div_(p_norm)
                 elif manifold == MANIFOLD_EUCLIDEAN:
                     pass  # No retraction for Euclidean parameters
-                else:
-                    # 'spin' or None (legacy): bivector norm clipping
+                elif manifold == MANIFOLD_SPIN:
                     if self.max_bivector_norm is not None:
                         p_norm = p.norm(dim=-1, keepdim=True)
                         scale = torch.clamp(p_norm / self.max_bivector_norm, min=1.0)
@@ -319,7 +317,7 @@ class RiemannianAdam(Optimizer):
         Applies Adam momentum updates to all parameters, then dispatches
         per-manifold retraction:
 
-        - **spin** (or legacy/untagged): bivector norm clipping
+        - **spin**: bivector norm clipping
         - **sphere**: L2 normalization to unit sphere
         - **euclidean**: no retraction
 
@@ -338,7 +336,7 @@ class RiemannianAdam(Optimizer):
             lr = group["lr"]
             beta1, beta2 = group["betas"]
             eps = group["eps"]
-            manifold = group.get("manifold", None)
+            manifold = validate_manifold(group.get("manifold", MANIFOLD_EUCLIDEAN))
 
             for p in group["params"]:
                 if p.grad is None:
@@ -379,8 +377,7 @@ class RiemannianAdam(Optimizer):
                     p.div_(p_norm)
                 elif manifold == MANIFOLD_EUCLIDEAN:
                     pass  # No retraction for Euclidean parameters
-                else:
-                    # 'spin' or None (legacy): bivector norm clipping
+                elif manifold == MANIFOLD_SPIN:
                     if self.max_bivector_norm is not None:
                         p_norm = p.norm(dim=-1, keepdim=True)
                         scale = torch.clamp(p_norm / self.max_bivector_norm, min=1.0)
