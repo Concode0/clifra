@@ -14,7 +14,8 @@ import torch
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike
 from clifra.core.runtime.accessors import as_multivector as _as_multivector
-from clifra.core.runtime.accessors import materialize_dense
+from clifra.core.runtime.accessors import materialize_full
+from clifra.core.storage import LaneFormat
 
 
 class Multivector:
@@ -25,9 +26,9 @@ class Multivector:
 
     Attributes:
         algebra (AlgebraLike): The backend.
-        tensor (torch.Tensor): Dense coefficients [..., Dim].
-        values (torch.Tensor): Optional compact lane values [..., layout.dim].
-        layout (GradeLayout): Optional compact layout for ``values``.
+        tensor (torch.Tensor): Full-basis coefficients [..., Dim].
+        values (torch.Tensor): Optional active-lane values [..., layout.dim].
+        layout (GradeLayout): Optional active layout for ``values``.
     """
 
     __slots__ = ("_tensor", "algebra", "layout", "values")
@@ -54,7 +55,7 @@ class Multivector:
                     raise ValueError("values or tensor is required when layout is provided")
                 values = layout.compact(tensor)
             if values.shape[-1] != layout.dim:
-                raise ValueError(f"compact values last dimension must be {layout.dim}, got {values.shape[-1]}")
+                raise ValueError(f"active values last dimension must be {layout.dim}, got {values.shape[-1]}")
             self._tensor = None
             self.values = values
 
@@ -67,13 +68,13 @@ class Multivector:
         grades=None,
         layout: GradeLayout = None,
     ) -> Multivector:
-        """Wrap dense coefficients or compact coefficients with declared layout metadata."""
+        """Wrap full-basis coefficients or active-lane values with declared layout metadata."""
         if layout is None and grades is None:
             return cls(algebra, tensor)
         return _as_multivector(algebra, tensor, layout=layout, grades=grades)
 
     @classmethod
-    def from_compact(
+    def from_values(
         cls,
         algebra: AlgebraLike,
         values: torch.Tensor,
@@ -81,15 +82,15 @@ class Multivector:
         grades=None,
         layout: GradeLayout = None,
     ) -> Multivector:
-        """Create a compact multivector from active lane values."""
+        """Create a multivector from active lane values."""
         if layout is None and grades is None:
-            raise ValueError("layout or grades is required for compact multivectors")
+            raise ValueError("layout or grades is required for active-lane multivectors")
         resolved = algebra.resolve_layout(layout=layout, grades=grades, warn_full=False)
         return cls(algebra, values=values, layout=resolved)
 
     @classmethod
     def from_vectors(cls, algebra: AlgebraLike, vectors: torch.Tensor) -> Multivector:
-        """Promote vectors to compact grade-1 multivectors."""
+        """Promote vectors to active-lane grade-1 multivectors."""
         layout = algebra.layout((1,))
         if vectors.shape[-1] != layout.dim:
             raise ValueError(f"vectors last dimension must be {layout.dim}, got {vectors.shape[-1]}")
@@ -117,24 +118,25 @@ class Multivector:
         return cls(algebra, values=values, layout=layout)
 
     def __repr__(self):
-        storage = "compact" if self.is_compact else "dense"
+        lane_format = self.lane_format.value
         return (
-            f"Multivector(shape={self.shape}, storage={storage}, "
+            f"Multivector(shape={self.shape}, lane_format={lane_format}, "
             f"algebra=Cl({self.algebra.p},{self.algebra.q},{self.algebra.r}))"
         )
 
     @property
     def tensor(self) -> torch.Tensor:
-        """Dense coefficient tensor.
+        """Full-basis coefficient tensor.
 
-        This property is an explicit dense boundary. Planned paths that operate
-        on compact data should use ``values`` or ``coefficients`` directly.
+        This property is an explicit full-basis boundary. Planned paths that
+        operate on active lanes should use ``values`` or ``coefficients``
+        directly.
         """
         if self._tensor is not None:
             return self._tensor
-        # Do not call this inside core operations that can preserve compact
+        # Do not call this inside core operations that can preserve active-lane
         # ``values`` and ``layout``; materialization belongs at API boundaries.
-        return materialize_dense(self.algebra, self)
+        return materialize_full(self.algebra, self)
 
     @tensor.setter
     def tensor(self, value: torch.Tensor) -> None:
@@ -143,18 +145,23 @@ class Multivector:
         self.layout = None
 
     @property
-    def is_compact(self) -> bool:
-        """Whether this multivector stores compact grade lanes."""
+    def uses_active_lanes(self) -> bool:
+        """Whether this multivector stores declared active layout lanes."""
         return self.layout is not None
 
     @property
-    def is_dense(self) -> bool:
-        """Whether this multivector stores dense coefficients."""
-        return not self.is_compact
+    def uses_full_lanes(self) -> bool:
+        """Whether this multivector stores full-basis coefficients."""
+        return not self.uses_active_lanes
+
+    @property
+    def lane_format(self) -> LaneFormat:
+        """Return the current coefficient lane format."""
+        return LaneFormat.ACTIVE if self.uses_active_lanes else LaneFormat.FULL
 
     @property
     def grades(self) -> tuple[int, ...] | None:
-        """Active grades when compact metadata is available."""
+        """Active grades when layout metadata is available."""
         return None if self.layout is None else self.layout.grades
 
     @property
@@ -163,21 +170,16 @@ class Multivector:
         return self.coefficients.shape[-1]
 
     @property
-    def storage(self) -> str:
-        """Storage mode name."""
-        return "compact" if self.is_compact else "dense"
-
-    @property
     def coefficients(self) -> torch.Tensor:
-        """Return the active storage tensor without dense materialization."""
-        return self.values if self.is_compact else self._tensor
+        """Return the current lane tensor without full-basis materialization."""
+        return self.values if self.uses_active_lanes else self._tensor
 
-    def dense(self) -> Multivector:
-        """Return a dense-storage multivector."""
+    def to_full(self) -> Multivector:
+        """Return a full-basis multivector."""
         return Multivector(self.algebra, self.tensor)
 
-    def compact(self, grades) -> Multivector:
-        """Return a compact-storage multivector containing ``grades``."""
+    def with_grades(self, grades) -> Multivector:
+        """Return this multivector represented by a grade layout."""
         layout = self.algebra.layout(grades)
         return self.with_layout(layout)
 
@@ -186,7 +188,7 @@ class Multivector:
         self._check_layout(layout)
         if self.layout == layout:
             return Multivector(self.algebra, values=self.values, layout=layout)
-        if self.is_compact:
+        if self.uses_active_lanes:
             return Multivector(self.algebra, values=layout.convert(self.values, self.layout), layout=layout)
         return Multivector(self.algebra, values=layout.compact(self.tensor), layout=layout)
 
@@ -206,18 +208,18 @@ class Multivector:
     def _wrap(self, tensor: torch.Tensor) -> Multivector:
         return Multivector(self.algebra, tensor)
 
-    def _wrap_compact(self, values: torch.Tensor, layout: GradeLayout) -> Multivector:
+    def _wrap_active(self, values: torch.Tensor, layout: GradeLayout) -> Multivector:
         return Multivector(self.algebra, values=values, layout=layout)
 
     def _values_for_layout(self, layout: GradeLayout) -> torch.Tensor:
         self._check_layout(layout)
-        if self.is_compact:
+        if self.uses_active_lanes:
             return layout.convert(self.values, self.layout)
         return layout.compact(self.tensor)
 
     def _combined_layout(self, other: Multivector) -> GradeLayout:
-        left = self.layout if self.is_compact else self.algebra.layout()
-        right = other.layout if other.is_compact else other.algebra.layout()
+        left = self.layout if self.uses_active_lanes else self.algebra.layout()
+        right = other.layout if other.uses_active_lanes else other.algebra.layout()
         basis = set(left.basis_indices).union(right.basis_indices)
         grades = sorted({index.bit_count() for index in basis})
         return self.algebra.layout(grades)
@@ -225,13 +227,13 @@ class Multivector:
     def __add__(self, other):
         if isinstance(other, Multivector):
             self._check_algebra(other)
-            if self.is_compact or other.is_compact:
+            if self.uses_active_lanes or other.uses_active_lanes:
                 layout = self._combined_layout(other)
-                return self._wrap_compact(self._values_for_layout(layout) + other._values_for_layout(layout), layout)
+                return self._wrap_active(self._values_for_layout(layout) + other._values_for_layout(layout), layout)
             return self._wrap(self.tensor + other.tensor)
         if isinstance(other, (int, float, torch.Tensor)):
-            if self.is_compact:
-                return self._wrap_compact(self.values + other, self.layout)
+            if self.uses_active_lanes:
+                return self._wrap_active(self.values + other, self.layout)
             return self._wrap(self.tensor + other)
         return NotImplemented
 
@@ -241,26 +243,26 @@ class Multivector:
     def __sub__(self, other):
         if isinstance(other, Multivector):
             self._check_algebra(other)
-            if self.is_compact or other.is_compact:
+            if self.uses_active_lanes or other.uses_active_lanes:
                 layout = self._combined_layout(other)
-                return self._wrap_compact(self._values_for_layout(layout) - other._values_for_layout(layout), layout)
+                return self._wrap_active(self._values_for_layout(layout) - other._values_for_layout(layout), layout)
             return self._wrap(self.tensor - other.tensor)
         if isinstance(other, (int, float, torch.Tensor)):
-            if self.is_compact:
-                return self._wrap_compact(self.values - other, self.layout)
+            if self.uses_active_lanes:
+                return self._wrap_active(self.values - other, self.layout)
             return self._wrap(self.tensor - other)
         return NotImplemented
 
     def __rsub__(self, other):
         if isinstance(other, (int, float, torch.Tensor)):
-            if self.is_compact:
-                return self._wrap_compact(other - self.values, self.layout)
+            if self.uses_active_lanes:
+                return self._wrap_active(other - self.values, self.layout)
             return self._wrap(other - self.tensor)
         return NotImplemented
 
     def __neg__(self):
-        if self.is_compact:
-            return self._wrap_compact(-self.values, self.layout)
+        if self.uses_active_lanes:
+            return self._wrap_active(-self.values, self.layout)
         return self._wrap(-self.tensor)
 
     def __mul__(self, other):
@@ -269,30 +271,30 @@ class Multivector:
             self._check_algebra(other)
             return self.geometric_product(other)
         if isinstance(other, (int, float)):
-            if self.is_compact:
-                return self._wrap_compact(self.values * other, self.layout)
+            if self.uses_active_lanes:
+                return self._wrap_active(self.values * other, self.layout)
             return self._wrap(self.tensor * other)
         if isinstance(other, torch.Tensor):
-            if self.is_compact:
-                return self._wrap_compact(self.values * other, self.layout)
+            if self.uses_active_lanes:
+                return self._wrap_active(self.values * other, self.layout)
             return self._wrap(self.tensor * other)
         return NotImplemented
 
     def __rmul__(self, other):
         if isinstance(other, (int, float, torch.Tensor)):
-            if self.is_compact:
-                return self._wrap_compact(self.values * other, self.layout)
+            if self.uses_active_lanes:
+                return self._wrap_active(self.values * other, self.layout)
             return self._wrap(self.tensor * other)
         return NotImplemented
 
     def __truediv__(self, other):
         if isinstance(other, (int, float)):
-            if self.is_compact:
-                return self._wrap_compact(self.values / other, self.layout)
+            if self.uses_active_lanes:
+                return self._wrap_active(self.values / other, self.layout)
             return self._wrap(self.tensor / other)
         if isinstance(other, torch.Tensor):
-            if self.is_compact:
-                return self._wrap_compact(self.values / other, self.layout)
+            if self.uses_active_lanes:
+                return self._wrap_active(self.values / other, self.layout)
             return self._wrap(self.tensor / other)
         return NotImplemented
 
@@ -316,11 +318,11 @@ class Multivector:
 
     def grade(self, k: int) -> Multivector:
         """Extract the grade-k component."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             layout = self.algebra.layout((int(k),))
             if not self.layout.contains_grade(k):
                 values = self.values.new_zeros(*self.values.shape[:-1], layout.dim)
-                return self._wrap_compact(values, layout)
+                return self._wrap_active(values, layout)
             values, output_layout = self.algebra.planned_unary(
                 self.values,
                 op="grade_projection",
@@ -330,12 +332,12 @@ class Multivector:
                 active_output=True,
                 return_layout=True,
             )
-            return self._wrap_compact(values, output_layout)
+            return self._wrap_active(values, output_layout)
         return self._wrap(self.algebra.grade_projection(self.tensor, k))
 
     def reverse(self) -> Multivector:
         """Reversion (same as ``~self``)."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             values, layout = self.algebra.planned_unary(
                 self.values,
                 op="reverse",
@@ -344,12 +346,12 @@ class Multivector:
                 active_output=True,
                 return_layout=True,
             )
-            return self._wrap_compact(values, layout)
+            return self._wrap_active(values, layout)
         return self._wrap(self.algebra.reverse(self.tensor))
 
     def grade_involution(self) -> Multivector:
         """Grade involution (main involution): flips odd-grade signs."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             values, layout = self.algebra.planned_unary(
                 self.values,
                 op="grade_involution",
@@ -358,12 +360,12 @@ class Multivector:
                 active_output=True,
                 return_layout=True,
             )
-            return self._wrap_compact(values, layout)
+            return self._wrap_active(values, layout)
         return self._wrap(self.algebra.grade_involution(self.tensor))
 
     def clifford_conjugation(self) -> Multivector:
         """Clifford conjugation: grade_involution(reverse(x))."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             values, layout = self.algebra.planned_unary(
                 self.values,
                 op="clifford_conjugation",
@@ -372,12 +374,12 @@ class Multivector:
                 active_output=True,
                 return_layout=True,
             )
-            return self._wrap_compact(values, layout)
+            return self._wrap_active(values, layout)
         return self._wrap(self.algebra.clifford_conjugation(self.tensor))
 
     def dual(self) -> Multivector:
         """Hodge dual: maps grade-k to grade-(n-k)."""
-        # Dense-only algebra APIs below intentionally cross the dense boundary.
+        # Full-kernel algebra APIs below intentionally cross the full-basis boundary.
         # Planned high-dimensional paths should use grade-declared primitives.
         return self._wrap(self.algebra.dual(self.tensor))
 
@@ -388,7 +390,7 @@ class Multivector:
     def geometric_product(self, other: Multivector) -> Multivector:
         """Explicit geometric product (same as ``self * other``)."""
         self._check_algebra(other)
-        if self.is_compact or other.is_compact:
+        if self.uses_active_lanes or other.uses_active_lanes:
             return self.projected_product(other, op="gp")
         return self._wrap(self.algebra.geometric_product(self.tensor, other.tensor))
 
@@ -401,39 +403,39 @@ class Multivector:
         left_grades=None,
         right_grades=None,
     ) -> Multivector:
-        """Grade-projected product using compact layouts when available."""
+        """Grade-projected product using active layouts when available."""
         self._check_algebra(other)
-        left_layout = self.layout if self.is_compact else None
-        right_layout = other.layout if other.is_compact else None
+        left_layout = self.layout if self.uses_active_lanes else None
+        right_layout = other.layout if other.uses_active_lanes else None
         left_grades = left_grades if left_grades is not None else _layout_grades(left_layout)
         right_grades = right_grades if right_grades is not None else _layout_grades(right_layout)
 
         values, layout = self.algebra.projected_product(
-            self.values if self.is_compact else self.tensor,
-            other.values if other.is_compact else other.tensor,
+            self.values if self.uses_active_lanes else self.tensor,
+            other.values if other.uses_active_lanes else other.tensor,
             left_grades=left_grades,
             right_grades=right_grades,
             output_grades=output_grades,
             left_layout=left_layout,
             right_layout=right_layout,
             op=op,
-            left_active_lanes=self.is_compact,
-            right_active_lanes=other.is_compact,
+            left_active_lanes=self.uses_active_lanes,
+            right_active_lanes=other.uses_active_lanes,
             return_layout=True,
         )
-        return self._wrap_compact(values, layout)
+        return self._wrap_active(values, layout)
 
     def wedge(self, other: Multivector) -> Multivector:
         """Wedge/exterior product (same as ``self ^ other``)."""
         self._check_algebra(other)
-        if self.is_compact or other.is_compact:
+        if self.uses_active_lanes or other.uses_active_lanes:
             return self.projected_product(other, op="wedge")
         return self._wrap(self.algebra.wedge(self.tensor, other.tensor))
 
     def inner(self, other: Multivector) -> Multivector:
         """Inner product (same as ``self | other``)."""
         self._check_algebra(other)
-        if self.is_compact or other.is_compact:
+        if self.uses_active_lanes or other.uses_active_lanes:
             return self.projected_product(other, op="inner")
         return self._wrap(self.algebra.inner_product(self.tensor, other.tensor))
 
@@ -450,14 +452,14 @@ class Multivector:
     def commutator(self, other: Multivector) -> Multivector:
         """Commutator (Lie bracket): ``[self, other] = self*other - other*self``."""
         self._check_algebra(other)
-        if self.is_compact or other.is_compact:
+        if self.uses_active_lanes or other.uses_active_lanes:
             return self.projected_product(other, op="commutator")
         return self._wrap(self.algebra.commutator(self.tensor, other.tensor))
 
     def anti_commutator(self, other: Multivector) -> Multivector:
         """Anti-commutator: ``{self, other} = self*other + other*self``."""
         self._check_algebra(other)
-        if self.is_compact or other.is_compact:
+        if self.uses_active_lanes or other.uses_active_lanes:
             return self.projected_product(other, op="anti_commutator")
         return self._wrap(self.algebra.anti_commutator(self.tensor, other.tensor))
 
@@ -473,7 +475,7 @@ class Multivector:
 
     def get_grade_norms(self) -> torch.Tensor:
         """Per-grade L2 norms."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             flat = self.values.pow(2).reshape(-1, self.layout.dim)
             grade_ids = self.layout.grade_indices_tensor(device=self.values.device).unsqueeze(0).expand_as(flat)
             result = flat.new_zeros(flat.shape[0], self.algebra.num_grades)
@@ -522,25 +524,25 @@ class Multivector:
 
     def to(self, *args, **kwargs) -> Multivector:
         """Move/cast the underlying tensor (same API as ``torch.Tensor.to``)."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             return Multivector(self.algebra, values=self.values.to(*args, **kwargs), layout=self.layout)
         return self._wrap(self.tensor.to(*args, **kwargs))
 
     def detach(self) -> Multivector:
         """Detach from computation graph."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             return Multivector(self.algebra, values=self.values.detach(), layout=self.layout)
         return self._wrap(self.tensor.detach())
 
     def clone(self) -> Multivector:
         """Clone the underlying tensor."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             return Multivector(self.algebra, values=self.values.clone(), layout=self.layout)
         return self._wrap(self.tensor.clone())
 
     def requires_grad_(self, requires_grad: bool = True) -> Multivector:
         """Set requires_grad in-place."""
-        if self.is_compact:
+        if self.uses_active_lanes:
             self.values.requires_grad_(requires_grad)
         else:
             self.tensor.requires_grad_(requires_grad)
@@ -548,15 +550,15 @@ class Multivector:
 
     @property
     def shape(self) -> torch.Size:
-        return self.values.shape if self.is_compact else self.tensor.shape
+        return self.values.shape if self.uses_active_lanes else self.tensor.shape
 
     @property
     def device(self) -> torch.device:
-        return self.values.device if self.is_compact else self.tensor.device
+        return self.values.device if self.uses_active_lanes else self.tensor.device
 
     @property
     def dtype(self) -> torch.dtype:
-        return self.values.dtype if self.is_compact else self.tensor.dtype
+        return self.values.dtype if self.uses_active_lanes else self.tensor.dtype
 
 
 def _layout_grades(layout: GradeLayout) -> tuple[int, ...] | None:

@@ -17,7 +17,7 @@ import torch
 
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike
-from clifra.core.runtime.accessors import compact_values
+from clifra.core.runtime.accessors import active_values
 from clifra.core.runtime.accessors import hermitian_signs as _layout_hermitian_signs
 
 
@@ -29,7 +29,7 @@ def _hermitian_signs(
     device=None,
     dtype: Optional[torch.dtype] = None,
 ) -> torch.Tensor:
-    """Return Hermitian sign tensor for a dense or compact layout.
+    """Return Hermitian sign tensor for a full or active layout.
 
     The Hermitian inner product on Cl(p,q) is:
         <A, B>_H = sum_I (conj_sign_I * metric_sign_I) * a_I * b_I
@@ -254,7 +254,7 @@ def hermitian_norm(
     Returns:
         Norm [..., 1]. Always >= 0.
     """
-    values, resolved = compact_values(algebra, A, layout=layout, grades=grades)
+    values, resolved = active_values(algebra, A, layout=layout, grades=grades)
     sq = _hermitian_inner_values(algebra, values, values, resolved)
     return torch.sqrt(torch.abs(sq))
 
@@ -370,7 +370,7 @@ def grade_hermitian_norm(
     Returns:
         Grade-specific norm [..., 1].
     """
-    values, source_layout = compact_values(algebra, A, layout=layout, grades=grades)
+    values, source_layout = active_values(algebra, A, layout=layout, grades=grades)
     grade_layout = algebra.layout((int(grade),))
     grade_values = grade_layout.convert(values, source_layout)
     sq = _hermitian_inner_values(algebra, grade_values, grade_values, grade_layout)
@@ -396,7 +396,7 @@ def hermitian_grade_spectrum(
     Returns:
         Grade energies [..., n+1]. Each entry >= 0.
     """
-    values, source_layout = compact_values(algebra, A, layout=layout, grades=grades)
+    values, source_layout = active_values(algebra, A, layout=layout, grades=grades)
     signs = _signs_like(algebra, source_layout, values, values)
     signed_energy = signs * values * values
     flat = signed_energy.reshape(-1, source_layout.dim)
@@ -418,14 +418,14 @@ def _aligned_pair_values(
     left_grades: Optional[Iterable[int]] = None,
     right_grades: Optional[Iterable[int]] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, GradeLayout]:
-    """Compact two values into one static layout without dense materialization."""
+    """Align two values into one static layout without full-basis materialization."""
     shared_left_layout = left_layout if left_layout is not None else layout
     shared_right_layout = right_layout if right_layout is not None else layout
     shared_left_grades = left_grades if left_grades is not None else grades
     shared_right_grades = right_grades if right_grades is not None else grades
 
-    A_values, A_layout = compact_values(algebra, A, layout=shared_left_layout, grades=shared_left_grades)
-    B_values, B_layout = compact_values(algebra, B, layout=shared_right_layout, grades=shared_right_grades)
+    A_values, A_layout = active_values(algebra, A, layout=shared_left_layout, grades=shared_left_grades)
+    B_values, B_layout = active_values(algebra, B, layout=shared_right_layout, grades=shared_right_grades)
     resolved = A_layout if A_layout == B_layout else _union_layout(algebra, A_layout, B_layout)
     if A_layout != resolved:
         A_values = resolved.convert(A_values, A_layout)

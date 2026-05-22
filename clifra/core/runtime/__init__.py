@@ -5,10 +5,10 @@
 # you may not use this file except in compliance with the License.
 #
 
-"""Runtime algebra hosts and dense reference operations."""
+"""Runtime algebra hosts and full-basis reference operations."""
 
 from ..storage import LayerLayout, resolve_layer_layout, resolve_layer_layout_contract
-from .accessors import as_multivector, compact_values, grade_indices, hermitian_signs, materialize_dense, resolve_layout
+from .accessors import active_values, as_multivector, grade_indices, hermitian_signs, materialize_full, resolve_layout
 from .actions import (
     apply_multi_versor_action,
     apply_versor_action,
@@ -29,7 +29,7 @@ __all__ = [
     "CliffordAlgebra",
     "Multivector",
     "as_multivector",
-    "compact_values",
+    "active_values",
     "apply_multi_versor_action",
     "apply_versor_action",
     "compact_multi_versor_action",
@@ -38,7 +38,7 @@ __all__ = [
     "grade_indices",
     "grade_norms",
     "hermitian_signs",
-    "materialize_dense",
+    "materialize_full",
     "resolve_layer_layout",
     "resolve_layer_layout_contract",
     "resolve_layout",

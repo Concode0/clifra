@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Benchmark framework-level dense, compact, pairwise, and layer pipeline paths.
+"""Benchmark framework-level full-lane, active-lane, pairwise, and layer pipeline paths.
 
 The core benchmark suite measures many algebra kernels in detail. This script is
 smaller and pipeline-oriented: it times the execution paths users hit when they
-compose product layers, functional products, compact layouts, and planned
+compose product layers, functional products, active layouts, and planned
 contexts.
 
 Examples:
@@ -42,7 +42,7 @@ class BenchmarkCase:
     host: str
     n: int
     op: str
-    storage: str
+    lane_format: str
     batch_size: int
     left_lanes: int
     right_lanes: int
@@ -89,7 +89,7 @@ def _time_case(case: BenchmarkCase, *, warmups: int, repeats: int, device: str) 
         "host": case.host,
         "n": case.n,
         "op": case.op,
-        "storage": case.storage,
+        "lane_format": case.lane_format,
         "batch_size": case.batch_size,
         "left_lanes": case.left_lanes,
         "right_lanes": case.right_lanes,
@@ -163,7 +163,7 @@ def _dense_product_case(args, dtype: torch.dtype, device: str) -> BenchmarkCase:
         host="CliffordAlgebra",
         n=algebra.n,
         op="gp",
-        storage="dense",
+        lane_format="full",
         batch_size=args.batch_size,
         left_lanes=algebra.dim,
         right_lanes=algebra.dim,
@@ -192,7 +192,7 @@ def _compact_product_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
         host="CliffordAlgebra",
         n=algebra.n,
         op="gp",
-        storage="compact",
+        lane_format="active",
         batch_size=args.batch_size,
         left_lanes=layout_1.dim,
         right_lanes=layout_1.dim,
@@ -229,7 +229,7 @@ def _context_compact_case(args, dtype: torch.dtype, device: str) -> BenchmarkCas
         host="AlgebraContext",
         n=context.n,
         op="gp",
-        storage="compact",
+        lane_format="active",
         batch_size=args.batch_size,
         left_lanes=layout_1.dim,
         right_lanes=layout_1.dim,
@@ -276,7 +276,7 @@ def _pairwise_context_case(args, dtype: torch.dtype, device: str) -> BenchmarkCa
         host="AlgebraContext",
         n=context.n,
         op="wedge",
-        storage="compact_pairwise",
+        lane_format="active_pairwise",
         batch_size=args.batch_size * args.left_items * args.right_items,
         left_lanes=layout_2.dim,
         right_lanes=layout_1.dim,
@@ -342,7 +342,7 @@ def _layer_pipeline_case(args, dtype: torch.dtype, device: str) -> BenchmarkCase
         host="AlgebraContext",
         n=context.n,
         op="wedge_pipeline",
-        storage="dense_to_compact",
+        lane_format="full_to_active",
         batch_size=args.batch_size,
         left_lanes=context.dim,
         right_lanes=layout_1.dim,
@@ -397,7 +397,7 @@ def _compact_wedge_chain_case(args, dtype: torch.dtype, device: str) -> Benchmar
         host="AlgebraContext",
         n=context.n,
         op="wedge_chain",
-        storage="compact",
+        lane_format="active",
         batch_size=args.batch_size,
         left_lanes=vector_layout.dim,
         right_lanes=vector_layout.dim,
@@ -419,11 +419,11 @@ def _write_results(rows: list[dict], output_dir: Path) -> None:
     summary_path = output_dir / "summary.md"
     with summary_path.open("w") as handle:
         handle.write("# Framework Pipeline Benchmark\n\n")
-        handle.write("| case | host | storage | n | median ms | items/sec | max abs error | max rel error |\n")
+        handle.write("| case | host | lane format | n | median ms | items/sec | max abs error | max rel error |\n")
         handle.write("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |\n")
         for row in rows:
             handle.write(
-                f"| {row['name']} | {row['host']} | {row['storage']} | {row['n']} | "
+                f"| {row['name']} | {row['host']} | {row['lane_format']} | {row['n']} | "
                 f"{row['median_ms']:.4f} | {row['items_per_sec']:.2f} | "
                 f"{_format_metric(row['max_abs_error'])} | {_format_metric(row['max_rel_error'])} |\n"
             )

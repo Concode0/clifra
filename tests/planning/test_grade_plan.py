@@ -474,29 +474,29 @@ def test_grade_planner_rekeys_cached_executor_after_dtype_move():
     assert moved.coefficients.dtype == torch.float32
 
 
-def test_multivector_compact_projected_product_keeps_dense_tensor_compatibility():
+def test_multivector_active_projected_product_keeps_full_tensor_boundary():
     algebra = CliffordAlgebra(4, 1, 1, device=DEVICE, dtype=torch.float64)
-    A = Multivector(algebra, _grade_only_input(algebra, 2, (1,), seed=131)).compact((1,))
-    B = Multivector(algebra, _grade_only_input(algebra, 2, (1,), seed=137)).compact((1,))
+    A = Multivector(algebra, _grade_only_input(algebra, 2, (1,), seed=131)).with_grades((1,))
+    B = Multivector(algebra, _grade_only_input(algebra, 2, (1,), seed=137)).with_grades((1,))
 
     result = A.projected_product(B, output_grades=(0, 2))
     expected = _project_to_grades(algebra, algebra.geometric_product(A.tensor, B.tensor), (0, 2))
 
-    assert result.is_compact
+    assert result.uses_active_lanes
     assert result.values.shape[-1] == result.layout.dim
     assert result.tensor.shape[-1] == algebra.dim
     assert torch.allclose(result.tensor, expected, atol=1e-12, rtol=1e-12)
 
 
-def test_multivector_compact_projected_product_supports_mixed_dense_operand():
+def test_multivector_active_projected_product_supports_mixed_full_operand():
     algebra = CliffordAlgebra(4, 1, 1, device=DEVICE, dtype=torch.float64)
-    A = Multivector(algebra, _grade_only_input(algebra, 2, (1,), seed=139)).compact((1,))
+    A = Multivector(algebra, _grade_only_input(algebra, 2, (1,), seed=139)).with_grades((1,))
     B = Multivector(algebra, _grade_only_input(algebra, 2, (1,), seed=149))
 
     result = A.projected_product(B, output_grades=(0, 2), right_grades=(1,))
     expected = _project_to_grades(algebra, algebra.geometric_product(A.tensor, B.tensor), (0, 2))
 
-    assert result.is_compact
+    assert result.uses_active_lanes
     assert torch.allclose(result.tensor, expected, atol=1e-12, rtol=1e-12)
 
 
@@ -634,7 +634,7 @@ def test_dense_kernel_planned_unary_handles_compact_layouts():
     assert torch.allclose(actual, -values)
 
 
-def test_multivector_compact_geometric_product_stays_compact_in_high_dimensions():
+def test_multivector_active_geometric_product_stays_active_in_high_dimensions():
     algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32)
     vector_layout = algebra.layout((1,))
     left = torch.zeros(1, vector_layout.dim)
@@ -648,13 +648,13 @@ def test_multivector_compact_geometric_product_stays_compact_in_high_dimensions(
         layout=vector_layout,
     )
 
-    assert result.is_compact
+    assert result.uses_active_lanes
     assert result.layout.grades == (0, 2)
     scalar_pos = result.layout.basis_indices.index(0)
     assert torch.allclose(result.values[0, scalar_pos], torch.tensor(1.0))
 
 
-def test_multivector_compact_binary_wrappers_do_not_unwrap_dense_tensors():
+def test_multivector_active_binary_wrappers_do_not_unwrap_full_tensors():
     algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32)
     bivector_layout = algebra.layout((2,))
     vector_layout = algebra.layout((1,))
@@ -670,11 +670,11 @@ def test_multivector_compact_binary_wrappers_do_not_unwrap_dense_tensors():
     ]
 
     for result, expected_grades in results:
-        assert result.is_compact
+        assert result.uses_active_lanes
         assert result.layout.grades == expected_grades
 
 
-def test_multivector_compact_addition_merges_layouts_without_dense_materialization():
+def test_multivector_active_addition_merges_layouts_without_full_materialization():
     algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32)
     vector_layout = algebra.layout((1,))
     bivector_layout = algebra.layout((2,))
@@ -683,7 +683,7 @@ def test_multivector_compact_addition_merges_layouts_without_dense_materializati
 
     result = vector + bivector
 
-    assert result.is_compact
+    assert result.uses_active_lanes
     assert result.layout.grades == (1, 2)
     vector_values = vector.with_layout(result.layout).values
     bivector_values = bivector.with_layout(result.layout).values
@@ -803,7 +803,7 @@ def test_context_declared_product_requires_active_output_without_dense_materiali
     left = torch.zeros(1, vector_layout.dim)
     right = torch.zeros(1, vector_layout.dim)
 
-    with pytest.raises(ValueError, match="Dense materialization is disabled"):
+    with pytest.raises(ValueError, match="Full-basis materialization is disabled"):
         algebra.projected_geometric_product(
             left,
             right,

@@ -14,7 +14,7 @@ from clifra.core.planning.action import (
     metric_self_signs,
     reflection_vector_matrix,
 )
-from clifra.core.runtime.accessors import materialize_dense
+from clifra.core.runtime.accessors import materialize_full
 
 
 def apply_versor_action(
@@ -35,7 +35,7 @@ def apply_versor_action(
     cache_dense: bool = False,
     return_cache: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
-    """Apply one versor action while the algebra host chooses storage execution."""
+    """Apply one versor action while the algebra host chooses the lane execution path."""
     input_layout, output_layout, parameter_layout = _action_layouts(
         algebra,
         grade=grade,
@@ -100,7 +100,7 @@ def apply_multi_versor_action(
     cache_dense: bool = False,
     return_cache: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
-    """Apply a weighted versor superposition with host-owned storage dispatch."""
+    """Apply a weighted versor superposition with host-owned lane dispatch."""
     input_layout, output_layout, parameter_layout = _action_layouts(
         algebra,
         grade=grade,
@@ -228,7 +228,7 @@ def compact_multi_versor_action(
     result = torch.einsum("ck,...cko->...co", mix, transformed)
     if active_output:
         return result
-    return materialize_dense(algebra, result, layout=output_layout)
+    return materialize_full(algebra, result, layout=output_layout)
 
 
 def versor_vector_matrix(algebra, weights: torch.Tensor, *, grade: int, parameter_layout: GradeLayout) -> torch.Tensor:
@@ -382,7 +382,7 @@ def _project_dense_action_output(
     compact = output_layout.compact(output)
     if active_output:
         return compact
-    return materialize_dense(algebra, compact, layout=output_layout)
+    return materialize_full(algebra, compact, layout=output_layout)
 
 
 def _cache_matches(cache: tuple[torch.Tensor, ...] | None, reference: torch.Tensor) -> bool:

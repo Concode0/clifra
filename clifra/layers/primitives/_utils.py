@@ -36,7 +36,7 @@ def grade_indices(algebra, grade: int, *, name: str = "grade") -> torch.Tensor:
 
 
 def dense_from_indices(coefficients: torch.Tensor, indices: torch.Tensor, dense_dim: int) -> torch.Tensor:
-    """Scatter compact coefficients into dense multivector storage."""
+    """Scatter active coefficients into full-basis multivector lanes."""
     dense = coefficients.new_zeros(*coefficients.shape[:-1], dense_dim)
     index = indices.to(device=coefficients.device).expand(*coefficients.shape[:-1], -1)
     return dense.scatter(-1, index, coefficients)

@@ -19,7 +19,7 @@ from clifra.core.planning.action import apply_graded_linear_action
 from clifra.core.runtime.accessors import default_layout as _default_layout
 from clifra.core.runtime.accessors import grade_indices as _grade_indices
 from clifra.core.runtime.accessors import hermitian_signs as _hermitian_signs
-from clifra.core.runtime.accessors import materialize_dense
+from clifra.core.runtime.accessors import materialize_full
 from clifra.core.runtime.accessors import resolve_layout as _resolve_layout
 from clifra.core.runtime.actions import apply_multi_versor_action, apply_versor_action
 from clifra.core.runtime.actions import grade_norms as _grade_norms
@@ -171,7 +171,7 @@ class AlgebraRuntimeMixin:
             return values, boundary.output_value.layout
         if boundary.output_value.uses_active_lanes:
             return values
-        return materialize_dense(self, values, layout=boundary.output_value.layout)
+        return materialize_full(self, values, layout=boundary.output_value.layout)
 
     def projected_geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Projected geometric product convenience wrapper."""
@@ -224,7 +224,7 @@ class AlgebraRuntimeMixin:
             return output, boundary.output_value.layout
         if boundary.output_value.uses_active_lanes:
             return output
-        return materialize_dense(self, output, layout=boundary.output_value.layout)
+        return materialize_full(self, output, layout=boundary.output_value.layout)
 
     def planned_linear_action(
         self,
@@ -272,7 +272,7 @@ class AlgebraRuntimeMixin:
             return output, output_layout
         if active_output:
             return output
-        return materialize_dense(self, output, layout=output_layout)
+        return materialize_full(self, output, layout=output_layout)
 
     def _declared_layout(self, grades, layout):
         if layout is not None:

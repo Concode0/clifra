@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 #
 
-"""Functional accessors for algebra layout, grade, and storage metadata."""
+"""Functional accessors for algebra layout, grade, and lane metadata."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def default_layout(algebra) -> GradeLayout:
 
 
 def grade_indices(algebra, grades: Iterable[int], *, device=None) -> torch.Tensor:
-    """Return canonical dense basis indices for ``grades``."""
+    """Return canonical full-basis indices for ``grades``."""
     if device is None:
         device = getattr(algebra, "device", None)
     return resolve_layout(algebra, grades=grades, warn_full=False).indices_tensor(device=device)
@@ -91,35 +91,35 @@ def hermitian_signs(
     device=None,
     dtype: Optional[torch.dtype] = None,
 ) -> torch.Tensor:
-    """Return Hermitian metric signs for a dense or compact layout."""
+    """Return Hermitian metric signs for a full or active layout."""
     resolved = resolve_layout(algebra, layout=layout, grades=grades)
     if device is None:
         device = getattr(algebra, "device", None)
     if dtype is None:
         dtype = getattr(algebra, "dtype", torch.float32)
 
-    dense_signs = getattr(algebra, "_hermitian_signs", None)
-    if dense_signs is not None:
-        indices = resolved.indices_tensor(device=dense_signs.device)
-        signs = torch.index_select(dense_signs, -1, indices)
+    full_signs = getattr(algebra, "_hermitian_signs", None)
+    if full_signs is not None:
+        indices = resolved.indices_tensor(device=full_signs.device)
+        signs = torch.index_select(full_signs, -1, indices)
         return signs.to(device=device, dtype=dtype)
 
     values = [_hermitian_sign_for_index(algebra, index) for index in resolved.basis_indices]
     return torch.tensor(values, dtype=dtype, device=device)
 
 
-def compact_values(
+def active_values(
     algebra,
     value,
     *,
     layout: Optional[GradeLayout] = None,
     grades: Optional[Iterable[int]] = None,
 ) -> tuple[torch.Tensor, GradeLayout]:
-    """Return compact values plus layout for a tensor or ``Multivector``."""
+    """Return active-lane values plus layout for a tensor or ``Multivector``."""
     resolved = resolve_layout(algebra, layout=layout, grades=grades, mv=value)
     if _is_multivector(value):
         _check_algebra(algebra, value.algebra)
-        if value.is_compact:
+        if value.uses_active_lanes:
             return resolved.convert(value.values, value.layout), resolved
         return resolved.compact(value.coefficients), resolved
 
@@ -129,22 +129,22 @@ def compact_values(
         return value, resolved
     if value.shape[-1] == resolved.dense_dim:
         return resolved.compact(value), resolved
-    raise ValueError(f"value last dimension must be {resolved.dim} compact or {resolved.dense_dim} dense")
+    raise ValueError(f"value last dimension must be {resolved.dim} active lanes or {resolved.dense_dim} full lanes")
 
 
-def materialize_dense(
+def materialize_full(
     algebra,
     value,
     *,
     layout: Optional[GradeLayout] = None,
     grades: Optional[Iterable[int]] = None,
 ) -> torch.Tensor:
-    """Return dense coefficients subject to the central full-layout policy."""
+    """Return full-basis coefficients subject to the central full-layout policy."""
     if _is_multivector(value):
         _check_algebra(algebra, value.algebra)
-        if not value.is_compact:
+        if not value.uses_active_lanes:
             return value.coefficients
-        _check_dense_materialization_allowed(algebra)
+        _check_full_materialization_allowed(algebra)
         return value.layout.dense(value.values)
 
     if not isinstance(value, torch.Tensor):
@@ -153,8 +153,8 @@ def materialize_dense(
         return value
     resolved = resolve_layout(algebra, layout=layout, grades=grades)
     if value.shape[-1] != resolved.dim:
-        raise ValueError(f"value compact last dimension must be {resolved.dim}, got {value.shape[-1]}")
-    _check_dense_materialization_allowed(algebra)
+        raise ValueError(f"value active-lane last dimension must be {resolved.dim}, got {value.shape[-1]}")
+    _check_full_materialization_allowed(algebra)
     return resolved.dense(value)
 
 
@@ -205,16 +205,16 @@ def _check_algebra(expected, actual) -> None:
         raise ValueError(f"Algebra mismatch: Cl{lhs} vs Cl{rhs}")
 
 
-def _check_dense_materialization_allowed(algebra) -> None:
+def _check_full_materialization_allowed(algebra) -> None:
     if not bool(getattr(algebra, "allow_full_layout_products", True)):
-        raise ValueError("Dense materialization is disabled for this algebra. Keep compact values.")
+        raise ValueError("Full-basis materialization is disabled for this algebra. Keep active-lane values.")
     if getattr(algebra, "n", 0) > FULL_LAYOUT_MAX_N:
         raise ValueError(
-            f"Dense materialization is disabled for n>{FULL_LAYOUT_MAX_N}. "
-            "Keep compact values or declare a smaller active layout."
+            f"Full-basis materialization is disabled for n>{FULL_LAYOUT_MAX_N}. "
+            "Keep active-lane values or declare a smaller active layout."
         )
     warn_full_layout_fallback(algebra)
 
 
 def _is_multivector(value) -> bool:
-    return hasattr(value, "algebra") and hasattr(value, "layout") and hasattr(value, "is_compact")
+    return hasattr(value, "algebra") and hasattr(value, "layout") and hasattr(value, "uses_active_lanes")

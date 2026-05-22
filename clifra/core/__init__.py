@@ -37,11 +37,11 @@ from .planning.product import GradeProductExecutor, GradeProductPlan, build_grad
 from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .planning.unary import GradeUnaryExecutor, GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
 from .runtime.accessors import (
+    active_values,
     as_multivector,
-    compact_values,
     grade_indices,
     hermitian_signs,
-    materialize_dense,
+    materialize_full,
     resolve_layout,
 )
 from .runtime.algebra import CliffordAlgebra
@@ -143,10 +143,10 @@ __all__ = [
     "signature_trace_form",
     "signature_norm_squared",
     "as_multivector",
-    "compact_values",
+    "active_values",
     "grade_indices",
     "hermitian_signs",
-    "materialize_dense",
+    "materialize_full",
     "resolve_layout",
     # decomposition
     "ExpPolicy",

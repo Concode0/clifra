@@ -306,13 +306,13 @@ class TestHermitianGradeSpectrum:
         assert torch.allclose(spec[:, 1], torch.full((2,), float(context.n)))
         assert torch.allclose(spec[:, 2:], torch.zeros(2, context.n - 1))
 
-    def test_compact_multivector_norm_uses_layout_without_dense_materialization(self):
+    def test_active_multivector_norm_uses_layout_without_full_materialization(self):
         context = make_algebra(9, 0, 0, kernel="context", device="cpu", dtype=torch.float32)
         mv = Multivector.from_vectors(context, torch.ones(3, context.n))
 
         norm = hermitian_norm(context, mv)
 
-        assert mv.is_compact
+        assert mv.uses_active_lanes
         assert norm.shape == (3, 1)
         assert torch.allclose(norm, torch.full((3, 1), context.n**0.5))
 
