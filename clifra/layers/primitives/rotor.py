@@ -49,7 +49,6 @@ class RotorLayer(CliffordModule):
         output_grades=None,
         input_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
-        compact_output: bool = True,
     ):
         """Initialize the versor layer.
 
@@ -72,7 +71,6 @@ class RotorLayer(CliffordModule):
         )
         self.input_layout = self.input_storage.layout
         self.output_layout = self.output_storage.layout
-        self.compact_output = bool(compact_output)
 
         self.register_buffer("grade_indices", grade_indices(algebra, self.grade))
         self.num_grade_elements = self.grade_indices.numel()
@@ -155,7 +153,7 @@ class RotorLayer(CliffordModule):
             input_layout=self.input_layout,
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
-            compact_output=self.compact_output,
+            compact_output=self.output_layout is not None,
             channels=self.channels,
             name="RotorLayer input",
             dense_cache=cache,

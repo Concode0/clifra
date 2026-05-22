@@ -47,7 +47,6 @@ class ReflectionLayer(CliffordModule):
         output_grades=None,
         input_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
-        compact_output: bool = True,
     ):
         """Initialize the reflection layer.
 
@@ -65,7 +64,6 @@ class ReflectionLayer(CliffordModule):
         )
         self.input_layout = self.input_storage.layout
         self.output_layout = self.output_storage.layout
-        self.compact_output = bool(compact_output)
 
         self.register_buffer("vector_indices", grade_indices(algebra, 1, name="vector grade"))
         self.num_vectors = self.vector_indices.numel()
@@ -126,7 +124,7 @@ class ReflectionLayer(CliffordModule):
             input_layout=self.input_layout,
             output_layout=self.output_layout,
             parameter_layout=self.vector_layout,
-            compact_output=self.compact_output,
+            compact_output=self.output_layout is not None,
             channels=self.channels,
             name="ReflectionLayer input",
             dense_cache=cache,
