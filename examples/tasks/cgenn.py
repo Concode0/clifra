@@ -62,13 +62,13 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from clifra.core.config import make_algebra_from_config
 from clifra.core.foundation.module import CliffordModule
-from clifra.functional.activation import GeometricSquare
 from clifra.layers import (
     BladeSelector,
     CliffordLayerNorm,
     CliffordLinear,
     RotorLayer,
 )
+from clifra.layers.primitives.activation import GeometricSquare
 from tasks.base import BaseTask
 
 # ---------------------------------------------------------------------------

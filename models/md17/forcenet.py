@@ -11,8 +11,8 @@ import torch.nn.functional as F
 
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.functional.activation import GeometricGELU, GeometricSquare
 from clifra.layers import BladeSelector, CliffordLayerNorm, CliffordLinear, MultiRotorLayer
+from clifra.layers.primitives.activation import GeometricGELU, GeometricSquare
 
 try:
     from torch_geometric.nn import global_add_pool

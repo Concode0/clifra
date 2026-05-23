@@ -2,8 +2,8 @@ import pytest
 import torch
 
 from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
-from clifra.functional.activation import GeometricGELU, GradeSwish
 from clifra.layers.blocks.attention import EntropyGatedAttention
+from clifra.layers.primitives.activation import GeometricGELU, GradeSwish
 
 pytestmark = pytest.mark.unit
 

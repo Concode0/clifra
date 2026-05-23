@@ -8,8 +8,8 @@
 import torch
 
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
-from clifra.functional.activation import GeometricGELU
 
+from ..primitives.activation import GeometricGELU
 from ..primitives.linear import CliffordLinear
 from ..primitives.multi_rotor import MultiRotorLayer
 from ..primitives.normalization import CliffordLayerNorm

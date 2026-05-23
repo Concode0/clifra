@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from clifra.core.config import make_algebra_from_config
 from clifra.core.foundation.module import CliffordModule
-from clifra.functional.loss import SubspaceLoss
+from clifra.criterion import SubspaceLoss
 from clifra.layers import BladeSelector, RotorLayer
 from examples.datasets.synthetic import Figure8Dataset
 from examples.visualizer import GeneralVisualizer

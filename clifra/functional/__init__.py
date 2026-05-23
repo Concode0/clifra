@@ -1,20 +1,28 @@
-"""Stateless functional operations for geometric algebra networks.
+"""Pure stateless formulas for geometric algebra networks."""
 
-Includes activation functions, loss functions, and orthogonality enforcement.
-"""
-
-from .activation import GeometricGELU, GeometricSquare, GradeSwish
+from .activation import geometric_gelu, geometric_square, grade_swish
 from .loss import (
-    BivectorRegularization,
-    ChamferDistance,
-    ConservativeLoss,
-    GeometricMSELoss,
-    HermitianGradeRegularization,
-    IsometryLoss,
-    PhysicsInformedLoss,
-    SubspaceLoss,
+    asymmetry_penalty,
+    bivector_regularization,
+    chamfer_distance,
+    conservative_force_loss,
+    geometric_mse,
+    hermitian_grade_regularization,
+    involution_consistency_loss,
+    isometry_loss,
+    physics_informed_loss,
+    subspace_penalty,
 )
-from .orthogonality import OrthogonalitySettings, StrictOrthogonality
+from .orthogonality import (
+    cross_grade_coupling,
+    diagnostics,
+    grade_energies,
+    grade_masks,
+    parasitic_energy,
+    parasitic_ratio,
+    project_to_target_grades,
+    target_mask_from_grades,
+)
 from .products import (
     anti_commutator,
     clifford_conjugation,
@@ -33,11 +41,9 @@ from .products import (
 )
 
 __all__ = [
-    # activations
-    "GeometricGELU",
-    "GeometricSquare",
-    "GradeSwish",
-    # products
+    "geometric_gelu",
+    "geometric_square",
+    "grade_swish",
     "product",
     "projected_product",
     "geometric_product",
@@ -52,16 +58,22 @@ __all__ = [
     "dual",
     "norm_sq",
     "embed_vector",
-    # losses
-    "GeometricMSELoss",
-    "SubspaceLoss",
-    "IsometryLoss",
-    "BivectorRegularization",
-    "HermitianGradeRegularization",
-    "ChamferDistance",
-    "ConservativeLoss",
-    "PhysicsInformedLoss",
-    # orthogonality
-    "StrictOrthogonality",
-    "OrthogonalitySettings",
+    "geometric_mse",
+    "subspace_penalty",
+    "isometry_loss",
+    "bivector_regularization",
+    "hermitian_grade_regularization",
+    "chamfer_distance",
+    "conservative_force_loss",
+    "physics_informed_loss",
+    "asymmetry_penalty",
+    "involution_consistency_loss",
+    "grade_masks",
+    "target_mask_from_grades",
+    "parasitic_energy",
+    "project_to_target_grades",
+    "grade_energies",
+    "parasitic_ratio",
+    "cross_grade_coupling",
+    "diagnostics",
 ]

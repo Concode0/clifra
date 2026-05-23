@@ -51,8 +51,8 @@ from torch.utils.data import DataLoader, TensorDataset
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)))
 
 from clifra.core.foundation.module import CliffordModule
-from clifra.functional.activation import GeometricGELU
 from clifra.layers import BladeSelector, CliffordLayerNorm, CliffordLinear, RotorLayer
+from clifra.layers.primitives.activation import GeometricGELU
 from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     count_parameters,

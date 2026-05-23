@@ -5,129 +5,69 @@
 # you may not use this file except in compliance with the License.
 #
 
-"""Geometric GA activations.
+"""Pure activation formulas for multivector tensors."""
 
-Magnitude-scaling and grade-wise gating functions that preserve geometric structure.
-"""
+from __future__ import annotations
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
-from clifra.core.foundation.module import CliffordModule
 from clifra.core.foundation.numerics import eps_like
 
 
-class GeometricGELU(CliffordModule):
-    """Geometric GELU activation: x' = x * GELU(||x|| + b) / ||x||.
-
-    Scales magnitude while preserving direction.
-
-    Attributes:
-        algebra (CliffordAlgebra): The algebra instance.
-        bias (torch.nn.Parameter): Learnable bias added to norm.
-    """
-
-    def __init__(self, algebra, channels: int = 1):
-        """Initialize Geometric GELU.
-
-        Args:
-            algebra (CliffordAlgebra): The algebra instance.
-            channels (int): Number of channels.
-        """
-        super().__init__(algebra)
-        self.bias = nn.Parameter(torch.zeros(channels))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply geometric GELU activation.
-
-        Args:
-            x (torch.Tensor): Input multivector [..., Dim].
-
-        Returns:
-            torch.Tensor: Activated multivector.
-        """
-        norm = x.norm(dim=-1, keepdim=True)
-
-        eps = eps_like(norm, min_value=torch.finfo(norm.dtype).tiny)
-        scale = F.gelu(norm + self.bias.view(1, -1, 1)) / norm.clamp_min(eps)
-
-        return x * scale
+def _channel_parameter(parameter: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    """Broadcast a per-channel parameter over leading and lane dimensions."""
+    if parameter.ndim != 1 or values.ndim < 2:
+        return parameter
+    return parameter.view((1,) * (values.ndim - 2) + (-1, 1))
 
 
-class GeometricSquare(CliffordModule):
-    """Gated geometric self-product: x + gate * GP(x, x).
-
-    GP(grade-1, grade-1) produces grade-0 (squares x_i^2) and grade-2
-    (wedge products x_i ^ x_j).  Creates algebraic cross-terms that
-    rotors can then rotate into the output.
-    """
-
-    def __init__(self, algebra, channels: int = 1):
-        super().__init__(algebra)
-        # sigmoid(-2) ~= 0.12 -- starts small so GP doesn't dominate
-        self.gate_logit = nn.Parameter(torch.full((channels,), -2.0))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gp = self.algebra.geometric_product(x, x)  # [B, C, dim]
-        gate = torch.sigmoid(self.gate_logit).view(1, -1, 1)  # [1, C, 1]
-        return x + gate * gp
+def geometric_gelu(values: torch.Tensor, bias: torch.Tensor | None = None) -> torch.Tensor:
+    """Scale multivectors by ``GELU(norm + bias) / norm`` while preserving direction."""
+    norm = values.norm(dim=-1, keepdim=True)
+    shifted_norm = norm if bias is None else norm + _channel_parameter(bias, values)
+    eps = eps_like(norm, min_value=torch.finfo(norm.dtype).tiny)
+    return values * (F.gelu(shifted_norm) / norm.clamp_min(eps))
 
 
-class GradeSwish(CliffordModule):
-    """Per-grade gated activation.
+def geometric_square(algebra, values: torch.Tensor, gate: torch.Tensor | None = None, *, layout=None) -> torch.Tensor:
+    """Return ``values + gate * (values * values)`` using the algebra's geometric product."""
+    if layout is None:
+        product = algebra.geometric_product(values, values)
+    else:
+        product = algebra.geometric_product(
+            values,
+            values,
+            left_layout=layout,
+            right_layout=layout,
+            output_layout=layout,
+        )
+    if gate is None:
+        return values + product
+    return values + _channel_parameter(gate, values) * product
 
-    Each grade receives an independent sigmoid gate based on its norm.
 
-    Attributes:
-        algebra (CliffordAlgebra): The algebra instance.
-        n_grades (int): Number of grades.
-        grade_weights (torch.nn.Parameter): Weights for each grade gate.
-        grade_biases (torch.nn.Parameter): Biases for each grade gate.
-    """
+def grade_swish(
+    values: torch.Tensor,
+    *,
+    grade_index: torch.Tensor,
+    grade_weights: torch.Tensor,
+    grade_biases: torch.Tensor,
+    n_grades: int | None = None,
+) -> torch.Tensor:
+    """Apply per-grade sigmoid gates computed from per-grade coefficient norms."""
+    if n_grades is None:
+        n_grades = int(grade_weights.shape[0])
 
-    def __init__(self, algebra, channels: int = 1):
-        """Initialize Grade Swish.
+    lane_dim = values.shape[-1]
+    batch_shape = values.shape[:-1]
+    grade_idx = grade_index.to(device=values.device).expand(*batch_shape, lane_dim)
 
-        Args:
-            algebra (CliffordAlgebra): The algebra instance.
-            channels (int): Number of channels.
-        """
-        super().__init__(algebra)
-        self.n_grades = self.algebra.n + 1
+    norm_sq = values.new_zeros(*batch_shape, n_grades)
+    norm_sq.scatter_add_(-1, grade_idx, values * values)
+    eps = eps_like(norm_sq, min_value=torch.finfo(norm_sq.dtype).tiny)
+    norms = torch.sqrt(norm_sq.clamp_min(eps))
 
-        self.grade_weights = nn.Parameter(torch.ones(self.n_grades))
-        self.grade_biases = nn.Parameter(torch.zeros(self.n_grades))
-
-        # Reuse algebra's precomputed grade_index instead of building our own
-        self.register_buffer("_grade_index", self.algebra.grade_index.clone())
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply per-grade gating.
-
-        Args:
-            x (torch.Tensor): Input multivector [..., Dim].
-
-        Returns:
-            torch.Tensor: Activated multivector.
-        """
-        D = self.algebra.dim
-        G = self.n_grades
-
-        # Square, scatter-add by grade, sqrt -> per-grade norms
-        x_sq = x * x  # [..., D]
-        batch_shape = x.shape[:-1]
-        grade_idx = self._grade_index.expand(*batch_shape, D)  # [..., D]
-
-        norm_sq = torch.zeros(*batch_shape, G, device=x.device, dtype=x.dtype)
-        norm_sq.scatter_add_(-1, grade_idx, x_sq)  # [..., G]
-        eps = eps_like(norm_sq, min_value=torch.finfo(norm_sq.dtype).tiny)
-        norms = torch.sqrt(norm_sq.clamp_min(eps))  # [..., G]
-
-        # Compute gates: sigmoid(w * norm + b) for each grade
-        gates = torch.sigmoid(self.grade_weights * norms + self.grade_biases)  # [..., G]
-
-        # Broadcast gate per component: lookup gate[grade_map[d]] for each d
-        per_component_gate = gates.gather(-1, grade_idx)  # [..., D]
-
-        return x * per_component_gate
+    gates = torch.sigmoid(grade_weights * norms + grade_biases)
+    per_component_gate = gates.gather(-1, grade_idx)
+    return values * per_component_gate

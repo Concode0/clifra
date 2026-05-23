@@ -32,7 +32,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from clifra.core.foundation.module import CliffordModule
-from clifra.functional.activation import GeometricGELU
 from clifra.layers import (
     BladeSelector,
     CliffordLayerNorm,
@@ -43,6 +42,7 @@ from clifra.layers import (
     RotaryBivectorPE,
     RotorLayer,
 )
+from clifra.layers.primitives.activation import GeometricGELU
 from experiments._lib import setup_algebra
 
 # --- Primitives showcase ---------------------------------------------------

@@ -9,6 +9,7 @@ from clifra.core.foundation.module import CliffordModule
 from .blocks.attention import EntropyGatedAttention, GeometricProductAttention
 from .blocks.multi_rotor_ffn import MultiRotorFFN
 from .blocks.transformer import GeometricTransformerBlock
+from .primitives.activation import GeometricGELU, GeometricSquare, GradeSwish
 from .primitives.linear import CliffordLinear
 from .primitives.multi_rotor import MultiRotorLayer
 from .primitives.normalization import CliffordLayerNorm
@@ -27,6 +28,9 @@ from .primitives.rotor_gadget import RotorGadget
 
 __all__ = [
     "CliffordModule",
+    "GeometricGELU",
+    "GeometricSquare",
+    "GradeSwish",
     "RotorLayer",
     "MultiRotorLayer",
     "CliffordLinear",

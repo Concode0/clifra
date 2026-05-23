@@ -10,7 +10,7 @@ import torch.nn as nn
 
 from clifra.core.config import make_algebra_from_config
 from clifra.core.runtime.metric import hermitian_grade_spectrum, hermitian_norm
-from clifra.functional.loss import ConservativeLoss, HermitianGradeRegularization
+from clifra.criterion import ConservativeLoss, HermitianGradeRegularization
 from datalib.md17 import get_md17_loaders
 from log import get_logger
 from models.md17 import MD17ForceNet

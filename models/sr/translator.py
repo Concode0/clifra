@@ -429,7 +429,7 @@ class RotorTranslator:
         Returns:
             List[RotorTerm] with symbolic expressions.
         """
-        from clifra.functional.activation import GeometricSquare
+        from clifra.layers.primitives.activation import GeometricSquare
 
         k = model.in_features
         n = self.algebra.n

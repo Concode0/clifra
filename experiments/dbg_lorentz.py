@@ -62,8 +62,8 @@ from clifra.core.runtime.metric import (
     signature_norm_squared,
     signature_trace_form,
 )
-from clifra.functional.activation import GeometricGELU
 from clifra.layers import BladeSelector, CliffordLayerNorm, CliffordLinear, RotorLayer
+from clifra.layers.primitives.activation import GeometricGELU
 from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     build_visualization_metadata,

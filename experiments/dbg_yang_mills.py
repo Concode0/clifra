@@ -57,9 +57,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pa
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.runtime.metric import hermitian_grade_spectrum, hermitian_inner_product
-from clifra.functional.activation import GeometricGELU
 from clifra.layers import BladeSelector, CliffordLayerNorm, CliffordLinear, RotorLayer
 from clifra.layers.adapters.conformal import ConformalEmbedding
+from clifra.layers.primitives.activation import GeometricGELU
 from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     build_visualization_metadata,

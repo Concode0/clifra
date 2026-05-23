@@ -11,7 +11,7 @@ import torch.nn as nn
 
 from clifra.core.config import make_algebra_from_config
 from clifra.core.foundation.module import CliffordModule
-from clifra.functional.loss import GeometricMSELoss
+from clifra.criterion import GeometricMSELoss
 from clifra.layers import RotorLayer
 from examples.visualizer import GeneralVisualizer
 from tasks.base import BaseTask

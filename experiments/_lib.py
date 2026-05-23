@@ -43,8 +43,8 @@ import torch.nn as nn
 from clifra.core.config import make_algebra
 from clifra.core.foundation.module import AlgebraLike
 from clifra.core.runtime.metric import hermitian_grade_spectrum
-from clifra.functional.activation import GeometricGELU
 from clifra.layers import CliffordLayerNorm, CliffordLinear, RotorLayer
+from clifra.layers.primitives.activation import GeometricGELU
 
 # ---------------------------------------------------------------------------
 # Reproducibility

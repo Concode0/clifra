@@ -59,8 +59,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pa
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.runtime.metric import signature_norm_squared
-from clifra.functional.activation import GeometricGELU
 from clifra.layers import CliffordLayerNorm, GeometricNeutralizer, MotherEmbedding, RotorLayer
+from clifra.layers.primitives.activation import GeometricGELU
 from clifra.optimizers.riemannian import RiemannianAdam
 from experiments._lib import (
     build_visualization_metadata,
