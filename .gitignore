@@ -21,6 +21,7 @@ train_log_*.txt
 
 node_modules/
 docs/.vitepress/dist/
+docs/.vitepress/cache/
 
 # Experiments Plots & Benchmarks Logs
 signature.log
