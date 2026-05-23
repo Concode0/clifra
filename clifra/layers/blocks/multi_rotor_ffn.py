@@ -1,6 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+"""Feed-forward blocks built from channel mixing and rotor superposition."""
 
 import torch
 

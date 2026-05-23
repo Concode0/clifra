@@ -1,14 +1,10 @@
-# Versor: Universal Geometric Algebra Neural Network
-# Copyright (C) 2026 Eunkyum Kim <nemonanconcode@gmail.com>
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-#
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
 
-"""Interactive Streamlit Demo for Versor.
+"""Interactive Streamlit demo for clifra.
 
 Provides a graphical interface to generate distorted manifold data,
-train a Geometric Algebra network live, and visualize the unbending process.
+train a geometric algebra network live, and visualize the alignment process.
 
 Run from the project root:
     streamlit run examples/demo.py
@@ -28,13 +24,12 @@ import torch.optim as optim
 from clifra.core.config import make_algebra
 from clifra.layers import BladeSelector, RotorLayer
 
-# Setup Page
-st.set_page_config(page_title="Versor: Geometric Algebra Demo", layout="wide")
+st.set_page_config(page_title="clifra: Geometric Algebra Demo", layout="wide")
 
-st.title("Versor: Geometric Algebra Neural Engine")
+st.title("clifra: Geometric Algebra Neural Engine")
 st.markdown("""
 This interactive demo visualizes **Geometric Algebra (GA)** transformations.
-Versor uses **Multivectors** and **Rotors** to manipulate high-dimensional geometry.
+clifra uses **Multivectors** and **Rotors** to manipulate high-dimensional geometry.
 """)
 
 # Sidebar Controls
@@ -210,4 +205,4 @@ else:
             )
 
 st.markdown("---")
-st.markdown("Powered by **Versor** | [GitHub Repository](https://github.com/Concode0/Versor)")
+st.markdown("Powered by **clifra** | [GitHub Repository](https://github.com/Concode0/clifra)")

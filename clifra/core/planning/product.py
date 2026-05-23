@@ -70,50 +70,62 @@ class GradeProductPlan:
 
     @property
     def p(self) -> int:
+        """Return the positive metric dimension."""
         return self.spec.p
 
     @property
     def q(self) -> int:
+        """Return the negative metric dimension."""
         return self.spec.q
 
     @property
     def r(self) -> int:
+        """Return the null metric dimension."""
         return self.spec.r
 
     @property
     def left_grades(self) -> tuple[int, ...]:
+        """Return the left operand grades."""
         return self.left_layout.grades
 
     @property
     def right_grades(self) -> tuple[int, ...]:
+        """Return the right operand grades."""
         return self.right_layout.grades
 
     @property
     def output_grades(self) -> tuple[int, ...]:
+        """Return the output grades."""
         return self.output_layout.grades
 
     @property
     def n(self) -> int:
+        """Return the total algebra dimension."""
         return self.p + self.q + self.r
 
     @property
     def dim(self) -> int:
+        """Return the dense multivector lane count."""
         return 1 << self.n
 
     @property
     def pair_count(self) -> int:
+        """Return the number of nonzero basis interactions."""
         return int(self.left_indices.numel())
 
     @property
     def output_dim(self) -> int:
+        """Return the compact output lane count."""
         return int(self.active_output_indices.numel())
 
     @property
     def is_empty(self) -> bool:
+        """Return whether the product has no nonzero basis interactions."""
         return self.pair_count == 0
 
     @property
     def density(self) -> float:
+        """Return realized interaction density relative to the grade tree estimate."""
         if self.tree.estimated_pairs == 0:
             return 0.0
         return self.pair_count / self.tree.estimated_pairs
@@ -275,10 +287,12 @@ class GradeProductExecutor(nn.Module):
 
     @property
     def output_dim(self) -> int:
+        """Return the compact output lane count."""
         return self._output_dim
 
     @property
     def pair_count(self) -> int:
+        """Return the number of planned basis interactions."""
         return self._pair_count
 
     def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:

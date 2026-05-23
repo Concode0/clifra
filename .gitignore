@@ -19,7 +19,8 @@ train_log_*.txt
 /*.png
 /*.gif
 
-site/
+node_modules/
+docs/.vitepress/dist/
 
 # Experiments Plots & Benchmarks Logs
 signature.log

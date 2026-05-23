@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Small helpers for layout-first adapter examples."""
 
 from __future__ import annotations

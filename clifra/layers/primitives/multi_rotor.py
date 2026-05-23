@@ -52,7 +52,7 @@ class MultiRotorLayer(CliffordModule):
         input_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
     ):
-        """Initialize Multi-Versor Layer.
+        """Initialize a multi-rotor layer.
 
         Args:
             algebra (CliffordAlgebra): The algebra instance.

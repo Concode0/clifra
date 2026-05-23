@@ -1,6 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+"""Projection and neutralization primitives for multivector channels."""
 
 import torch
 import torch.nn as nn

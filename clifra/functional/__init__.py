@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Pure stateless formulas for geometric algebra networks."""
 
 from .activation import geometric_gelu, geometric_square, grade_swish

@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Clifra - Clifford geometric algebra deep learning framework for PyTorch."""
 
 __version__ = "1.0.0"

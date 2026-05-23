@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Layout and lane-width contracts for multivector tensors.
 
 The public framework contract is layout-first: values are tensors over a

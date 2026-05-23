@@ -33,26 +33,32 @@ class UnaryRequest:
 
     @property
     def input_layout(self) -> GradeLayout:
+        """Return the resolved input layout."""
         return self.input_value.layout
 
     @property
     def output_layout(self) -> GradeLayout:
+        """Return the resolved output layout."""
         return self.output_value.layout
 
     @property
     def input_uses_active_lanes(self) -> bool:
+        """Return whether the input tensor is already compact."""
         return self.input_value.uses_active_lanes
 
     @property
     def input_grades(self) -> tuple[int, ...]:
+        """Return the grades accepted by the unary operation."""
         return self.input_layout.grades
 
     @property
     def output_grades(self) -> tuple[int, ...]:
+        """Return the grades emitted by the unary operation."""
         return self.output_layout.grades
 
     @property
     def cache_key(self) -> tuple[object, ...]:
+        """Return a stable key for executor caching."""
         return (
             self.spec,
             str(self.device),
@@ -87,10 +93,12 @@ class GradeUnaryPlan:
 
     @property
     def dim(self) -> int:
+        """Return the dense algebra dimension."""
         return self.spec.dim
 
     @property
     def output_dim(self) -> int:
+        """Return the compact output lane count."""
         return self.output_layout.dim
 
 
@@ -110,6 +118,7 @@ class GradeUnaryExecutor(nn.Module):
 
     @property
     def output_dim(self) -> int:
+        """Return the compact output lane count."""
         return self.output_layout.dim
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:

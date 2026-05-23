@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Numerical guard helpers shared across Clifra core and layers."""
 
 from __future__ import annotations

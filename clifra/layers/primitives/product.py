@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Module wrappers around declared geometric algebra products."""
 
 from __future__ import annotations
@@ -94,6 +97,7 @@ class ProductLayer(CliffordModule):
         return kwargs
 
     def extra_repr(self) -> str:
+        """Return constructor fields shown by ``nn.Module`` repr."""
         parts = [f"op={self.op!r}"]
         if self.left_grades is not None:
             parts.append(f"left_grades={self.left_grades}")

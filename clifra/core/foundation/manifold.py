@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared manifold metadata for framework parameters."""
 
 from __future__ import annotations

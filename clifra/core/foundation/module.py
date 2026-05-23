@@ -143,7 +143,7 @@ class CliffordModule(nn.Module):
     package just to subclass this base type.
 
     The module stores a shared algebra reference without registering it as a
-    PyTorch submodule. In Versor, one algebra instance often owns the
+    PyTorch submodule. In clifra, one algebra instance often owns the
     precomputed geometric tensors used by many modules.
     """
 
@@ -160,14 +160,17 @@ class CliffordModule(nn.Module):
 
     @property
     def p(self):
+        """Return the algebra's positive metric dimension."""
         return self._algebra.p
 
     @property
     def q(self):
+        """Return the algebra's negative metric dimension."""
         return self._algebra.q
 
     @property
     def r(self):
+        """Return the algebra's null metric dimension."""
         return self._algebra.r
 
     def _apply(self, fn):

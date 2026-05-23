@@ -125,11 +125,3 @@ markers = [
     "integration: tests requiring external data or network access",
     "unit: fast, self-contained unit tests",
 ]
-
-[dependency-groups]
-docs = [
-    "mkdocs<2.0",
-    "mkdocs-material>=9.7.4",
-    "mkdocstrings[python]>=0.30.1",
-    "pymdown-extensions>=10.21",
-]

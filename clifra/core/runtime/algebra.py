@@ -421,6 +421,7 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
 
     @exp_policy.setter
     def exp_policy(self, value):
+        """Set the bivector exponential dispatch policy."""
         from clifra.core.runtime.decomposition import ExpPolicy, resolve_fixed_iterations
 
         self._exp_policy = value if isinstance(value, ExpPolicy) else ExpPolicy(value)
@@ -1167,7 +1168,7 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
         which correctly handles both even and odd versors.
 
         Args:
-            V (torch.Tensor): Versor [..., dim].
+            V (torch.Tensor): versor [..., dim].
             x (torch.Tensor): Multivector to transform [..., dim].
 
         Returns:

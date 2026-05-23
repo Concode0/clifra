@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Plan-only contracts for fixed-shape bivector decomposition executors."""
 
 from __future__ import annotations
@@ -19,14 +22,17 @@ class BivectorDecompositionPlan:
 
     @property
     def residual_shape_tail(self) -> tuple[int]:
+        """Return the trailing shape for residual bivector buffers."""
         return (self.bivector_layout.dim,)
 
     @property
     def vector_shape_tail(self) -> tuple[int]:
+        """Return the trailing shape for extracted vector buffers."""
         return (self.vector_layout.dim,)
 
     @property
     def rotor_shape_tail(self) -> tuple[int]:
+        """Return the trailing shape for reconstructed rotor buffers."""
         return (self.rotor_layout.dim,)
 
 

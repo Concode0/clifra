@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared algebra host API for planner-owned layout contracts."""
 
 from __future__ import annotations

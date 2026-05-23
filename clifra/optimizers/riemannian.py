@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Riemannian optimizers for manifold-valued parameters.
 
 Implements optimization on product manifolds Spin(p,q) x S^{n-1} x R^d
@@ -105,7 +108,7 @@ class ExponentialSGD(Optimizer):
 
     where grad_B is the gradient in the Lie algebra (bivector space).
 
-    Since Versor parameterizes rotors via bivectors (the Lie algebra),
+    Since clifra parameterizes rotors via bivectors (the Lie algebra),
     Euclidean gradient updates in bivector space ARE geometrically meaningful.
     The exponential map in the forward pass (R = exp(-B/2)) completes the
     Riemannian update on the Spin(n) manifold.
@@ -239,7 +242,7 @@ class RiemannianAdam(Optimizer):
     Implements Adam momentum in the Lie algebra (bivector space) with
     exponential map updates on the manifold.
 
-    Since Versor parameterizes rotors via bivectors (the Lie algebra), Adam
+    Since clifra parameterizes rotors via bivectors (the Lie algebra), Adam
     momentum naturally lives in the tangent space. The exponential map in the
     forward pass (R = exp(-B/2)) completes the Riemannian update on Spin(n).
 

@@ -54,34 +54,42 @@ class ProductRequest:
 
     @property
     def left_layout(self) -> GradeLayout:
+        """Return the resolved layout for the left operand."""
         return self.left_value.layout
 
     @property
     def right_layout(self) -> GradeLayout:
+        """Return the resolved layout for the right operand."""
         return self.right_value.layout
 
     @property
     def output_layout(self) -> GradeLayout:
+        """Return the resolved layout for the product output."""
         return self.output_value.layout
 
     @property
     def left_uses_active_lanes(self) -> bool:
+        """Return whether the left tensor is already compact."""
         return self.left_value.uses_active_lanes
 
     @property
     def right_uses_active_lanes(self) -> bool:
+        """Return whether the right tensor is already compact."""
         return self.right_value.uses_active_lanes
 
     @property
     def left_grades(self) -> tuple[int, ...]:
+        """Return the grades selected from the left operand."""
         return self.left_layout.grades
 
     @property
     def right_grades(self) -> tuple[int, ...]:
+        """Return the grades selected from the right operand."""
         return self.right_layout.grades
 
     @property
     def output_grades(self) -> tuple[int, ...]:
+        """Return the grades selected for the product output."""
         return self.output_layout.grades
 
     @property

@@ -479,7 +479,7 @@ def signature_trace_form(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor)
 
     This form is signature-aware and useful for:
     - Rotor normalization (R~R = 1)
-    - Versor validation
+    - versor validation for algebra elements
     - Spinor norm computation
 
     Args:

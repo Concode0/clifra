@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device configuration and backend tuning for Versor.
+"""Device configuration and backend tuning for clifra.
 
 Centralises device resolution, ``pin_memory``, ``torch.compile``,
 ``cudnn.benchmark``, and AMP (automatic mixed precision) into a single

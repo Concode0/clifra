@@ -1,6 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+"""Transformer-style blocks composed from geometric attention and rotor FFNs."""
 
 import torch
 import torch.nn as nn
@@ -16,12 +17,8 @@ class GeometricTransformerBlock(CliffordModule):
     """Modular Geometric Transformer block.
 
     Architecture:
-    1. Pre-norm
-    2. Geometric Attention (Standard or Entropy-Gated)
-    3. Residual connection
-    4. Pre-norm
-    5. Multi-Rotor FFN
-    6. Residual connection
+    Pre-norm -> geometric attention -> residual connection -> pre-norm ->
+    multi-rotor FFN -> residual connection.
     """
 
     def __init__(

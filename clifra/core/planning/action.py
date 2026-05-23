@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Intent and layout plans for linear and versor-style actions."""
 
 from __future__ import annotations
@@ -17,10 +20,12 @@ class LinearActionPlan:
 
     @property
     def input_grades(self) -> tuple[int, ...]:
+        """Return the grades accepted by the action input layout."""
         return self.input_layout.grades
 
     @property
     def output_grades(self) -> tuple[int, ...]:
+        """Return the grades emitted by the action output layout."""
         return self.output_layout.grades
 
 
@@ -35,6 +40,7 @@ class VersorActionPlan:
 
     @property
     def linear_action(self) -> LinearActionPlan:
+        """Return the equivalent linear action over the same input/output layouts."""
         return LinearActionPlan(input_layout=self.input_layout, output_layout=self.output_layout)
 
 
@@ -50,10 +56,12 @@ class PairedBivectorActionPlan:
 
     @property
     def input_grades(self) -> tuple[int, ...]:
+        """Return the grades accepted before the paired bivector action."""
         return self.input_layout.grades
 
     @property
     def output_grades(self) -> tuple[int, ...]:
+        """Return the grades retained after the paired bivector action."""
         return self.output_layout.grades
 
 

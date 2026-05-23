@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lightweight input validation for Versor tensors.
+"""Lightweight input validation for clifra tensors.
 
 All checks use ``assert`` so they are free under ``python -O``.
 Set ``VALIDATE = False`` to disable even without the -O flag.

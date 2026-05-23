@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Riemannian optimizers for geometric algebra neural networks.
 
 Provides optimizers that respect the manifold structure of parameters:

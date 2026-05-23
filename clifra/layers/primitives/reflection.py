@@ -1,6 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+"""Reflection layers for Pin-style geometric actions."""
 
 import torch
 import torch.nn as nn

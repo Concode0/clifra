@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Debug formatting for multivector coefficient tensors.
 
 This module intentionally avoids algebra operations. ``Multivector`` is a

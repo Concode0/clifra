@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Rotor-based linear transformation layer (Generalized Rotor Gadget).
 
 Implements Section 4.2 from Pence et al. (2025), "Composing Linear Layers
@@ -40,10 +43,8 @@ class RotorGadget(CliffordModule):
     of basis vectors in the Clifford algebra.
 
     Architecture:
-        1. Partition input channels into blocks
-        2. For each rotor pair (i, j):
-           - Apply rotor sandwich: r_ij . x_i . s_ij.H
-        3. Pool/aggregate results to output channels
+        Partition input channels into blocks, apply rotor sandwiches to each
+        pair, then aggregate the results to output channels.
 
     The transformation is: psi(x) = r.x.s.H where r, s are rotors (bivector exponentials).
 

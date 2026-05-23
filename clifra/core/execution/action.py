@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Compile-friendly executors for planned linear and versor actions."""
 
 from __future__ import annotations

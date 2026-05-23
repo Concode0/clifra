@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Stateless geometric algebra product helpers.
 
 These wrappers keep model code concise while preserving the algebra host as the

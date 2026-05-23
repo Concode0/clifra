@@ -49,6 +49,7 @@ class PlanCost:
 
     @property
     def max_lanes(self) -> int:
+        """Return the largest lane width among the planned operands."""
         return max(self.left_lanes, self.right_lanes, self.output_lanes)
 
 

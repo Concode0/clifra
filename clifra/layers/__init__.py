@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Neural network layers built on Clifford algebra.
 
 The framework namespace exports primitives and reusable blocks. Example
