@@ -7,15 +7,19 @@
 
 import torch
 
-from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.layout import GradeLayout
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import signed_clamp_min
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.storage import resolve_layer_layout
+
+from ._layout import basis_positions
 
 
 class ProjectiveEmbedding(CliffordModule):
-    """Projective Geometric Algebra (PGA) embedding layer.
+    """Example projective embedding over a declared active-lane layout.
 
     Maps Euclidean R^d points to grade-1 elements of Cl(d, 0, 1) and back.
+    The output lane width is ``layout.dim`` rather than always ``algebra.dim``.
 
     In PGA, the degenerate basis vector e_0 (where e_0^2 = 0) represents
     the origin. A Euclidean point x is embedded as the 1-vector:
@@ -34,33 +38,41 @@ class ProjectiveEmbedding(CliffordModule):
         euclidean_dim (int): Physical dimension d.
     """
 
-    def __init__(self, algebra: CliffordAlgebra, euclidean_dim: int):
+    def __init__(
+        self,
+        algebra: AlgebraLike,
+        euclidean_dim: int,
+        *,
+        grades=None,
+        layout: GradeLayout = None,
+    ):
         """Sets up the projective embedding.
 
         Args:
             algebra: Clifford algebra instance with signature Cl(d, 0, >=1).
             euclidean_dim: Physical dimension d.
+            grades: Optional compact output/input grades.
+            layout: Optional compact output/input layout.
         """
         super().__init__(algebra)
         d = euclidean_dim
-        assert algebra.p >= d and algebra.r >= 1, (
-            f"Projective embedding needs Cl(>={d}, 0, >=1), got Cl({algebra.p},{algebra.q},{algebra.r})"
-        )
+        if algebra.p < d or algebra.r < 1:
+            raise ValueError(
+                f"Projective embedding needs Cl(>={d}, 0, >=1), got Cl({algebra.p},{algebra.q},{algebra.r})"
+            )
         self.euclidean_dim = d
+        self.layout = resolve_layer_layout(algebra, layout=layout, grades=grades)
+        self.lane_dim = self.layout.dim
 
-        # Grade-1 indices for the Euclidean basis vectors e_1..e_d
-        # In binary: e_i has index 2^(i-1), so for i=0..d-1: index = 1 << i
-        g1_idx = (1 << torch.arange(d)).long()
-        self.register_buffer("_g1_idx", g1_idx)
+        g1_dense = [1 << bit for bit in range(d)]
+        self.register_buffer("_g1_idx", basis_positions(self.layout, g1_dense, name="ProjectiveEmbedding"))
 
-        # Index of the degenerate basis vector e_0
-        # It's the (p+q)-th basis vector, so index = 1 << (p + q)
         idx_e0 = 1 << (algebra.p + algebra.q)
-        self.register_buffer("_idx_e0", torch.tensor(idx_e0, dtype=torch.long))
+        e0_pos = basis_positions(self.layout, (idx_e0,), name="ProjectiveEmbedding")[0]
+        self.register_buffer("_idx_e0", e0_pos.clone().detach())
 
-        # Precomputed e_0 multivector for additive embedding
-        e0 = torch.zeros(algebra.dim)
-        e0[idx_e0] = 1.0
+        e0 = torch.zeros(self.lane_dim, dtype=algebra.dtype)
+        e0[int(e0_pos)] = 1.0
         self.register_buffer("_e0", e0)
 
     def embed(self, x: torch.Tensor) -> torch.Tensor:
@@ -70,11 +82,13 @@ class ProjectiveEmbedding(CliffordModule):
             x: Euclidean points [..., d].
 
         Returns:
-            PGA multivectors [..., dim].
+            PGA multivectors [..., layout.dim].
         """
-        x_mv = torch.zeros(*x.shape[:-1], self.algebra.dim, device=x.device, dtype=x.dtype)
-        x_mv.scatter_(-1, self._g1_idx.expand_as(x), x)
-        return x_mv + self._e0
+        if x.shape[-1] != self.euclidean_dim:
+            raise ValueError(f"input last dimension must be {self.euclidean_dim}, got {x.shape[-1]}")
+        x_mv = torch.zeros(*x.shape[:-1], self.lane_dim, device=x.device, dtype=x.dtype)
+        x_mv.scatter_(-1, self._g1_idx.to(x.device).expand_as(x), x)
+        return x_mv + self._e0.to(device=x.device, dtype=x.dtype)
 
     def embed_direction(self, v: torch.Tensor) -> torch.Tensor:
         """Embed Euclidean directions (ideal points) into PGA.
@@ -85,10 +99,12 @@ class ProjectiveEmbedding(CliffordModule):
             v: Direction vectors [..., d].
 
         Returns:
-            PGA multivectors [..., dim] with zero e_0 component.
+            PGA multivectors [..., layout.dim] with zero e_0 component.
         """
-        x_mv = torch.zeros(*v.shape[:-1], self.algebra.dim, device=v.device, dtype=v.dtype)
-        x_mv.scatter_(-1, self._g1_idx.expand_as(v), v)
+        if v.shape[-1] != self.euclidean_dim:
+            raise ValueError(f"direction last dimension must be {self.euclidean_dim}, got {v.shape[-1]}")
+        x_mv = torch.zeros(*v.shape[:-1], self.lane_dim, device=v.device, dtype=v.dtype)
+        x_mv.scatter_(-1, self._g1_idx.to(v.device).expand_as(v), v)
         return x_mv
 
     def extract(self, P: torch.Tensor) -> torch.Tensor:
@@ -98,16 +114,19 @@ class ProjectiveEmbedding(CliffordModule):
         Euclidean basis components.
 
         Args:
-            P: PGA multivectors [..., dim].
+            P: PGA multivectors [..., layout.dim].
 
         Returns:
             Euclidean coordinates [..., d].
         """
         d = self.euclidean_dim
+        if P.shape[-1] != self.lane_dim:
+            raise ValueError(f"point last dimension must be {self.lane_dim}, got {P.shape[-1]}")
         # Normalize by e_0 coefficient (homogeneous coordinate)
-        e0_coeff = signed_clamp_min(P[..., self._idx_e0 : self._idx_e0 + 1], self.algebra.eps)
+        e0_pos = int(self._idx_e0.item())
+        e0_coeff = signed_clamp_min(P[..., e0_pos : e0_pos + 1], self.algebra.eps)
         P_norm = P / e0_coeff
-        return torch.gather(P_norm, -1, self._g1_idx.expand(*P.shape[:-1], d))
+        return torch.gather(P_norm, -1, self._g1_idx.to(P.device).expand(*P.shape[:-1], d))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Default forward: embed Euclidean points.
@@ -116,6 +135,6 @@ class ProjectiveEmbedding(CliffordModule):
             x: Euclidean points [..., d].
 
         Returns:
-            PGA multivectors [..., dim].
+            PGA multivectors [..., layout.dim].
         """
         return self.embed(x)

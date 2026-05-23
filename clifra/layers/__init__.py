@@ -1,13 +1,12 @@
 """Neural network layers built on Clifford algebra.
 
-Organized into Primitives, Canonical Blocks, and Task-Specific Adapters.
+The framework namespace exports primitives and reusable blocks. Example
+adapters live under :mod:`clifra.layers.adapters` and are imported explicitly.
 """
 
 from clifra.core.foundation.module import CliffordModule
 
-from .adapters.embedding import MultivectorEmbedding, RotaryBivectorPE
-from .adapters.mother import EntropyGatedAttention, MotherEmbedding, PhaseShiftHead
-from .blocks.attention import GeometricProductAttention
+from .blocks.attention import EntropyGatedAttention, GeometricProductAttention
 from .blocks.multi_rotor_ffn import MultiRotorFFN
 from .blocks.transformer import GeometricTransformerBlock
 from .primitives.linear import CliffordLinear
@@ -26,12 +25,6 @@ from .primitives.reflection import ReflectionLayer
 from .primitives.rotor import RotorLayer
 from .primitives.rotor_gadget import RotorGadget
 
-# CliffordGraphConv requires torch_geometric
-try:
-    from .adapters.gnn import CliffordGraphConv
-except ImportError:
-    CliffordGraphConv = None
-
 __all__ = [
     "CliffordModule",
     "RotorLayer",
@@ -48,13 +41,8 @@ __all__ = [
     "BladeSelector",
     "GeometricNeutralizer",
     "ReflectionLayer",
-    "MultivectorEmbedding",
-    "RotaryBivectorPE",
-    "MotherEmbedding",
     "EntropyGatedAttention",
-    "PhaseShiftHead",
     "GeometricProductAttention",
     "MultiRotorFFN",
     "GeometricTransformerBlock",
-    "CliffordGraphConv",
 ]

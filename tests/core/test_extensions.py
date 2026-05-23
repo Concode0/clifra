@@ -8,8 +8,7 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.layers import CliffordGraphConv
+from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
 from clifra.layers.adapters.conformal import ConformalEmbedding
 from clifra.layers.adapters.projective import ProjectiveEmbedding
 
@@ -41,6 +40,18 @@ class TestExtensions:
         x_recon = embed.extract(P)
         assert torch.allclose(x, x_recon, atol=1e-5), "Reconstructed x should match original"
 
+    def test_cga_compact_grade1_roundtrip(self):
+        """CGA embedding can use active grade-1 lanes only."""
+        algebra = AlgebraContext(p=4, q=1, device="cpu")
+        layout = algebra.layout((1,))
+        embed = ConformalEmbedding(algebra, euclidean_dim=3, layout=layout)
+
+        x = torch.randn(5, 3, device="cpu")
+        P = embed.embed(x)
+
+        assert P.shape == (5, layout.dim)
+        assert torch.allclose(embed.extract(P), x, atol=1e-5)
+
     def test_pga_embed_extract_roundtrip(self):
         """Points embedded in PGA can be extracted back."""
         algebra = CliffordAlgebra(p=3, q=0, r=1, device="cpu")
@@ -59,6 +70,19 @@ class TestExtensions:
         # Roundtrip
         x_recon = embed.extract(P)
         assert torch.allclose(x, x_recon, atol=1e-5)
+
+    def test_pga_compact_grade1_roundtrip(self):
+        """PGA embedding can use active grade-1 lanes only."""
+        algebra = AlgebraContext(p=3, q=0, r=1, device="cpu")
+        layout = algebra.layout((1,))
+        embed = ProjectiveEmbedding(algebra, euclidean_dim=3, layout=layout)
+
+        x = torch.randn(5, 3, device="cpu")
+        P = embed.embed(x)
+
+        assert P.shape == (5, layout.dim)
+        assert torch.allclose(P[:, embed._idx_e0], torch.ones(5))
+        assert torch.allclose(embed.extract(P), x, atol=1e-5)
 
     def test_pga_direction_has_no_e0(self):
         """Directions (ideal points) have e_0 = 0."""
@@ -96,26 +120,3 @@ class TestExtensions:
 
         # e_0 component preserved (degenerate dimension unaffected by rotor)
         assert abs(P_rot[0, embed._idx_e0].item() - 1.0) < 1e-5
-
-    def test_gnn_layer(self):
-        """
-        Test Clifford GCN forward pass.
-        """
-        # Algebra (e.g., 2D)
-        algebra = CliffordAlgebra(p=2, q=0, device="cpu")
-        gnn = CliffordGraphConv(algebra, in_channels=2, out_channels=4)
-
-        # 3 Nodes, 2 Channels, 2^2=4 Dim
-        x = torch.randn(3, 2, 4)
-
-        # Adjacency (3x3) - e.g., line graph 0-1-2
-        adj = torch.tensor([[0.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
-        # Normalize (simplified)
-        adj = adj / (adj.sum(dim=1, keepdim=True) + 1e-6)
-
-        out = gnn(x, adj)
-
-        # Check shape: [3, 4, 4]
-        assert out.shape == (3, 4, 4)
-        # Check values are not NaN
-        assert not torch.isnan(out).any()

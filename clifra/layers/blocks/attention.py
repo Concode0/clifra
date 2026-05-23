@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from clifra.core.execution.attention import GeometricAttentionScoreExecutor
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
+from clifra.core.foundation.numerics import eps_like
 from clifra.core.storage import resolve_layer_layout_contract
 
 from ..primitives.linear import CliffordLinear
@@ -187,4 +188,79 @@ class GeometricProductAttention(CliffordModule):
         # Output projection
         output = self.out_proj(output.reshape(B * L, C, D)).reshape(B, L, C, D)
 
+        return output
+
+
+class EntropyGatedAttention(CliffordModule):
+    """Geometric attention with an example bivector-entropy gate.
+
+    This is intentionally implemented as a layout-first block: inputs and
+    outputs use the active lanes declared by ``layout`` or ``grades``.
+    """
+
+    def __init__(
+        self,
+        algebra: AlgebraLike,
+        channels: int,
+        num_heads: int,
+        eta: float = 1.0,
+        H_base: float = 0.5,
+        *,
+        grades=None,
+        layout: GradeLayout = None,
+    ):
+        """Initializes entropy-gated attention."""
+        super().__init__(algebra)
+        self.channels = channels
+        self.eta = eta
+        self.H_base = H_base
+        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout = self.layout_contract.layout
+        self.base_attention = GeometricProductAttention(
+            algebra,
+            channels,
+            num_heads,
+            causal=False,
+            layout=self.layout,
+        )
+
+        g2_idx = self.layout_contract.grade_positions(2, device=algebra.device)
+        g2_mask = torch.zeros(self.layout_contract.lane_dim, device=algebra.device, dtype=torch.float32)
+        if g2_idx.numel() > 0:
+            g2_mask.index_fill_(0, g2_idx, 1.0)
+        self.register_buffer("g2_idx", g2_idx)
+        self.register_buffer("_g2_float_mask", g2_mask)
+
+    def forward(
+        self, x: torch.Tensor, key_padding_mask: torch.Tensor = None, return_gating: bool = False
+    ) -> torch.Tensor:
+        """Applies entropy-gated geometric attention to ``[B, L, C, D]`` inputs."""
+        self.layout_contract.validate_input(
+            x,
+            channels=self.channels,
+            name="EntropyGatedAttention input",
+        )
+        g2_idx = self.g2_idx.to(device=x.device)
+        if g2_idx.numel() > 0:
+            g2_values = torch.index_select(x, -1, g2_idx)
+            g2_energy = g2_values.square().sum(dim=(-1, -2))
+        else:
+            g2_energy = x.new_zeros(x.shape[0], x.shape[1])
+
+        if key_padding_mask is not None:
+            g2_energy = g2_energy.masked_fill(key_padding_mask, 0.0)
+
+        total_energy = g2_energy.sum(dim=1, keepdim=True)
+        eps = eps_like(g2_energy, min_value=torch.finfo(g2_energy.dtype).tiny)
+        p = torch.where(total_energy > 0, g2_energy / total_energy.clamp_min(eps), torch.zeros_like(g2_energy))
+        entropy = -(p * torch.log(p.clamp_min(eps))).sum(dim=1)
+
+        gate = self.eta * torch.sigmoid(entropy - self.H_base)
+        gate_view = gate.view(-1, 1, 1, 1)
+        g2_mask = self._g2_float_mask.to(device=x.device, dtype=x.dtype)
+        scale = 1.0 + (gate_view - 1.0) * g2_mask
+        output = self.base_attention(x * scale, key_padding_mask=key_padding_mask)
+
+        if return_gating:
+            return output, entropy, gate
         return output

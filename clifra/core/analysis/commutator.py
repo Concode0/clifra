@@ -286,9 +286,6 @@ class CommutatorAnalyzer:
 def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.Tensor):
     """Compute Geometric Uncertainty Index (U) and Procrustes Alignment (V).
 
-    Used by :class:`~clifra.layers.adapters.mother.MotherEmbedding` to initialise
-    per-group / per-subject alignment rotors.
-
     Args:
         algebra: algebra kernel or planning context.
         data_tensor: ``[N, D]`` tensor of raw features.

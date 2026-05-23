@@ -10,9 +10,8 @@ import torch.nn as nn
 
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 
-from ..adapters.mother import EntropyGatedAttention
 from ..primitives.normalization import CliffordLayerNorm
-from .attention import GeometricProductAttention
+from .attention import EntropyGatedAttention, GeometricProductAttention
 from .multi_rotor_ffn import MultiRotorFFN
 
 
