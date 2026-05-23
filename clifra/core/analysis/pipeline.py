@@ -1,9 +1,6 @@
-# Versor: Universal Geometric Algebra Neural Network
-# Copyright (C) 2026 Eunkyum Kim <nemonanconcode@gmail.com>
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-#
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 
 """Orchestrates all geometric analyzers into a single pipeline."""
 
@@ -91,14 +88,14 @@ class GeometricAnalyzer:
     def _run_full_pipeline(self, data: torch.Tensor, report: AnalysisReport) -> AnalysisReport:
         cfg = self.config
 
-        # 1. Sampling
+        # Sampling
         sampled, sample_meta = StatisticalSampler.sample(data, cfg.sampling)
         if isinstance(sampled, list):
             # bootstrap returns list -- use first for pipeline, rest for CI
             sampled = sampled[0]
         report.metadata["sampling"] = sample_meta
 
-        # 2. Dimension analysis
+        # Dimension analysis
         dim_result = None
         if cfg.run_dimension:
             da = EffectiveDimensionAnalyzer(
@@ -109,14 +106,14 @@ class GeometricAnalyzer:
             dim_result = da.analyze(sampled)
             report.dimension = dim_result
 
-        # 3. Signature search
+        # Signature search
         sig_result = None
         if cfg.run_signature:
             ssa = SignatureSearchAnalyzer(device=cfg.device, dtype=cfg.dtype)
             sig_result = ssa.analyze(sampled, dim_result=dim_result)
             report.signature = sig_result
 
-        # 4. Create algebra and embed (n >= 2 for meaningful GA structure)
+        # Create algebra and embed (n >= 2 for meaningful GA structure)
         if sig_result is not None:
             p, q, r = sig_result.signature
         elif dim_result is not None:
@@ -132,7 +129,7 @@ class GeometricAnalyzer:
         algebra = make_algebra(p, q, r, kernel=kernel, device=cfg.device, dtype=cfg.dtype, default_grades=(1,))
         mv_data = self._embed_raw(sampled, algebra)
 
-        # 5. GA analyses (parallel)
+        # GA analyses
         report = self._run_ga_analyses(mv_data, algebra, report)
 
         return report

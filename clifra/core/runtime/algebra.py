@@ -1,9 +1,6 @@
-# Versor: Universal Geometric Algebra Neural Network
-# Copyright (C) 2026 Eunkyum Kim <nemonanconcode@gmail.com>
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-#
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 
 """Differentiable Clifford Algebra core.
 
@@ -636,7 +633,7 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
         Returns:
             torch.Tensor: Sign matrix.
         """
-        # 1. Commutation Sign: Count swaps needed to reorder basis vectors
+        # Commutation sign: count swaps needed to reorder basis vectors
         # A bit-wise comparison counts inversions
         A = indices.unsqueeze(1)  # Row
         B = indices.unsqueeze(0)  # Col
@@ -659,7 +656,7 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
 
         commutator_sign = (-1) ** swap_counts
 
-        # 2. Metric Sign: e_i^2 = -1 if p <= i < p+q, 0 if i >= p+q
+        # Metric sign: e_i^2 = -1 if p <= i < p+q, 0 if i >= p+q
         intersection = A & B
 
         # Mask for negative signature dimensions (p <= i < p+q)
@@ -678,7 +675,7 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
 
         metric_sign = (-1) ** neg_cnt
 
-        # 3. Null dimensions: if any null basis vector appears in the intersection
+        # Null dimensions: if any null basis vector appears in the intersection
         # (i.e., e_i^2 = 0 for i >= p+q), the entire product is killed.
         if self.r > 0:
             r_mask = 0

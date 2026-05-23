@@ -1,5 +1,5 @@
-# Versor: Universal Geometric Algebra Neural Network (C) 2026 Eunkyum Kim
-# Licensed under the Apache License, Version 2.0
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
 
 """Core mathematical kernel for Geometric Algebra.
 
@@ -196,11 +196,9 @@ __all__ = [
     "AnalysisReport",
 ]
 
-# -----------------------------------------------------------------------
 # Lazy imports for the analysis sub-package.
 # These names are only resolved when first accessed, keeping
 # ``import clifra.core`` fast and avoiding circular-import issues.
-# -----------------------------------------------------------------------
 _ANALYSIS_NAMES = {
     "MetricSearch",
     "GeodesicFlow",

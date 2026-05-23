@@ -1,9 +1,6 @@
-# Versor: Universal Geometric Algebra Neural Network
-# Copyright (C) 2026 Eunkyum Kim <nemonanconcode@gmail.com>
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-#
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 
 import torch
 import torch.nn as nn
@@ -81,7 +78,7 @@ class GeometricTransformerBlock(CliffordModule):
         """
         B, L, C, D = x.shape
 
-        # 1. Attention path
+        # Attention path
         res = x
         x_n = self.norm1(x.reshape(B * L, C, D)).reshape(B, L, C, D)
 
@@ -93,7 +90,7 @@ class GeometricTransformerBlock(CliffordModule):
 
         x = res + attn_out
 
-        # 2. FFN path
+        # FFN path
         res = x
         x_n = self.norm2(x.reshape(B * L, C, D)).reshape(B, L, C, D)
         f_out = self.ffn(x_n.reshape(B * L, C, D)).reshape(B, L, C, D)

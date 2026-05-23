@@ -1,9 +1,6 @@
-# Versor: Universal Geometric Algebra Neural Network
-# Copyright (C) 2026 Eunkyum Kim <nemonanconcode@gmail.com>
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-#
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 
 """Commutator (Lie bracket) analysis of multivector data.
 
@@ -297,14 +294,14 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
     N, D = data_tensor.shape
     n = algebra.n
 
-    # 1. Lift data to grade-1 for commutator analysis
+    # Lift data to grade-1 for commutator analysis
     if D < n:
         pad = torch.zeros(N, n - D, device=data_tensor.device, dtype=data_tensor.dtype)
         x_n = torch.cat([data_tensor, pad], dim=-1)
     else:
         x_n = data_tensor[:, :n]
 
-    # 2. Mean grade-1 vector and compact commutator [x_i, mu]
+    # Mean grade-1 vector and compact commutator [x_i, mu]
     mu = x_n.mean(dim=0, keepdim=True)  # [1, n]
     comm = algebra.commutator(
         x_n,
@@ -319,7 +316,7 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
 
     U = torch.norm(comm, p=2, dim=-1).mean().item()
 
-    # 3. Procrustes alignment via SVD
+    # Procrustes alignment via SVD
     x_c = data_tensor - data_tensor.mean(dim=0, keepdim=True)
     try:
         _, _, Vh = torch.linalg.svd(x_c, full_matrices=False)

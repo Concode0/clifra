@@ -1,5 +1,5 @@
-# Versor: Universal Geometric Algebra Neural Network (C) 2026 Eunkyum Kim
-# Licensed under the Apache License, Version 2.0
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
 
 """Device configuration and backend tuning for Versor.
 
