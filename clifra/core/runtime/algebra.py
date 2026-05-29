@@ -756,10 +756,6 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
         geometric product, ``<AB>_{grade(A)+grade(B)}``.  For vectors this
         coincides with ``(AB - BA) / 2``.
 
-        Reference:
-            Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers
-            from Irreducibles." arXiv:2507.11688v1 [cs.LG]
-
         Args:
             A (torch.Tensor): Left operand [..., dim].
             B (torch.Tensor): Right operand [..., dim].
@@ -777,10 +773,6 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
 
         Fast path for bivector-vector case using precomputed skew-symmetric
         action matrices (avoids full geometric product + grade projection).
-
-        Reference:
-            Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers
-            from Irreducibles." arXiv:2507.11688v1 [cs.LG], Algorithm 2
 
         Args:
             A (torch.Tensor): Left operand (bivector) [..., dim].
@@ -825,10 +817,6 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
         """Computes the inner product: A . B = (AB + BA)/2.
 
         Single-pass implementation using precomputed symmetric signs.
-
-        Reference:
-            Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers
-            from Irreducibles." arXiv:2507.11688v1 [cs.LG]
 
         Args:
             A (torch.Tensor): Left operand [..., dim].

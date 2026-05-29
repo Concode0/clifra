@@ -34,7 +34,7 @@ from .foundation.basis import (
 )
 from .foundation.device import DeviceConfig, dtype_name, optional_dtype, resolve_device, resolve_dtype
 from .foundation.layout import AlgebraSpec, GradeLayout
-from .foundation.module import AlgebraLike, CliffordModule, is_dense_kernel_host, require_dense_kernel_host
+from .foundation.module import AlgebraLike, CliffordModule
 from .foundation.numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
 from .foundation.validation import check_channels, check_multivector
 from .planning.decomposition import BivectorDecompositionPlan
@@ -95,8 +95,6 @@ __all__ = [
     "AlgebraConfig",
     "AlgebraLike",
     "CliffordModule",
-    "is_dense_kernel_host",
-    "require_dense_kernel_host",
     "GeometricAttentionScoreExecutor",
     "GradedLinearActionExecutor",
     "VersorActionExecutor",
