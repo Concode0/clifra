@@ -35,4 +35,4 @@ lorentz_plots
 sta_plots/
 pendulum_plots/
 lattice_morph_plots/
-experiments/tmp_*.py
+experiments/*
