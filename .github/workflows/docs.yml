@@ -21,22 +21,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: astral-sh/setup-uv@v4
         with:
-          node-version: 20
-          cache: npm
+          version: "latest"
+          enable-cache: true
 
-      - name: Install documentation dependencies
-        run: npm ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
 
-      - name: Build VitePress site
-        run: npm run docs:build
+      - name: Build MkDocs site
+        run: uv run --group docs mkdocs build --strict
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/.vitepress/dist
+          path: site
 
   deploy:
     needs: build

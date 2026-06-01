@@ -831,16 +831,16 @@ class CliffordAlgebra(AlgebraHostMixin, nn.Module):
         return torch.matmul(A.unsqueeze(-2), B_gathered * self.inner_gp_signs).squeeze(-2)
 
     def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Computes the commutator (Lie bracket): [A, B] = AB - BA.
+        """Computes the commutator (Lie bracket): ``[A, B] = AB - BA``.
 
         Single-pass implementation using precomputed antisymmetric signs.
 
         Args:
-            A (torch.Tensor): Left operand [..., dim].
-            B (torch.Tensor): Right operand [..., dim].
+            A (torch.Tensor): Left operand with shape ``[..., dim]``.
+            B (torch.Tensor): Right operand with shape ``[..., dim]``.
 
         Returns:
-            torch.Tensor: Commutator [A, B] [..., dim].
+            torch.Tensor: Commutator with shape ``[..., dim]``.
         """
         if kwargs:
             return self.projected_product(A, B, op="commutator", **kwargs)

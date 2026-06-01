@@ -1,0 +1,54 @@
+site_name: clifra
+site_url: https://concode0.github.io/clifra/
+repo_url: https://github.com/Concode0/clifra
+repo_name: Concode0/clifra
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            docstring_options:
+              warn_missing_types: false
+              warn_unknown_params: false
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            filters:
+              - "!^_"
+              - "^__init__"
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Guides:
+      - Algebra and Layouts: guides/algebra-layouts.md
+      - Layers and Criteria: guides/layers-criteria.md
+      - Training Loop: guides/training-loop.md
+  - Examples: examples.md
+  - API:
+      - Core: api/core.md
+      - Functional: api/functional.md
+      - Layers: api/layers.md
+      - Criteria: api/criteria.md
+      - Optimizers: api/optimizers.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
