@@ -3,6 +3,11 @@
 
 """Stateless geometric algebra product helpers.
 
+Functional helpers use the final axis as the Clifford lane axis. Dense
+multivectors are ``[..., D]``, where ``D = 2 ** algebra.n``. Compact layout
+values are ``[..., L]``, where ``L`` is the active lane count for the declared
+layout. Leading axes ``...`` are ordinary PyTorch batch, item, or channel axes.
+
 These wrappers keep model code concise while preserving the algebra host as the
 single execution authority. Dense kernels, compact planned kernels, and pairwise
 planned kernels all flow through the same public calls.
@@ -45,15 +50,18 @@ def product(algebra, left: torch.Tensor, right: torch.Tensor, *, op: str = "gp",
 
     Args:
         algebra: Algebra host.
-        left: Left operand.
-        right: Right operand.
+        left: Left operand with dense shape ``[..., D]`` or compact declared
+            shape ``[..., L_left]``.
+        right: Right operand with leading axes broadcast-compatible with
+            ``left`` and lane shape ``[..., D]`` or ``[..., L_right]``.
         op: ``"gp"``, ``"wedge"``, ``"inner"``, ``"commutator"``, or
             ``"anti_commutator"``.
         **kwargs: Optional grade/layout declarations accepted by
             ``algebra.projected_product``.
 
     Returns:
-        Product values in dense or compact form according to ``kwargs``.
+        Product values with dense shape ``[..., D]`` or declared compact shape
+        ``[..., L_out]``.
     """
     planned_op, method_name = _resolve_product_op(op)
     if kwargs:
@@ -69,65 +77,69 @@ def projected_product(
     op: str = "gp",
     **kwargs: Any,
 ) -> torch.Tensor:
-    """Apply a declared grade-restricted product through the planner."""
+    """Apply a declared grade-restricted product through the planner.
+
+    Operands use compact lane shapes ``[..., L_left]`` and ``[..., L_right]``
+    when compact layouts are declared; the output uses ``[..., L_out]``.
+    """
     return product(algebra, left, right, op=op, **kwargs)
 
 
 def geometric_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply the geometric product."""
+    """Apply the geometric product to dense ``[..., D]`` or declared compact lanes."""
     return product(algebra, left, right, op="gp", **kwargs)
 
 
 def wedge(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply the exterior product."""
+    """Apply the exterior product to dense ``[..., D]`` or declared compact lanes."""
     return product(algebra, left, right, op="wedge", **kwargs)
 
 
 def inner_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply the inner product."""
+    """Apply the inner product to dense ``[..., D]`` or declared compact lanes."""
     return product(algebra, left, right, op="inner", **kwargs)
 
 
 def commutator(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply the commutator product."""
+    """Apply the commutator product to dense ``[..., D]`` or declared compact lanes."""
     return product(algebra, left, right, op="commutator", **kwargs)
 
 
 def anti_commutator(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply the anti-commutator product."""
+    """Apply the anti-commutator product to dense ``[..., D]`` or declared compact lanes."""
     return product(algebra, left, right, op="anti_commutator", **kwargs)
 
 
 def grade_projection(algebra, values: torch.Tensor, grade: int, **kwargs: Any) -> torch.Tensor:
-    """Project multivectors to one grade."""
+    """Project multivectors with shape ``[..., D]`` or ``[..., L]`` to one grade."""
     return algebra.grade_projection(values, grade, **kwargs)
 
 
 def reverse(algebra, values: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply reversion."""
+    """Apply reversion to values with shape ``[..., D]`` or ``[..., L]``."""
     return algebra.reverse(values, **kwargs)
 
 
 def grade_involution(algebra, values: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply grade involution."""
+    """Apply grade involution to values with shape ``[..., D]`` or ``[..., L]``."""
     return algebra.grade_involution(values, **kwargs)
 
 
 def clifford_conjugation(algebra, values: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply Clifford conjugation."""
+    """Apply Clifford conjugation to values with shape ``[..., D]`` or ``[..., L]``."""
     return algebra.clifford_conjugation(values, **kwargs)
 
 
 def dual(algebra, values: torch.Tensor) -> torch.Tensor:
-    """Apply the Hodge dual."""
+    """Apply the Hodge dual to dense values with shape ``[..., D]``."""
     return algebra.dual(values)
 
 
 def norm_sq(algebra, values: torch.Tensor) -> torch.Tensor:
-    """Return the algebraic squared norm."""
+    """Return the algebraic squared norm of dense values with shape ``[..., D]``."""
     return algebra.norm_sq(values)
 
 
 def embed_vector(algebra, vectors: torch.Tensor) -> torch.Tensor:
-    """Embed coordinate vectors into the grade-1 subspace."""
+    """Embed coordinate vectors with shape ``[..., algebra.n]`` into dense ``[..., D]`` multivectors."""
     return algebra.embed_vector(vectors)

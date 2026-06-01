@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Pure orthogonality formulas for multivector grade lanes."""
+"""Pure orthogonality formulas for multivector grade lanes.
+
+The final axis is the Clifford lane axis. Dense values are ``[..., D]`` and
+compact layout values are ``[..., L]``. Grade masks are ``[G, D]`` or
+``[G, L]``; boolean lane masks are ``[D]`` or ``[L]``.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ import torch
 
 
 def grade_masks(n_grades: int, dim: int, *, device=None) -> torch.Tensor:
-    """Return ``[n_grades, dim]`` boolean masks keyed by basis-blade grade."""
+    """Return ``[G, D]`` or ``[G, L]`` boolean masks keyed by basis-blade grade."""
     masks = torch.zeros(n_grades, dim, dtype=torch.bool, device=device)
     for idx in range(dim):
         grade = int(idx).bit_count()
@@ -20,14 +25,14 @@ def grade_masks(n_grades: int, dim: int, *, device=None) -> torch.Tensor:
 
 
 def target_mask_from_grades(masks: torch.Tensor, target_grades: list[int] | None) -> torch.Tensor:
-    """Return a boolean lane mask for the requested target grades."""
+    """Return a ``[D]`` or ``[L]`` boolean lane mask for the requested grades."""
     if target_grades is None:
         return torch.ones(masks.shape[-1], dtype=torch.bool, device=masks.device)
     return masks[target_grades].any(dim=0)
 
 
 def parasitic_energy(values: torch.Tensor, parasitic_mask: torch.Tensor) -> torch.Tensor:
-    """Return mean squared energy in non-target grade lanes."""
+    """Return mean squared energy in non-target lanes of ``[..., D]`` or ``[..., L]`` values."""
     parasitic = values[..., parasitic_mask]
     if parasitic.numel() == 0:
         return values.new_zeros(())
@@ -35,12 +40,12 @@ def parasitic_energy(values: torch.Tensor, parasitic_mask: torch.Tensor) -> torc
 
 
 def project_to_target_grades(values: torch.Tensor, target_mask: torch.Tensor) -> torch.Tensor:
-    """Return ``values`` with non-target lanes zeroed."""
+    """Return ``[..., D]`` or ``[..., L]`` values with non-target lanes zeroed."""
     return values * target_mask.to(device=values.device, dtype=values.dtype)
 
 
 def grade_energies(values: torch.Tensor, masks: torch.Tensor) -> dict[int, float]:
-    """Return mean squared energy per grade."""
+    """Return mean squared energy per grade for ``[..., D]`` or ``[..., L]`` values."""
     energies = {}
     for grade in range(masks.shape[0]):
         components = values[..., masks[grade].to(device=values.device)]
@@ -59,7 +64,7 @@ def parasitic_ratio(values: torch.Tensor, masks: torch.Tensor, target_grades: li
 
 
 def cross_grade_coupling(values: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
-    """Return the correlation matrix of grade energies across the batch."""
+    """Return the ``[G, G]`` correlation matrix of grade energies across batch axis 0."""
     batch = values.shape[0]
     energies = []
     for grade in range(masks.shape[0]):
@@ -77,7 +82,7 @@ def diagnostics(
     target_grades: list[int] | None,
     tolerance: float,
 ) -> dict:
-    """Return grade-energy, parasitic-ratio, and coupling diagnostics."""
+    """Return grade-energy, parasitic-ratio, and coupling diagnostics for multivectors."""
     energies = grade_energies(values, masks)
     ratio = parasitic_ratio(values, masks, target_grades)
 

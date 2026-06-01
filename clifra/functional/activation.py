@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Pure activation formulas for multivector tensors."""
+"""Pure activation formulas for multivector tensors.
+
+The final axis is the Clifford lane axis. Dense multivectors are ``[..., D]``
+and compact layout values are ``[..., L]``. Per-channel activations use
+``[..., C, D]`` or ``[..., C, L]`` with parameter vectors shaped ``[C]``.
+"""
 
 from __future__ import annotations
 
@@ -13,14 +18,23 @@ from clifra.core.foundation.numerics import eps_like
 
 
 def _channel_parameter(parameter: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
-    """Broadcast a per-channel parameter over leading and lane dimensions."""
+    """Broadcast a ``[C]`` parameter over leading axes and final ``D`` or ``L`` lanes."""
     if parameter.ndim != 1 or values.ndim < 2:
         return parameter
     return parameter.view((1,) * (values.ndim - 2) + (-1, 1))
 
 
 def geometric_gelu(values: torch.Tensor, bias: torch.Tensor | None = None) -> torch.Tensor:
-    """Scale multivectors by ``GELU(norm + bias) / norm`` while preserving direction."""
+    """Scale multivectors by ``GELU(norm + bias) / norm`` while preserving direction.
+
+    Args:
+        values: Multivectors with shape ``[..., D]`` or ``[..., L]``. With a
+            channel axis, use ``[..., C, D]`` or ``[..., C, L]``.
+        bias: Optional per-channel bias with shape ``[C]``.
+
+    Returns:
+        Activated multivectors with the same shape as ``values``.
+    """
     norm = values.norm(dim=-1, keepdim=True)
     shifted_norm = norm if bias is None else norm + _channel_parameter(bias, values)
     eps = eps_like(norm, min_value=torch.finfo(norm.dtype).tiny)
@@ -28,7 +42,18 @@ def geometric_gelu(values: torch.Tensor, bias: torch.Tensor | None = None) -> to
 
 
 def geometric_square(algebra, values: torch.Tensor, gate: torch.Tensor | None = None, *, layout=None) -> torch.Tensor:
-    """Return ``values + gate * (values * values)`` using the algebra's geometric product."""
+    """Return ``values + gate * (values * values)`` using the algebra's geometric product.
+
+    Args:
+        algebra: Algebra host.
+        values: Dense multivectors with shape ``[..., D]`` or compact layout
+            values with shape ``[..., L]`` when ``layout`` is provided.
+        gate: Optional per-channel gate with shape ``[C]``.
+        layout: Compact layout describing the ``L`` final lanes.
+
+    Returns:
+        Values with the same shape as ``values``.
+    """
     if layout is None:
         product = algebra.geometric_product(values, values)
     else:
@@ -52,7 +77,19 @@ def grade_swish(
     grade_biases: torch.Tensor,
     n_grades: int | None = None,
 ) -> torch.Tensor:
-    """Apply per-grade sigmoid gates computed from per-grade coefficient norms."""
+    """Apply per-grade sigmoid gates computed from per-grade coefficient norms.
+
+    Args:
+        values: Multivectors with shape ``[..., D]`` or ``[..., L]``.
+        grade_index: Integer grade id for each lane, shaped ``[D]`` or ``[L]``.
+        grade_weights: Per-grade scale parameters with shape ``[G]``.
+        grade_biases: Per-grade bias parameters with shape ``[G]``.
+        n_grades: Optional number of grades ``G``. Defaults to
+            ``grade_weights.shape[0]``.
+
+    Returns:
+        Gated multivectors with the same shape as ``values``.
+    """
     if n_grades is None:
         n_grades = int(grade_weights.shape[0])
 
