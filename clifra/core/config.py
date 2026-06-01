@@ -37,7 +37,7 @@ class AlgebraConfig:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any], **overrides) -> "AlgebraConfig":
-        """Build an algebra declaration from Hydra/OmegaConf config."""
+        """Build an algebra declaration from a mapping-like config."""
         values = {
             "p": int(_mapping_get(config, "p", 0)),
             "q": int(_mapping_get(config, "q", 0)),
@@ -104,7 +104,7 @@ def make_algebra(
 
 
 def make_algebra_from_config(config: Mapping[str, Any], **overrides) -> AlgebraLike:
-    """Construct an algebra from a Hydra/OmegaConf-compatible config mapping."""
+    """Construct an algebra from a mapping-like config."""
     algebra_config = AlgebraConfig.from_mapping(config, **overrides)
     return make_algebra(
         algebra_config.p,
@@ -122,7 +122,7 @@ def make_algebra_from_config(config: Mapping[str, Any], **overrides) -> AlgebraL
 
 
 def _mapping_get(config: Mapping[str, Any], key: str, default):
-    """Return a value from plain mappings or OmegaConf DictConfig objects."""
+    """Return a value from a mapping-like object."""
     if config is None:
         return default
     return config.get(key, default)
@@ -146,4 +146,3 @@ def _optional_grades(value) -> Optional[tuple[int, ...]]:
     if value is None:
         return None
     return tuple(int(grade) for grade in value)
-

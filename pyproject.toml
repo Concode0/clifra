@@ -31,8 +31,6 @@ classifiers = [
 dependencies = [
     "torch>=2.0.0",
     "numpy>=1.26.0",
-    "hydra-core>=1.3.2",
-    "tqdm>=4.67.3",
     "setuptools>=80.10.2",
 ]
 
@@ -41,36 +39,29 @@ Homepage = "https://github.com/Concode0/clifra"
 Repository = "https://github.com/Concode0/clifra"
 
 [project.optional-dependencies]
-sr = [
-    "pmlb>=1.0.1.post3",
-    "scikit-learn>=1.3.0",
-    "sympy>=1.12",
-]
-md17 = [
-    "torch-geometric>=2.6.1",
-]
-lqa = [
-    "sentence-transformers>=5.1.2",
-    "datasets>=2.16.0,<4.0",
-]
 viz = [
     "matplotlib>=3.8.0",
     "seaborn>=0.13.0",
-]
-demo = [
-    "streamlit>=1.50.0",
-    "plotly>=6.5.2",
 ]
 dev = [
     "pytest>=7.0.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.8.0",
 ]
-all_tasks = [
-    "clifra[sr,md17,lqa]",
-]
 all = [
-    "clifra[sr,md17,lqa,viz,demo,dev]",
+    "clifra[viz,dev]",
+]
+
+[build-system]
+requires = ["setuptools>=80.10.2"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+docs = [
+    "mkdocs<2.0",
+    "mkdocs-material>=9.7.4",
+    "mkdocstrings[python]>=0.30.1",
+    "pymdown-extensions>=10.21",
 ]
 
 [tool.setuptools.packages.find]
@@ -109,12 +100,12 @@ select = ["E4", "E7", "E9", "F", "I"]
 ignore = [
     "E401",  # Multiple imports on one line appear in compact research/test code.
     "E402",  # Some tests set pytest marks before local imports.
-    "E702",  # Existing experiments use compact semicolon-separated statements.
+    "E702",  # Compact mathematical scratch code may use semicolon-separated statements.
     "E741",  # Single-letter algebra notation is common in math-heavy code.
     "F401",  # Re-export modules and optional imports need a separate cleanup pass.
     "F541",  # Existing display strings sometimes keep f-prefixes for symmetry.
     "F811",  # Local imports intentionally shadow top-level test imports.
-    "F841",  # Scratch variables appear in experiments and exploratory tests.
+    "F841",  # Scratch variables appear in exploratory tests.
 ]
 
 [tool.pytest.ini_options]

@@ -29,8 +29,8 @@ class MultiRotorFFN(CliffordModule):
     rotation plane - this IS the nonlinearity, not just a scalar gate.
     The contract step projects back to the original channel count.
 
-    Designed as a standalone module so it can be reused in other tasks
-    (md17, pdbbind, etc.) beyond the language model.
+    Designed as a standalone module so it can be reused across scientific and
+    language-model architectures.
 
     Args:
         algebra (AlgebraLike): The algebra instance.

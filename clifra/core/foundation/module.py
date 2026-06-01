@@ -138,9 +138,9 @@ class CliffordModule(nn.Module):
     """Base module for Clifford algebra-aware components.
 
     ``CliffordModule`` belongs to :mod:`core` because it is shared by layers,
-    functional losses/activations, models, examples, and experiments. Keeping it
-    out of :mod:`layers` prevents functional code from importing the eager layer
-    package just to subclass this base type.
+    criteria, and functional modules. Keeping it out of :mod:`layers` prevents
+    functional code from importing the eager layer package just to subclass this
+    base type.
 
     The module stores a shared algebra reference without registering it as a
     PyTorch submodule. In clifra, one algebra instance often owns the
