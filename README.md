@@ -1,365 +1,106 @@
-# Clifra: A PyTorch Framework for Clifford Geometric Algebra Deep Learning
+# clifra
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/) [![Docs](https://img.shields.io/badge/docs-MkDocs-brightgreen)](https://concode0.github.io/clifra/) [![DOI](https://zenodo.org/badge/1149480519.svg)](https://doi.org/10.5281/zenodo.18939518)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
+[![Docs](https://img.shields.io/badge/docs-MkDocs-brightgreen)](https://concode0.github.io/clifra/)
 
-> [!IMPORTANT]
-> **WIP (Work In Progress)**
-> With the introduction of the planning design into the core, the coupling between primitive layers is undergoing a major upgrade (documentation in progress). Changes to downstream tasks and experimental benchmarks are also planned.
+clifra is a PyTorch framework for Clifford geometric algebra neural networks.
+It provides explicit algebra signatures, grade layouts, tensor products,
+geometric layers, criteria, and Riemannian optimizers.
 
-> **"There is a ceiling above standard Deep Learning that no one saw. Versor opens the door above it."**
+The repository is framework-only. Legacy task runners, datasets,
+task-specific models, experiments, and synthetic demos have been removed so new
+examples can be rebuilt around the current `clifra` API.
 
-[![Documentation](https://img.shields.io/badge/Documentation-Explore%20Clifra%20Docs-8A2BE2?style=for-the-badge&logo=readthedocs)](https://concode0.github.io/clifra/)
-
-![Manifold Unbending Demo](assets/demo_manifold_comp.gif)
-
-## At a Glance
-
-**Clifra** provides geometrically structured layers — built on **Geometric Algebra versor** operations — that constrain spatial transformations to the rotation group where manifold structure matters, while composing naturally with standard linear algebra for channel mixing and readout. It supplies the building blocks for the **Geometric Blade Network (GBN)**: a hybrid architecture in which `CliffordLinear` (standard scalar weights) mixes channels, `RotorLayer` rotates multivectors geometrically, and `nn.Linear` handles task-specific projection.
-
-| Task                                       | Algebra             | Key Metric         | Result                                                                                     | Note                                                   |
-| :----------------------------------------- | :------------------ | :----------------- | :----------------------------------------------------------------------------------------- | :----------------------------------------------------- |
-| **Symbolic Regression** (First_Principles) | $Cl(4,0)$           | Median R²          | 0.9525                                                                                     | Iterative geometric unbending                          |
-| **MD17** (Molecular Dynamics)              | $Cl(3,0,1)$ PGA     | Energy / Force MAE | 0.476 / 0.077 · benzene, 0.613 / 0.079 · ethanol, 1.229 / 0.125 · malonaldehyde (kcal/mol) | Error distributions peak at 0 with Gaussian-like shape |
-| **LQA** (Logical Query Answering)          | $Cl(4,1)$ CGA       | Chain / Negation   | 100% @len1–13 / 64.6%                                                                      | Geometric ALU on frozen embeddings                     |
-| **DEAP EEG** (Emotion)                     | $Cl(3,1)$ Minkowski | RMSE               | 0.2576 / 0.2329                                                                            | Cross / Within-subject LOSO                            |
-
-**The Rotor Gadget** was implemented based on the theoretical framework of [Pence et al. (2025)](https://arxiv.org/abs/2507.11688). In particular, the original authors' detailed experiments and implementations regarding LLM parameter efficiency can be found in the [official repository](https://github.com/vsingh-group/ComposingLinearLayers).
-
-## Core Idea
-
-Rotors ( $R = \exp(-B/2)$ ) perform pure geometric rotations via the sandwich product ($x \to R x \tilde{R}$), preserving manifold structure where standard weight matrices may inadvertently deform it.
-
-In practice, GBN models are hybrid: `RotorLayer` / `MultiRotorLayer` handle geometric rotation, while `CliffordLinear` (traditional backend) and `nn.Linear` handle channel mixing and readout. The two approaches are complementary, not mutually exclusive.
-
-## What's Built
-
-- **Cl(p,q,r) kernel** with null dimension support for Projective GA
-- **Signature-aware exp map** — closed-form elliptic/hyperbolic/parabolic (no Taylor series)
-- **Hermitian metrics** for positive-definite inner products in any signature
-- **Multi-Rotor GBN** with K weighted rotors (geometric spectral decomposition)
-- **Rotor Gadget** — parameter-efficient linear replacement (~63% param reduction)
-- **Automatic Metric Search** via GeodesicFlow + bivector energy analysis → (p,q,r) discovery
-- **CGA embedding** Cl(n+1,1) for conformal geometric algebra
-- **Riemannian Adam** optimizer — Adam momentum in the Lie algebra (bivector space)
-- **Geometric activations** — GeometricGELU, GradeSwish, GeometricSquare
-- **Rotor-to-symbolic-formula translation** — direct readout of trained weights as equations
-- **Iterative geometric unbending** — 4-phase SR pipeline with blade rejection
-- **ReflectionLayer** / Pin group — learns unit vectors, applies the odd versor `x' = -nxn⁻¹`; composable with `RotorLayer` for full Pin(p,q,r) group coverage
-- **Algebraic completeness** — `clifford_conjugation`, `norm_sq`, `left_contraction`, `dual`, `versor_product` covering even and odd versor transformations in a unified interface
-- **CliffordGraphConv** for molecular graphs
-- **Bivector pruning** for geometric sparsity
-- **GeometricTransformerBlock** with entropy-gated attention
-
-For code examples of each innovation, see [docs/innovations.md](docs/innovations.md).
-
-## Key Features
-
-*   **Metric-Agnostic Kernel**: Supports Euclidean $Cl(p, 0)$, Minkowski $Cl(p, q)$, Projective $Cl(p, 0, r)$, and Conformal $Cl(n+1, 1)$ algebras out of the box.
-*   **Geometric Layers**: `RotorLayer`, `MultiRotorLayer`, `ReflectionLayer`, `CliffordLinear`, `CliffordGraphConv`, `CliffordLayerNorm`, `BladeSelector`, `RotorGadget`.
-*   **Novel Activations**: `GeometricGELU` (magnitude-based), `GradeSwish` (per-grade gating), `GeometricSquare` (gated self-product).
-*   **Automatic Metric Search**: Finds optimal $(p, q, r)$ signature based on data topology via GBN probes.
-*   **Riemannian Optimization**: `RiemannianAdam` and `ExponentialSGD` with manifold retraction.
-*   **Geometric Sparsity**: `prune_bivectors` for compression of geometric layers.
-
-## Installation
-
-Clifra requires Python 3.10+ and PyTorch.
+## Install
 
 ```bash
-# Clone the repository
-git clone https://github.com/Concode0/clifra.git
-cd clifra
-
-# Install core dependencies
 uv sync
-
-# Install with optional dependency groups
-uv sync --extra viz           # matplotlib, seaborn, scikit-learn, plotly, imageio
-uv sync --extra [sr,md17,lqa] # task specific
-uv sync --extra demo          # streamlit, plotly
-uv sync --extra all_tasks     # All task dependencies
-uv sync --extra all           # everything
+uv sync --extra dev
 ```
 
-## Quick Start
+Documentation dependencies are separate:
 
-### Using Clifra Layers in Your Own Model
+```bash
+uv sync --group docs
+uv run --group docs mkdocs serve
+```
+
+## Quickstart
 
 ```python
 import torch
-from clifra.core.runtime.algebra import CliffordAlgebra
-from clifra.layers.primitives.rotor import RotorLayer
-from clifra.layers.primitives.linear import CliffordLinear
-from clifra.functional.activation import GeometricGELU
 
-# Create a 3D Euclidean Clifford Algebra
-algebra = CliffordAlgebra(p=3, q=0, device='cpu')
+from clifra.core.config import make_algebra
+from clifra.layers import CliffordLinear, GeometricGELU, RotorLayer
 
-# Build a model with geometric layers
-rotor = RotorLayer(algebra, channels=4)
-linear = CliffordLinear(algebra, in_channels=4, out_channels=8)
-activation = GeometricGELU(algebra, channels=8)
+algebra = make_algebra(3, 0, kernel="dense", device="cpu")
+x = torch.randn(8, 2, algebra.dim)
 
-# Input: [Batch, Channels, 2^n] multivectors
-x = torch.randn(32, 4, algebra.dim)
-out = activation(linear(rotor(x)))
+rotor = RotorLayer(algebra, channels=2)
+linear = CliffordLinear(algebra, in_channels=2, out_channels=4)
+activation = GeometricGELU(algebra, channels=4)
+
+y = activation(linear(rotor(x)))
+assert y.shape == (8, 4, algebra.dim)
 ```
 
-### Running Tasks via CLI
-
-Clifra uses **Hydra** for configuration management:
+## Verified Examples
 
 ```bash
-# Run tasks
-uv run main.py task=sr training.epochs=100
-uv run main.py task=md17 training.epochs=100
-uv run main.py task=lqa probe=chain training.epochs=50
-uv run main.py task=deap_eeg training.epochs=100
-
-# Override parameters
-uv run main.py task=sr algebra.p=4 training.lr=0.001
+uv run python docs/examples/quickstart.py
+uv run python docs/examples/products_and_layouts.py
+uv run python docs/examples/training_step.py
 ```
 
-### Interactive Demo (Streamlit)
-
-![DEMO](assets/demo_manifold_comp.gif)
+## Development
 
 ```bash
-streamlit run examples/demo.py
+uv run pytest tests/ -m unit -q --tb=short
+uv run pytest tests/ -m "not slow" -q --tb=short
+uv run ruff check .
+uv run ruff format .
+uv run --group docs mkdocs build --strict
 ```
 
-## Tasks
+## Package Map
 
-### Symbolic Regression (SR)
-
-Discovers closed-form symbolic formulas from numerical data using iterative geometric unbending.
-
-| Property     | Value                                                                        |
-| :----------- | :--------------------------------------------------------------------------- |
-| **Algebra**  | $Cl(4,0)$                                                                    |
-| **Pipeline** | probe → train → extract → subtract → refine (4 phases)                       |
-| **Datasets** | [SRBench 2.0](https://arxiv.org/abs/2505.03977) (first_principles, blackbox) |
-| **Result**   | Median R² = 0.9525 on 15 First Principles equations                          |
-
-**Analysis:** While the median R² of 0.9525 on First Principles equations is a decent result, this is still an early version of the SR pipeline. Much of the underlying logic can be further improved, and performance can be enhanced through parameter tuning — for example, by redefining the entry condition for implicit mode. The current version of SR should therefore be understood primarily as a **structural proposal**: a demonstration that iterative geometric unbending is a viable and interpretable framework for symbolic regression. The most important properties of this approach are **interpretability** (formulas are read directly from trained rotor weights) and **physically plausible structure** (rotor composition mirrors the composition of physical symmetries). The current implementation suffers from numerical instability and difficulty handling high-dimensional input data, both of which are planned for improvement in future versions.
-
-**Speed-to-Performance Ratio**: For the 12 first_principles datasets, the entire execution took roughly 5 minutes (avg. ~23s per dataset). This demonstrates a structurally different efficiency from existing Genetic Algorithm-based SR models, proving that Geometric Unbending computes laws deterministically rather than searching for them stochastically.
-
-> Check out the IU-SR Roadmap - [Discussion](https://github.com/Concode0/clifra/discussions/13)
-
-```bash
-uv run main.py task=sr
-```
-
-### MD17 (Molecular Dynamics)
-
-Multi-task energy + force prediction with conservative constraint ($F = -\nabla E$), using $Cl(3,0,1)$ PGA — translations are exact rotors, no approximation.
-
-| Molecule      | Atoms | Epochs | VRAM  |  Time   | E MAE (kcal/mol) | F MAE (kcal/mol/Å) |
-| :------------ | :---: | :----: | :---: | :-----: | :--------------: | :----------------: |
-| benzene       |  12   |  400   | 11 GB | ~62 min |    **0.476**     |     **0.077**      |
-| ethanol       |   9   |  500   | 6 GB  | ~52 min |    **0.613**     |     **0.079**      |
-| malonaldehyde |   9   |  400   | 6 GB  | ~41 min |    **1.229**     |     **0.125**      |
-
-All runs: rMD17 · 1000 train / 1000 val / 98 000 test · RTX Pro 4500.
-
-![ERROR_DISTRIBUTION](assets/md17_prediction_benzene.png)
-
-
-**Error distribution:** Across all three molecules, the prediction error distributions peak sharply at 0 and follow a Gaussian-like shape. This indicates the model is not making systematic biases — it finds the geometrically correct answer and the residual error is purely stochastic noise, consistent with a model that has learned the true underlying potential energy surface geometry.
-
-```bash
-uv run main.py task=md17
-```
-
-### LQA (Logical Query Answering)
-
-A **geometric arithmetic logic device** (~228K params) that operates directly on frozen latent embeddings. Rather than building an end-to-end LLM, LQA isolates the question: *what can geometric algebra do to a latent space that flat linear algebra cannot?*
-
-Each probe tests a specific algebraic operation — composition, asymmetry, negation — revealing both the power of the geometric approach and the hard ceiling imposed by flat embeddings.
-
-| Property       | Value                                               |
-| :------------- | :-------------------------------------------------- |
-| **Algebra**    | $Cl(4,1)$ Conformal GA                              |
-| **Probes**     | chain (CLUTRR), entailment (HANS), negation (BoolQ) |
-| **Chain**      | 100% accuracy at all lengths 1–13                   |
-| **Negation**   | 64.6% — orig 65.2%, neg 63.9% (gap 1.3%)            |
-| **Entailment** | 52.6% — ent 81.4%, non-ent 23.8%                    |
-
-**Chain (composition):** Perfect 100% accuracy across all chain lengths 1–13. Rotor composition $R_1 R_2 \cdots R_k$ naturally represents multi-hop relational chains — the algebraic structure matches the task structure exactly.
-
-**Negation & Entailment (encoder ceiling):** These probes deliberately expose the limits of flat embeddings. MiniLM maps "Is X?" and "Isn't X?" to cosine similarity 0.967 — the embedding shifts only 18% of inter-question distance under negation. An MLP baseline on the same embeddings achieves 59.5% (vs GBN 64.6%) with a comparable 1.0% negation gap, confirming the gap is bounded by the encoder, not the geometric model. The entailment probe shows a similar pattern: the HANS adversarial set exploits lexical overlap heuristics that MiniLM's flat space cannot distinguish from genuine entailment.
-
-**Next step:** Replace the frozen MiniLM encoder with a geometric embedding pipeline, removing the flat-space bottleneck entirely.
-
-```bash
-uv run main.py task=lqa probe=chain training.epochs=50
-uv run main.py task=lqa probe=negation training.epochs=10
-uv run main.py task=lqa probe=entailment training.epochs=10
-```
-
-
-
-### DEAP EEG (Emotion Classification)
-
-EEG emotion classification using phase-amplitude representation in Minkowski algebra with mother manifold alignment across subjects.
-
-| Property       | Value                                                              |
-| :------------- | :----------------------------------------------------------------- |
-| **Algebra**    | $Cl(3,1)$ Minkowski                                                |
-| **Input**      | 32-channel EEG + 8 peripheral channels                             |
-| **Targets**    | Valence, Arousal, Dominance, Liking                                |
-| **Evaluation** | LOSO (cross-subject) and within-subject (80/20 split), 32 subjects |
-
-```bash
-uv run main.py task=deap_eeg training.epochs=10                          # within-subject
-uv run main.py task=deap_eeg evaluation.mode=cross_subject training.epochs=10  # cross-subject
-```
-
-#### Results (32 subjects, 10 epochs, stride-applied windowing)
-
-**Primary metric: RMSE** (labels normalized to [0,1]). F1 scores are omitted from the primary analysis due to label imbalance bias — valence and arousal predictions collapse to a single class at the 0.5 threshold, yielding F1=0.00 under cross-subject generalization. This is a known artifact of DEAP's skewed label distribution (most trials cluster above the neutral midpoint), not a model failure.
-
-10 epochs is intentional — the model converges rapidly under stride-applied windowing (2280 windows/subject vs 600 in non-stride), and further training shows no meaningful improvement.
-
-| Dimension     | Cross-subject RMSE | Within-subject RMSE |     Δ (cross − within)     |
-| :------------ | :----------------: | :-----------------: | :------------------------: |
-| **Valence**   |   0.2478 ± 0.055   |   0.2700 ± 0.086    | **−0.0222** (cross better) |
-| **Arousal**   |   0.2438 ± 0.060   |   0.2243 ± 0.072    |          +0.0195           |
-| **Dominance** |   0.2551 ± 0.073   |   0.1951 ± 0.062    |          +0.0600           |
-| **Liking**    |   0.2839 ± 0.070   |   0.2423 ± 0.077    |          +0.0416           |
-| **Mean**      |     **0.2576**     |     **0.2329**      |      +0.0247 (+9.6%)       |
-
-**Key observation — the cross/within RMSE gap is remarkably small.**
-The mean difference is only **0.025 RMSE units** (9.6% relative), despite cross-subject training using data from 31 other subjects and predicting a completely held-out subject. This suggests the Minkowski rotor representation captures subject-invariant affective structure: the manifold geometry of EEG phase-amplitude coupling is largely shared across individuals, and the rotor sandwich product preserves that topology under subject shift.
-
-**Effect of stride-applied windowing:** Stride augmentation (3.8× more windows per subject) improves within-subject RMSE and F1 meaningfully — Dominance RMSE drops −0.017, mean F1 rises +0.029 — because the denser sampling provides richer temporal coverage of each subject's individual patterns. Cross-subject performance is essentially unchanged (+0.002 RMSE), which is informative: the cross-subject model already extracts population-level geometric features that are not sensitive to per-subject sample density. When stride helps within but not cross, it is evidence that the cross-subject model has reached a different kind of solution — one grounded in subject-invariant manifold structure rather than individual temporal statistics.
-
-**Valence anomaly:** cross-subject RMSE (0.2478) is actually *lower* than within-subject (0.2700), a reversal of the usual pattern. This reflects the well-known DEAP valence difficulty — valence labels are highly inter-subject variable, so within-subject training can overfit to individual rating biases, whereas cross-subject training forces the model toward the more stable population-level valence manifold.
-
-**F1 context:** Dominance and Liking show healthy F1 (0.70–0.76) in both modes because their label distributions are less skewed. Valence and arousal F1 collapses to near-zero under cross-subject evaluation, consistent with the class-imbalance literature on DEAP.
-
-## Examples (Synthetic/Demo Tasks)
-
-Synthetic experiments demonstrating GA concepts are in the `examples/` directory:
-
-```bash
-# Run synthetic tasks
-uv run python -m examples.main task=manifold training.epochs=500
-uv run python -m examples.main task=hyperbolic training.epochs=500
-uv run python -m examples.main task=sanity
-```
-
-| Example        | Algebra   | Description                                             |
-| :------------- | :-------- | :------------------------------------------------------ |
-| **Manifold**   | $Cl(3,0)$ | Flatten a figure-8 manifold (100% topology restoration) |
-| **Hyperbolic** | $Cl(1,1)$ | Reverse a Lorentz boost in Minkowski spacetime          |
-| **Sanity**     | $Cl(3,0)$ | Verify algebra correctness (identity learning)          |
-
-### Paper Counterparts (Synthetic Data)
-
-Three well-known GA deep learning papers approached through Versor's composable primitives. These are **not reimplementations** — each paper has its own elegant construction. Instead, they demonstrate that Versor's general-purpose layers achieve the same algebraic guarantees (equivariance, invariance, field coupling) through different mechanisms. All run on **synthetic data** to verify structural properties, not benchmark accuracy.
-
-```bash
-uv run python -m examples.main task=gatr training.epochs=200
-uv run python -m examples.main task=cgenn training.epochs=200
-uv run python -m examples.main task=clifford_pde training.epochs=300
-```
-
-| Example          | Paper                                                              | Algebra         |  Original   |   Versor   | Synthetic Task                   | Property Verified                          |
-| :--------------- | :----------------------------------------------------------------- | :-------------- | :---------: | :--------: | :------------------------------- | :----------------------------------------- |
-| **GATr**         | [Brehmer et al., NeurIPS 2023](https://arxiv.org/abs/2305.18415)   | $Cl(3,0,1)$ PGA | ~2500 lines | ~80 lines  | N-body spring dynamics           | E(3) equivariance (rotation + translation) |
-| **CGENN**        | [Ruhe et al., NeurIPS 2023 Oral](https://arxiv.org/abs/2305.11141) | $Cl(3,0)$       | ~3000 lines | ~90 lines  | Point cloud invariant regression | O(3) invariance (rotation + reflection)    |
-| **Clifford PDE** | [Brandstetter et al., ICLR 2023](https://arxiv.org/abs/2209.04934) | $Cl(2,0)$       | ~4000 lines | ~120 lines | 2D Taylor-Green vortex           | Emergent vorticity in grade-2 bivector     |
-
-How each counterpart relates to the original:
-
-- **GATr** (architecturally close) — `ProjectiveEmbedding` + `GeometricTransformerBlock` follows GATr's structure. The main difference is *how* equivariant linear maps are constructed: GATr derives equivariant bases via representation theory; Versor's `CliffordLinear` operates on coefficients where the Cayley table enforces equivariance by construction.
-- **CGENN** (same goal, different mechanism) — The paper proves that polynomial maps + hard grade projections = automatic equivariance. Versor achieves O(n) equivariance instead through composition of individually equivariant ops: `GeometricSquare` (faithful polynomial features) + `BladeSelector` (learned per-blade gates, generalizing hard grade projection) + `RotorLayer` (explicit group action, not in the original paper).
-- **Clifford PDE** (equivalent factorization) — The paper's fused Clifford convolution kernel is factorized into spatial mixing (`nn.Conv2d`) + algebraic mixing (`CliffordLinear` + `RotorLayer`). The `RotorLayer` replaces the paper's Clifford Fourier transform for inter-field coupling. The model discovers vorticity (grade-2) without supervision — the same physical insight as the paper.
-
-## Configuration
-
-Configuration files are in `conf/` (main tasks) and `examples/conf/` (synthetic tasks).
-
-```bash
-# Override any parameter from CLI
-uv run main.py task=sr algebra.p=4 training.lr=0.001
-```
-
-## Project Structure
-
-```
+```text
 clifra/
-├── core/               # Math kernel (CliffordAlgebra, metric, search, decomposition, CGA)
-├── layers/             # Neural layers (Rotor, MultiRotor, Linear, GNN, Norm, RotorGadget)
-├── functional/         # Activations (GeometricGELU, GradeSwish, GeometricSquare) & losses
-├── optimizers/         # Riemannian optimizers (RiemannianAdam, ExponentialSGD)
-└── utils/              # Framework compatibility helpers
-models/                 # Task-specific architectures, outside the framework package
-datalib/                # Data loaders, outside the framework package
-tasks/                  # Hydra task runners, scheduled for rewrite
-experiments/            # Exploratory research scripts
-benchmarks/             # Benchmark scripts and reports
-examples/               # Synthetic demos and paper-counterpart examples
-conf/                   # Hydra configs for current task runners
-tests/                  # Unit & property tests
-main.py                 # CLI entry point for current tasks
+├── core/               # Algebra construction, layouts, planning, execution
+├── criterion/          # Loss and regularizer modules
+├── functional/         # Stateless products, activations, losses, helpers
+├── layers/             # Neural primitives, blocks, and adapters
+├── optimizers/         # Riemannian optimizers
+└── utils/              # Compatibility helpers
+benchmarks/             # Framework benchmark scripts
+docs/                   # MkDocs documentation and runnable examples
+tests/                  # Pytest coverage
 ```
 
 ## Documentation
 
-**[Official Clifra Documentation Website](https://concode0.github.io/clifra/)**
+The documentation is at
+[concode0.github.io/clifra](https://concode0.github.io/clifra/). It is built
+with MkDocs and mkdocstrings from the live API docstrings plus the checked
+example scripts in `docs/examples/`.
 
-For a deep dive into the framework, please visit our official documentation site, which includes:
-* **Philosophy**: Why Geometric Algebra? The "unbending" paradigm.
-* **Mathematics**: Clifford Algebra, Rotors, Metric Signatures, and proofs.
-* **Tutorial**: Step-by-step guide to building with Versor's geometric layers.
-* **Innovations**: 10 code-illustrated features that make Versor unique.
-* **API Reference**: Full documentation of `core`, `layers`, and `functional` modules.
+## License
 
-## Research & Case Studies
-
-* [Research: Geometric Superposition Search (GSS)](https://github.com/Concode0/GSS-Research)
-
-## Contributing
-
-Versor is currently in a **Stabilization Phase** as the lead maintainer focuses on [academic milestones](https://github.com/Concode0/clifra/issues/6). While we are not actively seeking major feature contributions at this moment, we highly value community feedback.
-
-- **Found a Bug?** Please open an [Issue](https://github.com/Concode0/clifra/issues) with a detailed reproduction case.
-- **Have an Idea?** Open an Issue to discuss it before submitting a Pull Request.
-- **Code of Conduct:** All participants are expected to adhere to our [Code of Conduct](./CODE_OF_CONDUCT.md).
-
-We believe in the power of the community to "unbend" the future of AI together.
-
-## License & Intellectual Property
-
-This project is licensed under the **Apache License 2.0**.
-
-**Notice on Patents**:
-The core GBN architecture is covered by **KR Patent Application 10-2026-0023023**.
-By releasing this under Apache 2.0, we provide a **perpetual, royalty-free patent license** to any individual or entity using this software.
-
-**Notice**: This project is the original, independent work of Eunkyum Kim. We have no affiliation with the paper "Versor: A Geometric Sequence Architecture" (arXiv:2602.10195).
-
-**Notice on Naming**: 
-- This project is a PyTorch-native framework for Deep Learning and is not affiliated with the [C++ Versor library](http://versor.mat.ucsb.edu/) (a generic GA library for C++).
+clifra is licensed under Apache License 2.0. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE).
 
 ## Citation
 
 ```bibtex
-@software{kim2026versor,
+@software{kim2026clifra,
   author  = {Kim, Eunkyum},
-  title   = {Versor: Universal Geometric Algebra Neural Network},
+  title   = {clifra: Clifford Algebra Layers for PyTorch},
   url     = {https://github.com/Concode0/clifra},
   version = {1.0.0},
   year    = {2026},
-  month   = {3},
   doi     = {10.5281/zenodo.18939519},
-  license = {Apache-2.0},
-  note    = {ROK Patent Application 10-2026-0023023 (Geometric Blade Networks)}
+  license = {Apache-2.0}
 }
 ```
-
-## Reference:
- * Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers from Irreducibles." arXiv:2507.11688v1 [cs.LG]

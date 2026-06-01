@@ -1,8 +1,5 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
   - name: Documentation
-    url: https://concode0.github.io/Versor/
-    about: Read the Versor docs including tutorials and API reference
-  - name: Math Background
-    url: https://concode0.github.io/Versor/mathematical/
-    about: Mathematical foundations of Geometric Algebra and rotors
+    url: https://concode0.github.io/clifra/
+    about: Start here for install, examples, guides, and API reference.

@@ -4,23 +4,19 @@ authors:
   - family-names: "Kim"
     given-names: "Eunkyum"
     email: "nemonanconcode@gmail.com"
-title: "Versor: Universal Geometric Algebra Neural Network"
+title: "clifra: Clifford Algebra Layers for PyTorch"
 version: 1.0.0
 date-released: 2026-03-10
-url: "https://github.com/Concode0/versor"
-repository-code: "https://github.com/Concode0/versor"
+url: "https://github.com/Concode0/clifra"
+repository-code: "https://github.com/Concode0/clifra"
 doi: "10.5281/zenodo.18939519"
 keywords:
   - "geometric algebra"
   - "clifford algebra"
   - "deep learning"
   - "rotor"
-  - "unbending"
-  - "manifold alignment"
+  - "multivector"
 identifiers:
   - type: doi
     value: "10.5281/zenodo.18939519"
     description: "Zenodo Archive"
-  - type: other
-    value: "KR Patent Application 10-2026-0023023"
-    description: "Geometric Blade Network (GBN) Architecture Patent"

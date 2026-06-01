@@ -3482,7 +3482,7 @@ def _collect_runtime_metadata(device: str) -> dict[str, Any]:
 
 
 def make_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Benchmark the Versor core package.")
+    parser = argparse.ArgumentParser(description="Benchmark the clifra core package.")
     parser.add_argument("--device", default="auto", help="cpu, cuda, mps, or auto")
     parser.add_argument("--algebra-kernel", default="auto", choices=("auto", "dense", "context"))
     parser.add_argument("--dense-threshold", type=int, default=8)
