@@ -21,6 +21,9 @@ on:
           - not-slow
           - full
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # ── Fast unit tests: runs on every push to non-main branches ──────────────
   unit:
@@ -34,7 +37,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-          enable-cache: true
 
       - uses: actions/setup-python@v5
         with:
@@ -58,7 +60,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-          enable-cache: true
 
       - uses: actions/setup-python@v5
         with:
@@ -84,7 +85,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-          enable-cache: true
 
       - uses: actions/setup-python@v5
         with:
@@ -110,7 +110,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-          enable-cache: true
 
       - uses: actions/setup-python@v5
         with:
