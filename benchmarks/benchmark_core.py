@@ -1,27 +1,12 @@
 #!/usr/bin/env python3
-"""Standalone benchmark suite for ``core/``.
-
-This benchmark intentionally depends only on the local ``core`` package. It
-measures:
-
-1. Scaling over algebra dimension, batch size, dtype, operator, and compile
-   mode.
-2. Compile correctness relative to eager for the same dtype.
-3. Non-simple bivector exponential error for n >= 4.
-4. Precision-dependent cumulative sandwich drift.
-5. Precision-dependent convergence of the compiled-safe decomposed exp path.
-6. Algebraic stability/correctness invariants across representative signatures.
-7. Forward+backward latency and gradients for differentiable core operators.
-8. PyTorch profiler kernel/op counts, fusion proxies, and peak allocation.
-9. High-resolution line plots and heatmaps.
+"""Planner/executor benchmark suite for the CLIFRA core.
 
 Artifacts are written to ``benchmarks/results/benchmark_core_<timestamp>/``.
 
-Example:
-    uv run python benchmarks/benchmark_core.py
-    # Adjust the parameters as you want to benchmark.
-
-
+Examples:
+    uv run python benchmarks/benchmark_core.py --quick
+    uv run python benchmarks/benchmark_core.py --device cpu --signatures 3,4,6,8,16
+    uv run python benchmarks/benchmark_core.py --device mps --dtypes float32 --compile-modes eager,aot_eager
 """
 
 from __future__ import annotations
@@ -31,55 +16,119 @@ import csv
 import gc
 import json
 import math
-import os
-import statistics
 import sys
 import time
-import traceback
-from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
-import matplotlib
 import torch
 import torch.nn as nn
-from torch.utils import benchmark as torch_bench
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from clifra.core.config import make_algebra
-from clifra.core.runtime.decomposition import ExpPolicy, compiled_safe_decomposed_exp  # noqa: E402
-from clifra.core.foundation.device import FLOAT_DTYPES, resolve_device
-from clifra.core.foundation.device import dtype_name as _format_dtype_name
-from clifra.core.foundation.module import AlgebraLike
+from clifra.core.foundation.basis import expand_output_grades
+from clifra.core.foundation.device import FLOAT_DTYPES, dtype_name, resolve_device, resolve_dtype
+from clifra.core.foundation.layout import GradeLayout
+from clifra.core.planning.policy import (
+    DEFAULT_PLANNING_LIMITS,
+    DEFAULT_PRODUCT_EXECUTION_POLICY,
+    PlanningLimits,
+    ProductExecutionPolicy,
+    estimate_product_executor_cost,
+)
+from clifra.core.runtime.algebra import AlgebraContext
 
 DTYPES: dict[str, torch.dtype] = FLOAT_DTYPES
+DEFAULT_OPS = (
+    "full_gp,full_wedge,full_inner,full_commutator,"
+    "vector_gp,bivector_vector_commutator,bivector_bivector_commutator,"
+    "norm_vector,dual_vector,bivector_exp,"
+    "full_sandwich,versor_vector,multi_versor_vector,paired_bivector_vector"
+)
+PRODUCT_OPS = {"gp", "wedge", "inner", "commutator", "anti_commutator", "left_contraction", "right_contraction"}
+UNLOCKED_LIMIT = 1 << 62
+DIAGNOSTIC_SUITES = {"backward", "cumulative", "convergence"}
 
 
 @dataclass(frozen=True)
-class TimerStats:
-    first_call_ms: float
-    median_ms: float
-    mean_ms: float
-    std_ms: float
-    p10_ms: float
-    p90_ms: float
-    runs: int
-    samples_ms: tuple[float, ...]
+class TierPreset:
+    dimension_range: str
+    signature_families: str
+    batch_sizes: str
+    ops: str
+    compile_modes: str
+    warmup: int
+    iterations: int
+    channels: int
+    actions: int
+    pairs: int
+    max_full_lanes: int
+
+
+TIER_PRESETS: dict[str, TierPreset] = {
+    "smoke": TierPreset(
+        dimension_range="3:5",
+        signature_families="euclidean",
+        batch_sizes="4",
+        ops="full_gp,vector_gp,bivector_exp,versor_vector",
+        compile_modes="eager,aot_eager",
+        warmup=1,
+        iterations=2,
+        channels=2,
+        actions=2,
+        pairs=2,
+        max_full_lanes=64,
+    ),
+    "standard": TierPreset(
+        dimension_range="3:8",
+        signature_families="euclidean",
+        batch_sizes="32",
+        ops=DEFAULT_OPS,
+        compile_modes="eager,aot_eager",
+        warmup=3,
+        iterations=10,
+        channels=8,
+        actions=8,
+        pairs=4,
+        max_full_lanes=256,
+    ),
+    "stress": TierPreset(
+        dimension_range="3:12",
+        signature_families="euclidean,minkowski,degenerate",
+        batch_sizes="8,32",
+        ops=DEFAULT_OPS,
+        compile_modes="eager,aot_eager,inductor",
+        warmup=5,
+        iterations=20,
+        channels=8,
+        actions=8,
+        pairs=4,
+        max_full_lanes=4096,
+    ),
+    "exhaustive": TierPreset(
+        dimension_range="2:16",
+        signature_families="euclidean,minkowski,degenerate",
+        batch_sizes="1,8,32",
+        ops=DEFAULT_OPS,
+        compile_modes="eager,aot_eager,inductor,reduce-overhead",
+        warmup=5,
+        iterations=30,
+        channels=8,
+        actions=8,
+        pairs=4,
+        max_full_lanes=0,
+    ),
+}
 
 
 @dataclass(frozen=True)
 class SignatureSpec:
     p: int
-    q: int
+    q: int = 0
     r: int = 0
 
     @property
@@ -91,34 +140,21 @@ class SignatureSpec:
         return f"Cl({self.p},{self.q},{self.r})"
 
 
-class CoreOpModule(nn.Module):
-    """Small wrapper so core operators can be passed to torch.compile."""
+@dataclass
+class BenchTarget:
+    name: str
+    family: str
+    op: str
+    layout_case: str
+    module: Callable[..., torch.Tensor] | nn.Module
+    args: tuple[torch.Tensor, ...]
+    metadata: dict[str, Any]
 
-    def __init__(self, algebra: AlgebraLike, op: str):
-        super().__init__()
-        self.algebra = algebra
-        self.op = op
 
-    def forward(self, *args: torch.Tensor) -> torch.Tensor:
-        if self.op == "gp":
-            return self.algebra.geometric_product(args[0], args[1])
-        if self.op == "wedge":
-            return self.algebra.wedge(args[0], args[1])
-        if self.op == "inner":
-            return self.algebra.inner_product(args[0], args[1])
-        if self.op == "commutator":
-            return self.algebra.commutator(args[0], args[1])
-        if self.op == "grade2":
-            return self.algebra.grade_projection(args[0], 2)
-        if self.op == "reverse":
-            return self.algebra.reverse(args[0])
-        if self.op == "norm_sq":
-            return self.algebra.norm_sq(args[0])
-        if self.op in {"exp", "exp_precise"}:
-            return self.algebra.exp(args[0])
-        if self.op == "sandwich":
-            return self.algebra.sandwich_product(args[0], args[1])
-        raise RuntimeError(f"unknown op: {self.op}")
+@dataclass(frozen=True)
+class BenchmarkPolicy:
+    planning_limits: PlanningLimits
+    product_execution_policy: ProductExecutionPolicy
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -129,22 +165,21 @@ def _parse_int_csv(value: str) -> list[int]:
     return [int(part) for part in _parse_csv(value)]
 
 
-def _parse_optional_int_csv(value: str | None) -> list[int] | None:
-    if value is None or not str(value).strip():
-        return None
-    return _parse_int_csv(str(value))
+def _parse_dimension_range(value: str) -> tuple[int, int]:
+    text = str(value).strip().replace(",", ":")
+    if ":" in text:
+        lo, hi = (int(part) for part in text.split(":", 1))
+    else:
+        lo = hi = int(text)
+    if lo < 1 or hi < lo:
+        raise ValueError(f"invalid dimension range {value!r}; use n or min:max with min >= 1")
+    return lo, hi
 
 
 def _parse_signature_csv(value: str) -> list[SignatureSpec]:
     specs: list[SignatureSpec] = []
     for raw in _parse_csv(value):
-        cleaned = (
-            raw.lower()
-            .removeprefix("cl")
-            .replace("(", "")
-            .replace(")", "")
-            .replace("/", ":")
-        )
+        cleaned = raw.lower().removeprefix("cl").replace("(", "").replace(")", "").replace("/", ":")
         parts = [part for part in cleaned.split(":") if part]
         if len(parts) == 1:
             p, q, r = int(parts[0]), 0, 0
@@ -154,177 +189,53 @@ def _parse_signature_csv(value: str) -> list[SignatureSpec]:
         elif len(parts) == 3:
             p, q, r = (int(part) for part in parts)
         else:
-            raise ValueError(
-                f"invalid signature {raw!r}; use n, p:q, or p:q:r entries"
-            )
-        if p < 0 or q < 0 or r < 0 or p + q + r < 1 or p + q + r > 16:
-            raise ValueError(
-                f"invalid signature {raw!r}; dimensions must be non-negative "
-                "and sum to 1..16"
-            )
+            raise ValueError(f"invalid signature {raw!r}; use n, p:q, or p:q:r")
+        if p < 0 or q < 0 or r < 0 or p + q + r < 1 or p + q + r > 63:
+            raise ValueError(f"invalid signature {raw!r}; dimensions must sum to 1..63")
         specs.append(SignatureSpec(p, q, r))
     return specs
 
 
-def _dtype_name(dtype: torch.dtype) -> str:
-    return _format_dtype_name(dtype)
-
-
-def setup_algebra(
-    p: int,
-    q: int = 0,
-    r: int = 0,
-    *,
-    device: str,
-    dtype: torch.dtype,
-    exp_policy: str | ExpPolicy = "balanced",
-    fixed_iterations: int | None = None,
-    args: argparse.Namespace | None = None,
-) -> AlgebraLike:
-    """Construct benchmark algebras through the shared core factory."""
-    return make_algebra(
-        p=p,
-        q=q,
-        r=r,
-        kernel=getattr(args, "algebra_kernel", "auto"),
-        dense_threshold=getattr(args, "dense_threshold", 8),
-        device=device,
-        dtype=dtype,
-        exp_policy=exp_policy,
-        fixed_iterations=fixed_iterations,
-    )
-
-
-def _ordered_modes(value: str) -> list[str]:
-    modes = _parse_csv(value)
-    if "eager" in modes:
-        return ["eager"] + [mode for mode in modes if mode != "eager"]
-    return modes
-
-
-def _resolve_compile_modes(value: str, device: str) -> str:
-    if value != "auto":
-        modes = _ordered_modes(value)
-    elif device.startswith("cuda"):
-        modes = ["eager", "aot_eager", "compile", "reduce-overhead"]
-    else:
-        modes = ["eager", "aot_eager", "compile"]
-
-    valid = {"eager", "aot_eager", "compile", "reduce-overhead", "max-autotune"}
-    unknown = sorted(set(modes) - valid)
-    if unknown:
-        raise ValueError(f"unknown compile mode(s): {unknown}; valid: {sorted(valid)}")
-    return ",".join(_ordered_modes(",".join(modes)))
-
-
-def _tf32_modes_for_dtype(args: argparse.Namespace, dtype: torch.dtype) -> list[str]:
-    requested = _parse_csv(args.tf32_modes)
-    valid = {"auto", "default", "strict", "tf32"}
+def _signatures_from_range(value: str, families: str) -> list[SignatureSpec]:
+    n_min, n_max = _parse_dimension_range(value)
+    result: list[SignatureSpec] = []
+    requested = _parse_csv(families)
+    valid = {"euclidean", "minkowski", "degenerate"}
     unknown = sorted(set(requested) - valid)
     if unknown:
-        raise ValueError(f"unknown TF32 mode(s): {unknown}; valid: {sorted(valid)}")
-    if "auto" in requested:
-        return ["strict", "tf32"] if args.device.startswith("cuda") and dtype == torch.float32 else ["default"]
-    if not args.device.startswith("cuda") or dtype != torch.float32:
-        return ["default"]
-    return requested or ["default"]
+        raise ValueError(f"unknown signature family {unknown}; valid: {sorted(valid)}")
+    for n in range(n_min, n_max + 1):
+        if "euclidean" in requested:
+            result.append(SignatureSpec(n, 0, 0))
+        if "minkowski" in requested and n >= 2:
+            result.append(SignatureSpec(n - 1, 1, 0))
+        if "degenerate" in requested and n >= 2:
+            result.append(SignatureSpec(n - 1, 0, 1))
+    return result
 
 
-def _preferred_tf32_mode(args: argparse.Namespace, dtype_name: str) -> str:
-    if dtype_name != "float32" or not args.device.startswith("cuda"):
-        return "default"
-    modes = _parse_csv(args.tf32_modes)
-    if "auto" in modes:
-        return "tf32"
-    if "tf32" in modes:
-        return "tf32"
-    return modes[0] if modes else "default"
+def _resolve_signature_specs(args: argparse.Namespace) -> list[SignatureSpec]:
+    if args.signatures:
+        specs = _parse_signature_csv(args.signatures)
+    else:
+        specs = _signatures_from_range(args.dimension_range, args.signature_families)
+    if args.n_min is not None or args.n_max is not None:
+        n_min = 1 if args.n_min is None else int(args.n_min)
+        n_max = 63 if args.n_max is None else int(args.n_max)
+        specs = [spec for spec in specs if n_min <= spec.n <= n_max]
+    if not specs:
+        raise ValueError("no signatures selected after tier/range filters")
+    return specs
 
 
-@contextmanager
-def _tf32_context(device: str, mode: str) -> Iterable[None]:
-    cuda_matmul = getattr(getattr(torch.backends, "cuda", None), "matmul", None)
-    old_matmul = getattr(cuda_matmul, "allow_tf32", None)
-    old_cudnn = getattr(torch.backends.cudnn, "allow_tf32", None)
-    has_precision = hasattr(torch, "get_float32_matmul_precision") and hasattr(
-        torch, "set_float32_matmul_precision"
-    )
-    old_precision = torch.get_float32_matmul_precision() if has_precision else None
-
-    try:
-        if device.startswith("cuda") and mode != "default":
-            enabled = mode == "tf32"
-            if cuda_matmul is not None and old_matmul is not None:
-                cuda_matmul.allow_tf32 = enabled
-            if old_cudnn is not None:
-                torch.backends.cudnn.allow_tf32 = enabled
-            if has_precision:
-                torch.set_float32_matmul_precision("high" if enabled else "highest")
-        yield
-    finally:
-        if cuda_matmul is not None and old_matmul is not None:
-            cuda_matmul.allow_tf32 = old_matmul
-        if old_cudnn is not None:
-            torch.backends.cudnn.allow_tf32 = old_cudnn
-        if has_precision and old_precision is not None:
-            torch.set_float32_matmul_precision(old_precision)
-
-
-def _current_tf32_flags(device: str, mode: str) -> dict[str, Any]:
-    if not device.startswith("cuda"):
-        return {
-            "tf32_mode": "default",
-            "cuda_matmul_allow_tf32": "",
-            "cudnn_allow_tf32": "",
-            "float32_matmul_precision": "",
-        }
-    precision = (
-        torch.get_float32_matmul_precision()
-        if hasattr(torch, "get_float32_matmul_precision")
-        else ""
-    )
-    return {
-        "tf32_mode": mode,
-        "cuda_matmul_allow_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
-        "cudnn_allow_tf32": bool(torch.backends.cudnn.allow_tf32),
-        "float32_matmul_precision": precision,
-    }
-
-
-def _channels_for_op(args: argparse.Namespace, op: str) -> list[int]:
-    if op != "sandwich":
-        return [0]
-    values = getattr(args, "sandwich_channel_values", None) or [args.channels]
-    return sorted({int(v) for v in values if int(v) > 0})
-
-
-def _plot_channel_value(args: argparse.Namespace) -> int:
-    values = getattr(args, "sandwich_channel_values", None) or [args.channels]
-    return max(int(v) for v in values)
-
-
-def _matches_plot_axes(args: argparse.Namespace, row: dict[str, Any], dtype: str) -> bool:
-    if row["dtype"] != dtype:
-        return False
-    if row.get("tf32_mode", "default") != _preferred_tf32_mode(args, dtype):
-        return False
-    if row.get("op") == "sandwich":
-        return int(row.get("channels", 0)) == _plot_channel_value(args)
-    return int(row.get("channels", 0)) == 0
-
-
-def _op_exp_policy(op: str) -> ExpPolicy:
-    return ExpPolicy.PRECISE if op == "exp_precise" else ExpPolicy.BALANCED
-
-
-def _device_available(device: str) -> bool:
-    if device == "cpu":
-        return True
-    if device == "mps":
-        return hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-    if device.startswith("cuda"):
-        return torch.cuda.is_available()
-    return True
+def _resolve_device(value: str) -> str:
+    if value == "auto":
+        return str(resolve_device("auto"))
+    if value == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+        raise SystemExit("MPS was requested but is not available.")
+    if value.startswith("cuda") and not torch.cuda.is_available():
+        raise SystemExit(f"{value} was requested but CUDA is not available.")
+    return value
 
 
 def _sync(device: str) -> None:
@@ -345,98 +256,82 @@ def _release_memory(device: str) -> None:
         torch.cuda.reset_peak_memory_stats()
 
 
-def _reset_peak_memory(device: str) -> None:
+def _reset_compile_cache() -> bool:
+    """Clear torch.compile/Dynamo state between independent benchmark rows."""
+    compiler = getattr(torch, "compiler", None)
+    compiler_reset = getattr(compiler, "reset", None)
+    if callable(compiler_reset):
+        compiler_reset()
+        return True
+
+    dynamo = getattr(torch, "_dynamo", None)
+    dynamo_reset = getattr(dynamo, "reset", None)
+    if callable(dynamo_reset):
+        dynamo_reset()
+        return True
+    return False
+
+
+def _now_ms() -> float:
+    return time.perf_counter() * 1000.0
+
+
+def _time_block(fn: Callable[[], Any], *, device: str) -> tuple[Any, float]:
     _sync(device)
-    if device.startswith("cuda"):
-        torch.cuda.reset_peak_memory_stats()
-    elif device == "mps" and hasattr(torch.mps, "empty_cache"):
-        torch.mps.empty_cache()
+    start = _now_ms()
+    value = fn()
+    _sync(device)
+    return value, _now_ms() - start
 
 
-def _allocated_bytes(device: str) -> float:
-    if device.startswith("cuda"):
-        return float(torch.cuda.memory_allocated())
-    if device == "mps" and hasattr(torch.mps, "current_allocated_memory"):
-        return float(torch.mps.current_allocated_memory())
-    return float("nan")
+def _time_callable(
+    fn: Callable[..., torch.Tensor] | nn.Module,
+    args: tuple[torch.Tensor, ...],
+    *,
+    device: str,
+    warmup: int,
+    iterations: int,
+) -> dict[str, Any]:
+    first_output, first_call_ms = _time_block(lambda: fn(*args), device=device)
+    for _ in range(warmup):
+        fn(*args)
+    _sync(device)
+
+    samples: list[float] = []
+    for _ in range(iterations):
+        _, elapsed = _time_block(lambda: fn(*args), device=device)
+        samples.append(elapsed)
+    sorted_samples = sorted(samples)
+    return {
+        "output": first_output,
+        "first_call_ms": first_call_ms,
+        "median_ms": _median(samples),
+        "mean_ms": sum(samples) / len(samples) if samples else float("nan"),
+        "std_ms": _std(samples),
+        "min_ms": min(samples) if samples else float("nan"),
+        "max_ms": max(samples) if samples else float("nan"),
+        "p10_ms": _percentile(sorted_samples, 0.10),
+        "p90_ms": _percentile(sorted_samples, 0.90),
+        "runs": len(samples),
+        "samples_ms": samples,
+    }
 
 
-def _peak_allocated_bytes(device: str) -> float:
-    if device.startswith("cuda"):
-        return float(torch.cuda.max_memory_allocated())
-    if device == "mps" and hasattr(torch.mps, "current_allocated_memory"):
-        # PyTorch MPS exposes current allocation, but not a resettable peak.
-        return float(torch.mps.current_allocated_memory())
-    return float("nan")
-
-
-def _bytes_to_mb(value: float) -> float:
-    if not math.isfinite(value):
+def _median(values: list[float]) -> float:
+    if not values:
         return float("nan")
-    return value / (1024.0 * 1024.0)
+    values = sorted(values)
+    mid = len(values) // 2
+    if len(values) % 2:
+        return values[mid]
+    return 0.5 * (values[mid - 1] + values[mid])
 
 
-def _seed_all(seed: int, device: str) -> None:
-    torch.manual_seed(seed)
-    if device.startswith("cuda"):
-        torch.cuda.manual_seed_all(seed)
-
-
-def _supported_dtypes(
-    args: argparse.Namespace,
-    requested: str,
-    probe_n_values: Iterable[int],
-) -> list[torch.dtype]:
-    if requested == "auto":
-        candidates = ["float64", "float32"]
-        if args.device.startswith("cuda") or args.device == "mps":
-            candidates += ["bfloat16", "float16"]
-    else:
-        candidates = _parse_csv(requested)
-
-    supported: list[torch.dtype] = []
-    probe_ns = sorted({int(n) for n in probe_n_values if int(n) >= 1})
-    if not probe_ns:
-        probe_ns = [2]
-    for name in candidates:
-        if name not in DTYPES:
-            raise ValueError(f"unknown dtype {name!r}; valid: {sorted(DTYPES)}")
-        dtype = DTYPES[name]
-        algebra: AlgebraLike | None = None
-        x: torch.Tensor | None = None
-        y: torch.Tensor | None = None
-        try:
-            for n in probe_ns:
-                algebra = setup_algebra(n, 0, device=args.device, dtype=dtype, args=args)
-                x = torch.randn(2, algebra.dim, device=args.device, dtype=dtype)
-                y = algebra.geometric_product(x, x)
-                _sync(args.device)
-                if not torch.isfinite(y.float()).all().item():
-                    raise RuntimeError(f"n={n} probe produced non-finite values")
-                algebra = None
-                x = None
-                y = None
-            supported.append(dtype)
-        except Exception as exc:
-            print(f"Skipping dtype {name} on {args.device}: {exc}")
-        finally:
-            algebra = None
-            x = None
-            y = None
-            _release_memory(args.device)
-    if not supported:
-        raise SystemExit(f"No requested dtypes are usable on {args.device}.")
-    return supported
-
-
-def _sample_steps(max_steps: int, samples: int) -> list[int]:
-    if max_steps <= 1:
-        return [1]
-    values = {1, max_steps}
-    for i in range(samples):
-        t = i / max(samples - 1, 1)
-        values.add(max(1, int(round(math.exp(t * math.log(max_steps))))))
-    return sorted(values)
+def _std(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
 
 
 def _percentile(sorted_values: list[float], q: float) -> float:
@@ -453,217 +348,44 @@ def _percentile(sorted_values: list[float], q: float) -> float:
     return sorted_values[lo] * (1.0 - frac) + sorted_values[hi] * frac
 
 
-def _measurement_to_stats(
-    measurement: torch_bench.Measurement,
-    first_call_ms: float,
-) -> TimerStats:
-    """Project a torch.utils.benchmark Measurement onto TimerStats (per-call ms).
-
-    ``measurement.times`` is already per-call seconds (block time / number_per_run),
-    so the only conversion is seconds -> milliseconds.
-    """
-    per_call_ms = [t * 1000.0 for t in measurement.times]
-    if not per_call_ms:
-        per_call_ms = [float(measurement.mean) * 1000.0]
-    sorted_ms = sorted(per_call_ms)
-    std_ms = statistics.stdev(per_call_ms) if len(per_call_ms) > 1 else 0.0
-    return TimerStats(
-        first_call_ms=first_call_ms,
-        median_ms=statistics.median(per_call_ms),
-        mean_ms=statistics.fmean(per_call_ms),
-        std_ms=std_ms,
-        p10_ms=_percentile(sorted_ms, 0.10),
-        p90_ms=_percentile(sorted_ms, 0.90),
-        runs=len(per_call_ms),
-        samples_ms=tuple(per_call_ms),
-    )
+def _max_abs_diff(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    if actual.shape != expected.shape:
+        return float("inf")
+    diff = (actual.detach().float() - expected.detach().float()).abs()
+    return float(diff.max().item()) if diff.numel() else 0.0
 
 
-def _bootstrap_speedup_ci(
-    eager_ms: Iterable[float],
-    candidate_ms: Iterable[float],
-    samples: int,
-    seed: int,
-) -> tuple[float, float]:
-    eager = np.array([float(v) for v in eager_ms if float(v) > 0], dtype=float)
-    candidate = np.array([float(v) for v in candidate_ms if float(v) > 0], dtype=float)
-    if samples <= 0 or eager.size == 0 or candidate.size == 0:
-        return float("nan"), float("nan")
-    if eager.size == 1 and candidate.size == 1:
-        ratio = float(eager[0] / candidate[0])
-        return ratio, ratio
-    rng = np.random.default_rng(seed)
-    ratios = np.empty(samples, dtype=float)
-    for idx in range(samples):
-        eager_sample = eager[rng.integers(0, eager.size, eager.size)]
-        candidate_sample = candidate[rng.integers(0, candidate.size, candidate.size)]
-        denominator = float(np.median(candidate_sample))
-        ratios[idx] = (
-            float(np.median(eager_sample)) / denominator
-            if denominator > 0
-            else float("nan")
-        )
-    finite = ratios[np.isfinite(ratios)]
-    if finite.size == 0:
-        return float("nan"), float("nan")
-    low, high = np.percentile(finite, [2.5, 97.5])
-    return float(low), float(high)
+def _max_rel_diff(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    if actual.shape != expected.shape:
+        return float("inf")
+    actual_f = actual.detach().float()
+    expected_f = expected.detach().float()
+    diff = (actual_f - expected_f).abs()
+    scale = expected_f.abs().max().clamp_min(torch.finfo(torch.float32).tiny)
+    return float((diff.max() / scale).item()) if diff.numel() else 0.0
 
 
-def _speedup_fields(
-    baseline: TimerStats | None,
-    stats: TimerStats,
-    samples: int,
-    seed: int,
-) -> dict[str, Any]:
-    if baseline is None or stats.median_ms <= 0:
-        return {
-            "speedup_vs_eager": float("nan"),
-            "speedup_vs_eager_ci_low": float("nan"),
-            "speedup_vs_eager_ci_high": float("nan"),
-            "speedup_vs_eager_ci_excludes_1": False,
-            "speedup_vs_eager_significant": False,
-        }
-    speedup = baseline.median_ms / stats.median_ms
-    low, high = _bootstrap_speedup_ci(
-        baseline.samples_ms,
-        stats.samples_ms,
-        samples,
-        seed,
-    )
-    ci_excludes_1 = bool(math.isfinite(low) and math.isfinite(high) and (low > 1.0 or high < 1.0))
-    significant = bool(math.isfinite(low) and low > 1.0)
+def _error_stats(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
+    if actual.shape != expected.shape:
+        return {"max_abs_error": float("inf"), "rms_error": float("inf"), "max_rel_error": float("inf")}
+    actual64 = actual.detach().cpu().to(torch.float64)
+    expected64 = expected.detach().cpu().to(torch.float64)
+    diff = actual64 - expected64
+    abs_diff = diff.abs()
+    scale = expected64.abs().max().clamp_min(1e-30)
     return {
-        "speedup_vs_eager": speedup,
-        "speedup_vs_eager_ci_low": low,
-        "speedup_vs_eager_ci_high": high,
-        "speedup_vs_eager_ci_excludes_1": ci_excludes_1,
-        "speedup_vs_eager_significant": significant,
+        "max_abs_error": float(abs_diff.max().item()) if abs_diff.numel() else 0.0,
+        "rms_error": float(torch.sqrt((diff * diff).mean()).item()) if diff.numel() else 0.0,
+        "max_rel_error": float((abs_diff.max() / scale).item()) if abs_diff.numel() else 0.0,
     }
 
 
-def _dtype_bytes(dtype: torch.dtype) -> int:
-    return torch.empty((), dtype=dtype).element_size()
-
-
-def _nonzero_terms(tensor: torch.Tensor) -> int:
-    return int(torch.count_nonzero(tensor.detach()).item())
-
-
-def _analytic_forward_metrics(
-    algebra: AlgebraLike,
-    op: str,
-    batch: int,
-    channels: int,
-) -> dict[str, float]:
-    dim = algebra.dim
-    dtype_bytes = _dtype_bytes(algebra.dtype)
-    logical_items = batch * channels if op == "sandwich" else batch
-    flops = float("nan")
-    io_elements = 0
-
-    if op == "gp":
-        signs = getattr(algebra, "gp_signs", None)
-        flops = 2.0 * batch * _nonzero_terms(signs) if signs is not None else float("nan")
-        io_elements = 3 * batch * dim
-    elif op == "wedge":
-        signs = getattr(algebra, "wedge_gp_signs", None)
-        flops = 2.0 * batch * _nonzero_terms(signs) if signs is not None else float("nan")
-        io_elements = 3 * batch * dim
-    elif op == "inner":
-        signs = getattr(algebra, "inner_gp_signs", None)
-        flops = 2.0 * batch * _nonzero_terms(signs) if signs is not None else float("nan")
-        io_elements = 3 * batch * dim
-    elif op == "commutator":
-        signs = getattr(algebra, "comm_gp_signs", None)
-        flops = 2.0 * batch * _nonzero_terms(signs) if signs is not None else float("nan")
-        io_elements = 3 * batch * dim
-    elif op in {"grade2", "reverse"}:
-        flops = float(batch * dim)
-        io_elements = 2 * batch * dim
-    elif op == "norm_sq":
-        flops = float(3 * batch * dim)
-        io_elements = batch * dim + batch
-    elif op == "sandwich":
-        c = max(channels, 1)
-        flops = 2.0 * batch * dim * dim * dim + 2.0 * batch * c * dim * dim
-        io_elements = batch * dim + 2 * batch * c * dim + batch * dim * dim
-    elif op in {"exp", "exp_precise"}:
-        io_elements = 2 * batch * dim
-
-    return {
-        "logical_items_per_call": float(logical_items),
-        "analytic_forward_flops": flops,
-        "analytic_io_bytes": float(io_elements * dtype_bytes),
-    }
-
-
-def _add_rate_metrics(row: dict[str, Any], median_ms: float) -> None:
-    logical_items = float(row.get("logical_items_per_call", 0.0))
-    flops = float(row.get("analytic_forward_flops", float("nan")))
-    io_bytes = float(row.get("analytic_io_bytes", float("nan")))
-    row["items_per_sec"] = (
-        logical_items * 1000.0 / median_ms if median_ms > 0 else float("inf")
-    )
-    row["achieved_forward_gflops"] = (
-        flops / (median_ms * 1e6)
-        if median_ms > 0 and math.isfinite(flops)
-        else float("nan")
-    )
-    row["achieved_io_gbps"] = (
-        io_bytes / (median_ms * 1e6)
-        if median_ms > 0 and math.isfinite(io_bytes)
-        else float("nan")
-    )
-
-
-def _time_callable(
-    fn: Callable[..., torch.Tensor],
-    args: tuple[torch.Tensor, ...],
-    device: str,
-    warmup: int,
-    runs: int,
-    min_time_ms: float,
-    max_runs: int,
-) -> tuple[TimerStats, torch.Tensor]:
-    """Time a callable using ``torch.utils.benchmark.Timer``.
-
-    Timer picks an inner-loop multiplier large enough that block measurements
-    dwarf Python overhead, uses CUDA events on CUDA, and freezes GC during the
-    timed loop -- all of which a hand-rolled ``perf_counter`` loop would have
-    to replicate.
-    """
-    with torch.no_grad():
-        _sync(device)
-        t0 = time.perf_counter_ns()
-        out = fn(*args)
-        _sync(device)
-        first_call_ms = (time.perf_counter_ns() - t0) / 1e6
-
-        for _ in range(warmup):
-            out = fn(*args)
-        _sync(device)
-
-        timer = torch_bench.Timer(
-            stmt="_fn(*_args)",
-            globals={"_fn": fn, "_args": args},
-            num_threads=torch.get_num_threads(),
-        )
-        # Drive run count via min_run_time; cap roughly via the wall-time budget.
-        # ``runs`` and ``max_runs`` shape Timer's behavior only through the
-        # min_run_time hint -- Timer chooses block count adaptively.
-        min_run_time_s = max(min_time_ms / 1000.0, 1e-3)
-        measurement = timer.blocked_autorange(min_run_time=min_run_time_s)
-
-        # Re-evaluate fn once for the caller (Timer's last output is discarded).
-        out = fn(*args)
-        _sync(device)
-
-    return _measurement_to_stats(measurement, first_call_ms), out.detach()
+def _loss_from_output(output: torch.Tensor) -> torch.Tensor:
+    return output.float().square().mean()
 
 
 def _clone_inputs_for_backward(inputs: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
-    cloned = []
+    cloned: list[torch.Tensor] = []
     for tensor in inputs:
         leaf = tensor.detach().clone()
         if leaf.is_floating_point():
@@ -678,383 +400,82 @@ def _zero_input_grads(inputs: tuple[torch.Tensor, ...]) -> None:
             tensor.grad = None
 
 
-def _loss_from_output(output: torch.Tensor) -> torch.Tensor:
-    return output.float().square().mean()
+def _grad_norm_and_finite(inputs: tuple[torch.Tensor, ...]) -> tuple[float, bool]:
+    grad_norm_sq = 0.0
+    finite = True
+    saw_grad = False
+    for tensor in inputs:
+        if tensor.grad is None:
+            continue
+        saw_grad = True
+        grad = tensor.grad.detach().float()
+        finite = finite and bool(torch.isfinite(grad).all().item())
+        grad_norm_sq += float((grad * grad).sum().item())
+    return math.sqrt(grad_norm_sq), finite and saw_grad
 
 
 def _time_forward_backward(
-    fn: Callable[..., torch.Tensor],
-    inputs: tuple[torch.Tensor, ...],
+    fn: Callable[..., torch.Tensor] | nn.Module,
+    args: tuple[torch.Tensor, ...],
+    *,
     device: str,
     warmup: int,
-    runs: int,
-    min_time_ms: float,
-    max_runs: int,
-) -> tuple[TimerStats, torch.Tensor, float]:
-    """Time forward+backward via Timer; return stats, last output, grad norm."""
-    args = _clone_inputs_for_backward(inputs)
+    iterations: int,
+) -> dict[str, Any]:
+    backward_args = _clone_inputs_for_backward(args)
 
-    def _step() -> torch.Tensor:
-        _zero_input_grads(args)
-        out_inner = fn(*args)
-        _loss_from_output(out_inner).backward()
-        return out_inner
+    def step() -> torch.Tensor:
+        _zero_input_grads(backward_args)
+        output = fn(*backward_args)
+        _loss_from_output(output).backward()
+        return output
 
-    _sync(device)
-    t0 = time.perf_counter_ns()
-    out = _step()
-    _sync(device)
-    first_call_ms = (time.perf_counter_ns() - t0) / 1e6
-
+    first_output, first_call_ms = _time_block(step, device=device)
     for _ in range(warmup):
-        out = _step()
+        step()
     _sync(device)
 
-    timer = torch_bench.Timer(
-        stmt="_step()",
-        globals={"_step": _step},
-        num_threads=torch.get_num_threads(),
-    )
-    min_run_time_s = max(min_time_ms / 1000.0, 1e-3)
-    measurement = timer.blocked_autorange(min_run_time=min_run_time_s)
+    samples: list[float] = []
+    for _ in range(iterations):
+        output, elapsed = _time_block(step, device=device)
+        samples.append(elapsed)
+    sorted_samples = sorted(samples)
 
-    # Final pass to capture grad norm + output for the caller.
-    _zero_input_grads(args)
-    out = fn(*args)
-    _loss_from_output(out).backward()
-    grad_norm_sq = 0.0
-    for tensor in args:
-        if tensor.grad is not None:
-            grad = tensor.grad.detach().float()
-            grad_norm_sq += float((grad * grad).sum().item())
-    grad_norm = math.sqrt(grad_norm_sq)
-    _zero_input_grads(args)
-
-    return _measurement_to_stats(measurement, first_call_ms), out.detach(), grad_norm
-
-
-def _profiler_activities(device: str) -> list[Any]:
-    activities = [torch.profiler.ProfilerActivity.CPU]
-    if device.startswith("cuda") and torch.cuda.is_available():
-        activities.append(torch.profiler.ProfilerActivity.CUDA)
-    return activities
-
-
-def _event_attr(event: Any, names: Iterable[str]) -> float:
-    for name in names:
-        value = getattr(event, name, None)
-        if value is not None:
-            try:
-                return float(value)
-            except TypeError:
-                continue
-    return 0.0
-
-
-def _is_cuda_runtime_event(name: str) -> bool:
-    lowered = name.lower()
-    return lowered.startswith("cuda") or lowered.startswith("hip")
-
-
-def _is_device_kernel_event(event: Any) -> bool:
-    name = str(getattr(event, "name", ""))
-    lowered = name.lower()
-    if _is_cuda_runtime_event(name):
-        return False
-    device_type = str(getattr(event, "device_type", "")).lower()
-    if "cuda" in device_type or "hip" in device_type:
-        return True
-    if _event_attr(event, ["self_device_time_total", "self_cuda_time_total"]) > 0:
-        return True
-    # Older profiler builds sometimes lose the CUDA device_type on Triton
-    # kernels, but their names remain stable enough to classify separately
-    # from cudaLaunchKernel runtime API entries.
-    return "triton" in lowered or "cutlass" in lowered
-
-
-def _profiler_summary(prof: Any, steps: int) -> dict[str, float]:
-    key_averages = prof.key_averages()
-    total_events = 0.0
-    aten_events = 0.0
-    compiled_events = 0.0
-    cpu_time_us = 0.0
-    device_time_us = 0.0
-    self_cpu_mem = 0.0
-    self_device_mem = 0.0
-
-    for event in key_averages:
-        count = float(getattr(event, "count", 1.0))
-        key = str(getattr(event, "key", ""))
-        total_events += count
-        if key.startswith("aten::"):
-            aten_events += count
-        if (
-            "Torch-Compiled Region" in key
-            or "CompiledFunction" in key
-            or "inductor" in key.lower()
-            or "triton" in key.lower()
-        ):
-            compiled_events += count
-        cpu_time_us += _event_attr(event, ["self_cpu_time_total"])
-        device_time_us += _event_attr(
-            event,
-            ["self_device_time_total", "self_cuda_time_total"],
-        )
-        self_cpu_mem += max(_event_attr(event, ["self_cpu_memory_usage"]), 0.0)
-        self_device_mem += max(
-            _event_attr(
-                event,
-                [
-                    "self_device_memory_usage",
-                    "self_cuda_memory_usage",
-                    "self_privateuse1_memory_usage",
-                ],
-            ),
-            0.0,
-        )
-
-    kernel_events = 0.0
-    triton_kernel_events = 0.0
-    cuda_runtime_events = 0.0
-    try:
-        for event in prof.events():
-            name = str(getattr(event, "name", ""))
-            if _is_cuda_runtime_event(name):
-                cuda_runtime_events += 1.0
-                continue
-            if _is_device_kernel_event(event):
-                kernel_events += 1.0
-                if "triton" in name.lower():
-                    triton_kernel_events += 1.0
-    except Exception:
-        kernel_events = 0.0
-        triton_kernel_events = 0.0
-        cuda_runtime_events = 0.0
-
-    denom = max(float(steps), 1.0)
+    _zero_input_grads(backward_args)
+    output = fn(*backward_args)
+    _loss_from_output(output).backward()
+    grad_norm, grad_finite = _grad_norm_and_finite(backward_args)
+    _zero_input_grads(backward_args)
     return {
-        "profiler_total_events": total_events,
-        "profiler_total_events_per_step": total_events / denom,
-        "aten_ops": aten_events,
-        "aten_ops_per_step": aten_events / denom,
-        "compiled_region_events": compiled_events,
-        "compiled_region_events_per_step": compiled_events / denom,
-        "kernel_events": kernel_events,
-        "kernel_events_per_step": kernel_events / denom,
-        "triton_kernel_events": triton_kernel_events,
-        "triton_kernel_events_per_step": triton_kernel_events / denom,
-        "cuda_runtime_events": cuda_runtime_events,
-        "cuda_runtime_events_per_step": cuda_runtime_events / denom,
-        "profiler_self_cpu_time_ms": cpu_time_us / 1000.0,
-        "profiler_self_cpu_time_ms_per_step": cpu_time_us / (1000.0 * denom),
-        "profiler_self_device_time_ms": device_time_us / 1000.0,
-        "profiler_self_device_time_ms_per_step": device_time_us / (1000.0 * denom),
-        "profiler_positive_self_cpu_memory_mb": _bytes_to_mb(self_cpu_mem),
-        "profiler_positive_self_device_memory_mb": _bytes_to_mb(self_device_mem),
+        "output": output.detach(),
+        "first_output": first_output.detach(),
+        "first_call_ms": first_call_ms,
+        "median_ms": _median(samples),
+        "mean_ms": sum(samples) / len(samples) if samples else float("nan"),
+        "std_ms": _std(samples),
+        "min_ms": min(samples) if samples else float("nan"),
+        "max_ms": max(samples) if samples else float("nan"),
+        "p10_ms": _percentile(sorted_samples, 0.10),
+        "p90_ms": _percentile(sorted_samples, 0.90),
+        "runs": len(samples),
+        "samples_ms": samples,
+        "grad_norm": grad_norm,
+        "grad_finite": grad_finite,
     }
 
 
-def _run_profile_step(
-    module: nn.Module,
-    inputs: tuple[torch.Tensor, ...],
-    phase: str,
-) -> torch.Tensor:
-    if phase == "forward":
-        with torch.no_grad():
-            return module(*inputs)
-    out = module(*inputs)
-    _loss_from_output(out).backward()
-    _zero_input_grads(inputs)
-    return out.detach()
-
-
-def _profile_module(
-    module: nn.Module,
-    inputs: tuple[torch.Tensor, ...],
-    phase: str,
-    device: str,
-    warmup: int,
-    steps: int,
-    trace_path: Path | None = None,
-) -> dict[str, float]:
-    profile_inputs = (
-        _clone_inputs_for_backward(inputs) if phase == "backward" else inputs
-    )
-
-    _run_profile_step(module, profile_inputs, phase)
-    for _ in range(warmup):
-        _run_profile_step(module, profile_inputs, phase)
-    _sync(device)
-
-    _reset_peak_memory(device)
-    before_bytes = _allocated_bytes(device)
-
-    with torch.profiler.profile(
-        activities=_profiler_activities(device),
-        record_shapes=True,
-        profile_memory=True,
-        with_stack=False,
-        acc_events=True,
-    ) as prof:
-        for step in range(steps):
-            with torch.profiler.record_function(f"{phase}_step_{step}"):
-                _run_profile_step(module, profile_inputs, phase)
-
-    _sync(device)
-    after_bytes = _allocated_bytes(device)
-    peak_bytes = _peak_allocated_bytes(device)
-    if trace_path is not None:
-        trace_path.parent.mkdir(parents=True, exist_ok=True)
-        prof.export_chrome_trace(str(trace_path))
-
-    summary = _profiler_summary(prof, steps)
-    summary.update(
-        {
-            "allocated_before_mb": _bytes_to_mb(before_bytes),
-            "allocated_after_mb": _bytes_to_mb(after_bytes),
-            "peak_allocated_mb": _bytes_to_mb(peak_bytes),
-            "peak_delta_mb": _bytes_to_mb(max(peak_bytes - before_bytes, 0.0))
-            if math.isfinite(peak_bytes) and math.isfinite(before_bytes)
-            else float("nan"),
-            "allocated_delta_mb": _bytes_to_mb(after_bytes - before_bytes)
-            if math.isfinite(after_bytes) and math.isfinite(before_bytes)
-            else float("nan"),
-        }
-    )
-    return summary
-
-
-def _error_stats(actual: torch.Tensor, reference: torch.Tensor) -> dict[str, float]:
-    actual64 = actual.detach().cpu().to(torch.float64)
-    ref64 = reference.detach().cpu().to(torch.float64)
-    diff = actual64 - ref64
-    abs_diff = diff.abs()
-    ref_scale = ref64.abs().max().clamp(min=1e-30)
-    return {
-        "max_abs_error": float(abs_diff.max().item()),
-        "rms_error": float(torch.sqrt((diff * diff).mean()).item()),
-        "max_rel_error": float((abs_diff.max() / ref_scale).item()),
-    }
-
-
-def _max_abs_diff(actual: torch.Tensor, reference: torch.Tensor) -> float:
-    actual64 = actual.detach().cpu().to(torch.float64)
-    reference64 = reference.detach().cpu().to(torch.float64)
-    diff = actual64 - reference64
-    return float(diff.abs().max().item())
-
-
-def _tensor_max_abs(value: torch.Tensor) -> float:
-    return float(
-        value.detach().cpu().to(torch.float64).abs().max().item()
-    )
-
-
-def _stability_tolerance(
-    dtype: torch.dtype,
-    dim: int,
-    multiplier: float = 1.0,
-) -> float:
-    if dtype == torch.float64:
-        base = 1e-10
-    elif dtype == torch.float32:
-        base = 5e-5
-    elif dtype == torch.bfloat16:
-        base = 2e-2
-    elif dtype == torch.float16:
-        base = 2e-2
-    else:
-        base = float(torch.finfo(dtype).eps) * 100.0
-    return base * max(1.0, math.sqrt(float(dim))) * multiplier
-
-
-def _finite_grad_residual(tensors: Iterable[torch.Tensor]) -> float:
-    for tensor in tensors:
-        if tensor.grad is None:
-            return float("inf")
-        if not torch.isfinite(tensor.grad.detach().float()).all().item():
-            return float("inf")
-    return 0.0
-
-
-def _record_stability(
-    rows: list[dict[str, Any]],
-    args: argparse.Namespace,
-    dtype_name: str,
-    signature: SignatureSpec,
-    dim: int,
-    case: str,
-    residual: float,
-    tolerance: float,
-    elapsed_ms: float,
-    note: str = "",
-) -> None:
-    passed = math.isfinite(residual) and residual <= tolerance
-    rows.append(
-        {
-            "suite": "stability",
-            "device": args.device,
-            "dtype": dtype_name,
-            "n": signature.n,
-            "dim": dim,
-            "p": signature.p,
-            "q": signature.q,
-            "r": signature.r,
-            "signature": signature.label,
-            "case": case,
-            "residual": residual,
-            "tolerance": tolerance,
-            "residual_to_tolerance": (
-                residual / tolerance
-                if tolerance > 0
-                else (0.0 if residual == 0.0 else float("inf"))
-            ),
-            "passed": passed,
-            "sample_batch": args.stability_batch,
-            "elapsed_ms": elapsed_ms,
-            "status": "ok",
-            "error": "",
-            "note": note,
-        }
-    )
-
-
-def _record_stability_failure(
-    rows: list[dict[str, Any]],
-    args: argparse.Namespace,
-    dtype_name: str,
-    signature: SignatureSpec,
-    case: str,
-    exc: Exception,
-) -> None:
-    rows.append(
-        {
-            "suite": "stability",
-            "device": args.device,
-            "dtype": dtype_name,
-            "n": signature.n,
-            "dim": 2**signature.n,
-            "p": signature.p,
-            "q": signature.q,
-            "r": signature.r,
-            "signature": signature.label,
-            "case": case,
-            "residual": float("nan"),
-            "tolerance": float("nan"),
-            "residual_to_tolerance": float("nan"),
-            "passed": False,
-            "sample_batch": args.stability_batch,
-            "elapsed_ms": float("nan"),
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            "traceback": traceback.format_exc(limit=4),
-            "note": "",
-        }
-    )
+def _sample_steps(max_steps: int, samples: int) -> list[int]:
+    if max_steps <= 1:
+        return [1]
+    values = {1, int(max_steps)}
+    for index in range(max(int(samples), 1)):
+        t = index / max(int(samples) - 1, 1)
+        values.add(max(1, int(round(math.exp(t * math.log(max_steps))))))
+    return sorted(values)
 
 
 def _basis_bivector_index(i: int, j: int) -> int:
-    return (1 << i) | (1 << j)
+    return (1 << int(i)) | (1 << int(j))
 
 
 def _commuting_pairs(n: int) -> list[tuple[int, int]]:
@@ -1066,2666 +487,1635 @@ def _commuting_pairs(n: int) -> list[tuple[int, int]]:
     return pairs
 
 
-def _make_commuting_nonsimple_bivector(
-    algebra: AlgebraLike,
-    batch: int,
-    scale: float,
-) -> torch.Tensor:
+def _metric_vector_square(spec: SignatureSpec, bit: int) -> float:
+    if bit < spec.p:
+        return 1.0
+    if bit < spec.p + spec.q:
+        return -1.0
+    return 0.0
+
+
+def _bivector_square_sign(spec: SignatureSpec, i: int, j: int) -> float:
+    return -_metric_vector_square(spec, i) * _metric_vector_square(spec, j)
+
+
+def _make_commuting_bivector(algebra: AlgebraContext, batch: int, scale: float) -> torch.Tensor:
     if algebra.n < 4:
-        raise ValueError("non-simple bivectors require n >= 4")
-    base_coeffs = [0.37, -0.23, 0.13, -0.07]
-    pairs = _commuting_pairs(algebra.n)
-    multipliers = torch.linspace(
-        0.85,
-        1.15,
-        batch,
-        device=algebra.device,
-        dtype=algebra.dtype,
-    )
-    b = torch.zeros(batch, algebra.dim, device=algebra.device, dtype=algebra.dtype)
-    for coeff, (i, j) in zip(base_coeffs, pairs):
-        b[:, _basis_bivector_index(i, j)] = scale * coeff * multipliers
-    return b
+        raise ValueError("controlled commuting bivectors require n >= 4")
+    full = torch.zeros(batch, algebra.dim, device=algebra.device, dtype=algebra.dtype)
+    multipliers = torch.linspace(0.85, 1.15, int(batch), device=algebra.device, dtype=algebra.dtype)
+    for coeff, (i, j) in zip((0.37, -0.23, 0.13, -0.07), _commuting_pairs(algebra.n)):
+        full[:, _basis_bivector_index(i, j)] = float(scale) * coeff * multipliers
+    return algebra.layout((2,)).compact(full)
 
 
-def _exact_commuting_exp(algebra: AlgebraLike, b: torch.Tensor) -> torch.Tensor:
-    """Exact exp for the controlled non-simple bivector used here.
+def _simple_plane_exp(
+    algebra: AlgebraContext,
+    b: torch.Tensor,
+    *,
+    pair: tuple[int, int],
+    output_layout: GradeLayout,
+) -> torch.Tensor:
+    bivector_layout = algebra.layout((2,))
+    index = _basis_bivector_index(*pair)
+    try:
+        position = bivector_layout.basis_indices.index(index)
+    except ValueError:
+        coeff = b.new_zeros(*b.shape[:-1])
+    else:
+        coeff = b[..., position]
 
-    The bivector is a sum of disjoint coordinate-plane bivectors. Those
-    components commute, so exp(sum B_i) = product exp(B_i).
-    """
-    result = torch.zeros_like(b)
-    result[..., 0] = 1.0
-    for i, j in _commuting_pairs(algebra.n):
-        idx = _basis_bivector_index(i, j)
-        component = torch.zeros_like(b)
-        component[..., idx] = b[..., idx]
-        result = algebra.geometric_product(result, algebra._exp_bivector_closed(component))
+    sign = _bivector_square_sign(SignatureSpec(algebra.p, algebra.q, algebra.r), *pair)
+    if sign < 0:
+        scalar = torch.cos(coeff)
+        blade = torch.sin(coeff)
+    elif sign > 0:
+        scalar = torch.cosh(coeff)
+        blade = torch.sinh(coeff)
+    else:
+        scalar = torch.ones_like(coeff)
+        blade = coeff
+
+    output = b.new_zeros(*b.shape[:-1], output_layout.dim)
+    if 0 in output_layout.basis_indices:
+        scalar_pos = output_layout.basis_indices.index(0)
+        output[..., scalar_pos] = scalar
+    if index in output_layout.basis_indices:
+        blade_pos = output_layout.basis_indices.index(index)
+        output[..., blade_pos] = blade
+    return output
+
+
+def _exact_commuting_exp(algebra: AlgebraContext, b: torch.Tensor, output_layout: GradeLayout) -> torch.Tensor:
+    """Exact exp for the benchmark's disjoint-coordinate-plane bivectors."""
+    result = b.new_zeros(*b.shape[:-1], output_layout.dim)
+    if 0 not in output_layout.basis_indices:
+        raise ValueError("exact commuting exp output layout must include the scalar lane")
+    result[..., output_layout.basis_indices.index(0)] = 1.0
+    product = algebra.plan_product(op="gp", left_layout=output_layout, right_layout=output_layout, output_layout=output_layout)
+    for pair in _commuting_pairs(algebra.n):
+        factor = _simple_plane_exp(algebra, b, pair=pair, output_layout=output_layout)
+        result = product(result, factor)
     return result
 
 
-def _grade_leak(algebra: AlgebraLike, x: torch.Tensor, grade: int) -> float:
-    mask = algebra.grade_masks_float[grade]
-    if mask.dtype != x.dtype:
-        mask = mask.to(dtype=x.dtype)
-    leak = x * (1.0 - mask)
-    return float(leak.detach().float().norm().item())
+def _identity_for_layout(layout: GradeLayout, *, like: torch.Tensor) -> torch.Tensor:
+    identity = like.new_zeros(*like.shape[:-1], layout.dim)
+    if 0 in layout.basis_indices:
+        identity[..., layout.basis_indices.index(0)] = 1.0
+    return identity
 
 
-def _make_speed_inputs(
-    algebra: AlgebraLike,
-    op: str,
-    batch: int,
-    channels: int,
-    seed: int,
-    device: str,
-) -> tuple[torch.Tensor, ...]:
-    _seed_all(seed, device)
-    dim = algebra.dim
-    if op in {"gp", "wedge", "inner", "commutator"}:
-        a = torch.randn(batch, dim, device=device, dtype=algebra.dtype)
-        b = torch.randn(batch, dim, device=device, dtype=algebra.dtype)
-        return (a, b)
-    if op in {"grade2", "reverse", "norm_sq"}:
-        a = torch.randn(batch, dim, device=device, dtype=algebra.dtype)
-        return (a,)
-    if op in {"exp", "exp_precise"}:
-        b = torch.randn(batch, dim, device=device, dtype=algebra.dtype)
-        b = algebra.grade_projection(b, 2) * 0.1
-        return (b,)
-    if op == "sandwich":
-        b = torch.randn(batch, dim, device=device, dtype=algebra.dtype)
-        b = algebra.grade_projection(b, 2) * 0.05
-        rotor = algebra._exp_bivector_closed(-0.5 * b).detach()
-        x = torch.randn(batch, channels, dim, device=device, dtype=algebra.dtype)
-        return (rotor, x)
-    raise ValueError(f"unsupported op: {op}")
+def _grade_leak(values: torch.Tensor, layout: GradeLayout, grade: int) -> float:
+    if layout.grades == (int(grade),):
+        return 0.0
+    positions = layout.positions_for_grades((int(grade),), device=values.device)
+    target = values.new_zeros(*values.shape[:-1], layout.dim)
+    if positions.numel() > 0:
+        target = target.index_copy(-1, positions, torch.index_select(values, -1, positions))
+    return float((values - target).detach().float().norm().item())
 
 
-def _random_multivector(
-    algebra: AlgebraLike,
-    shape: tuple[int, ...],
-    scale: float,
-) -> torch.Tensor:
-    return (
-        torch.randn(*shape, algebra.dim, device=algebra.device, dtype=algebra.dtype)
-        * scale
+def _dtype_size(dtype: torch.dtype) -> int:
+    return torch.empty((), dtype=dtype).element_size()
+
+
+def _tensor_bytes(tensor: torch.Tensor) -> int:
+    return int(tensor.numel()) * int(tensor.element_size())
+
+
+def _args_bytes(args: tuple[torch.Tensor, ...]) -> int:
+    return sum(_tensor_bytes(arg) for arg in args if isinstance(arg, torch.Tensor))
+
+
+def _output_bytes(output: torch.Tensor) -> int:
+    if not isinstance(output, torch.Tensor):
+        return 0
+    return _tensor_bytes(output)
+
+
+def _pair_buffer_estimate_bytes(row: dict[str, Any], dtype: torch.dtype) -> int:
+    pair_count = int(row.get("pair_count") or 0)
+    family = str(row.get("executor_family", ""))
+    if pair_count <= 0:
+        return 0
+    scalar_bytes = _dtype_size(dtype)
+    if family == "full_table":
+        return pair_count * (8 + scalar_bytes)
+    if family == "sparse":
+        return pair_count * (24 + scalar_bytes)
+    if family == "action_matrix":
+        return pair_count * (16 + scalar_bytes)
+    return pair_count * scalar_bytes
+
+
+def _memory_estimate_fields(target: BenchTarget, row: dict[str, Any], dtype: torch.dtype) -> dict[str, Any]:
+    arg_bytes = _args_bytes(target.args)
+    pair_buffer_bytes = _pair_buffer_estimate_bytes(row, dtype)
+    return {
+        "arg_bytes": arg_bytes,
+        "pair_buffer_estimate_bytes": pair_buffer_bytes,
+        "static_estimated_bytes": arg_bytes + pair_buffer_bytes,
+    }
+
+
+def _cache_snapshot(algebra: AlgebraContext) -> dict[str, int]:
+    planner = algebra.planner
+    return {
+        "product": len(planner._product_executors),
+        "unary": len(planner._unary_executors),
+        "norm_sq": len(planner._norm_sq_executors),
+        "dual": len(planner._dual_executors),
+        "bivector_exp": len(planner._bivector_exp_executors),
+        "full_sandwich": len(planner._full_sandwich_action_executors),
+    }
+
+
+def _cache_delta(before: dict[str, int], after: dict[str, int]) -> int:
+    return sum(max(0, after[key] - before.get(key, 0)) for key in after)
+
+
+def _full_layout_allowed(layout: GradeLayout, max_lanes: int) -> bool:
+    return max_lanes <= 0 or layout.dim <= max_lanes
+
+
+def _benchmark_policy(args: argparse.Namespace) -> BenchmarkPolicy:
+    planning_limits = DEFAULT_PLANNING_LIMITS
+    product_policy = DEFAULT_PRODUCT_EXECUTION_POLICY
+
+    if args.unlock_policy_limits:
+        planning_limits = PlanningLimits(
+            warn_lanes=UNLOCKED_LIMIT,
+            max_lanes=UNLOCKED_LIMIT,
+            warn_pairs=UNLOCKED_LIMIT,
+            max_pairs=UNLOCKED_LIMIT,
+        )
+        product_policy = replace(product_policy, full_table_max_lanes=UNLOCKED_LIMIT)
+
+    if args.max_plan_lanes is not None:
+        planning_limits = replace(
+            planning_limits,
+            warn_lanes=max(int(args.max_plan_lanes) // 2, 1),
+            max_lanes=int(args.max_plan_lanes),
+        )
+    if args.max_plan_pairs is not None:
+        planning_limits = replace(
+            planning_limits,
+            warn_pairs=max(int(args.max_plan_pairs) // 2, 1),
+            max_pairs=int(args.max_plan_pairs),
+        )
+    if args.full_table_max_lanes is not None:
+        product_policy = replace(product_policy, full_table_max_lanes=int(args.full_table_max_lanes))
+    return BenchmarkPolicy(planning_limits=planning_limits, product_execution_policy=product_policy)
+
+
+def _make_algebra(
+    args: argparse.Namespace,
+    spec: SignatureSpec,
+    dtype: torch.dtype,
+    *,
+    device: str | None = None,
+    exp_policy: str = "balanced",
+    fixed_iterations: int | None = None,
+) -> AlgebraContext:
+    policy = _benchmark_policy(args)
+    return AlgebraContext(
+        spec.p,
+        spec.q,
+        spec.r,
+        device=args.device if device is None else device,
+        dtype=dtype,
+        exp_policy=exp_policy,
+        fixed_iterations=fixed_iterations,
+        planning_limits=policy.planning_limits,
+        product_execution_policy=policy.product_execution_policy,
     )
 
 
-def _random_grade(
-    algebra: AlgebraLike,
-    shape: tuple[int, ...],
-    grade: int,
-    scale: float,
-) -> torch.Tensor:
-    return algebra.grade_projection(_random_multivector(algebra, shape, scale), grade)
-
-
-def run_stability_suite(args: argparse.Namespace, dtypes: list[torch.dtype]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    signatures = _parse_signature_csv(args.stability_signatures)
-    cases = _parse_csv(args.stability_cases)
-    valid_cases = {
-        "associativity",
-        "reverse_involution",
-        "grade_projection",
-        "rotor_unitarity",
-        "sandwich_consistency",
-        "per_channel_sandwich",
-        "exp_policy_consistency",
-        "large_angle_unitarity",
-        "grad_finite",
-        "compile_parity",
+def _policy_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    policy = _benchmark_policy(args)
+    return {
+        "tier": args.tier,
+        "dimension_range": args.dimension_range,
+        "signature_families": args.signature_families,
+        "compile_cache_scope": args.compile_cache_scope,
+        "policy_unlocked": bool(args.unlock_policy_limits),
+        "planning_max_lanes": policy.planning_limits.max_lanes,
+        "planning_max_pairs": policy.planning_limits.max_pairs,
+        "full_table_max_lanes": policy.product_execution_policy.full_table_max_lanes,
+        "benchmark_max_full_lanes": int(args.max_full_lanes),
     }
-    unknown = sorted(set(cases) - valid_cases)
-    if unknown:
-        raise ValueError(f"unknown stability case(s): {unknown}; valid: {sorted(valid_cases)}")
-
-    for dtype in dtypes:
-        dtype_name = _dtype_name(dtype)
-        for sig_index, signature in enumerate(signatures):
-            _release_memory(args.device)
-            try:
-                algebra = setup_algebra(
-                    signature.p,
-                    signature.q,
-                    signature.r,
-                    device=args.device,
-                    dtype=dtype,
-                    exp_policy=ExpPolicy.PRECISE,
-                    args=args,
-                )
-            except Exception as exc:
-                _record_stability_failure(rows, args, dtype_name, signature, "setup", exc)
-                continue
-
-            dim = algebra.dim
-            seed_base = (
-                args.seed
-                + signature.p * 1009
-                + signature.q * 211
-                + signature.r * 37
-                + sig_index * 17
-            )
-
-            def run_case(case: str, fn: Callable[[], tuple[float, float, str]]) -> None:
-                if case not in cases:
-                    return
-                _seed_all(seed_base + 13 * (cases.index(case) + 1), args.device)
-                _sync(args.device)
-                start = time.perf_counter_ns()
-                try:
-                    residual, tolerance, note = fn()
-                    _sync(args.device)
-                    elapsed_ms = (time.perf_counter_ns() - start) / 1e6
-                    _record_stability(
-                        rows,
-                        args,
-                        dtype_name,
-                        signature,
-                        dim,
-                        case,
-                        residual,
-                        tolerance,
-                        elapsed_ms,
-                        note,
-                    )
-                    mark = "PASS" if rows[-1]["passed"] else "FAIL"
-                    print(
-                        f"stability {mark:<4s} {args.device:>4s} {dtype_name:>8s} "
-                        f"{signature.label:<10s} {case:<24s} "
-                        f"res={residual:.2e} tol={tolerance:.2e}"
-                    )
-                except Exception as exc:
-                    _record_stability_failure(rows, args, dtype_name, signature, case, exc)
-                    print(
-                        f"stability failed {args.device} {dtype_name} "
-                        f"{signature.label} {case}: {exc}"
-                    )
-
-            def associativity() -> tuple[float, float, str]:
-                with torch.no_grad():
-                    a = _random_multivector(
-                        algebra,
-                        (args.stability_batch,),
-                        args.stability_input_scale,
-                    )
-                    b = _random_multivector(
-                        algebra,
-                        (args.stability_batch,),
-                        args.stability_input_scale,
-                    )
-                    c = _random_multivector(
-                        algebra,
-                        (args.stability_batch,),
-                        args.stability_input_scale,
-                    )
-                    left = algebra.geometric_product(algebra.geometric_product(a, b), c)
-                    right = algebra.geometric_product(a, algebra.geometric_product(b, c))
-                return (
-                    _max_abs_diff(left, right),
-                    _stability_tolerance(dtype, dim, 50.0),
-                    "dense multivector associativity",
-                )
-
-            def reverse_involution() -> tuple[float, float, str]:
-                with torch.no_grad():
-                    a = _random_multivector(
-                        algebra,
-                        (args.stability_batch,),
-                        args.stability_input_scale,
-                    )
-                    residual = _max_abs_diff(algebra.reverse(algebra.reverse(a)), a)
-                return (
-                    residual,
-                    _stability_tolerance(dtype, dim, 0.25),
-                    "reverse(reverse(x)) equals x",
-                )
-
-            def grade_projection() -> tuple[float, float, str]:
-                with torch.no_grad():
-                    a = _random_multivector(
-                        algebra,
-                        (args.stability_batch,),
-                        args.stability_input_scale,
-                    )
-                    residual = 0.0
-                    for grade in range(algebra.num_grades):
-                        projected = algebra.grade_projection(a, grade)
-                        reprojection = algebra.grade_projection(projected, grade)
-                        mask = algebra.grade_masks_float[grade]
-                        if mask.dtype != projected.dtype:
-                            mask = mask.to(dtype=projected.dtype)
-                        residual = max(
-                            residual,
-                            _max_abs_diff(projected, reprojection),
-                            _tensor_max_abs(projected * (1.0 - mask)),
-                        )
-                return (
-                    residual,
-                    _stability_tolerance(dtype, dim, 0.25),
-                    "projection idempotence and off-grade leak",
-                )
-
-            def rotor_unitarity() -> tuple[float, float, str]:
-                if algebra.n < 2:
-                    return 0.0, 0.0, "skipped: no bivectors"
-                with torch.no_grad():
-                    b = _random_grade(
-                        algebra,
-                        (args.stability_batch,),
-                        2,
-                        args.stability_bivector_scale,
-                    )
-                    rotor = algebra.exp(-0.5 * b)
-                    unit = algebra.geometric_product(rotor, algebra.reverse(rotor))
-                    identity = torch.zeros_like(unit)
-                    identity[..., 0] = 1.0
-                return (
-                    _max_abs_diff(unit, identity),
-                    _stability_tolerance(dtype, dim, 200.0),
-                    "exp(bivector) rotor unitarity",
-                )
-
-            def sandwich_consistency() -> tuple[float, float, str]:
-                if algebra.n < 2:
-                    return 0.0, 0.0, "skipped: no bivectors"
-                with torch.no_grad():
-                    b = _random_grade(
-                        algebra,
-                        (args.stability_batch,),
-                        2,
-                        args.stability_bivector_scale,
-                    )
-                    rotor = algebra.exp(-0.5 * b).detach()
-                    x = _random_multivector(
-                        algebra,
-                        (args.stability_batch, args.channels),
-                        args.stability_input_scale,
-                    )
-                    sandwich = algebra.sandwich_product(rotor, x)
-                    naive = algebra.geometric_product(
-                        algebra.geometric_product(rotor.unsqueeze(1), x),
-                        algebra.reverse(rotor).unsqueeze(1),
-                    )
-                return (
-                    _max_abs_diff(sandwich, naive),
-                    _stability_tolerance(dtype, dim, 50.0),
-                    "optimized sandwich equals two geometric products",
-                )
-
-            def per_channel_sandwich() -> tuple[float, float, str]:
-                if algebra.n < 2:
-                    return 0.0, 0.0, "skipped: no bivectors"
-                channels = max(args.channels, 1)
-                with torch.no_grad():
-                    b = _random_grade(
-                        algebra,
-                        (channels,),
-                        2,
-                        args.stability_bivector_scale,
-                    )
-                    rotors = algebra.exp(-0.5 * b).detach()
-                    x = _random_multivector(
-                        algebra,
-                        (args.stability_batch, channels),
-                        args.stability_input_scale,
-                    )
-                    per_channel = algebra.per_channel_sandwich(rotors, x)
-                    loop = torch.zeros_like(per_channel)
-                    for channel in range(channels):
-                        rotor = rotors[channel : channel + 1].expand(
-                            args.stability_batch,
-                            -1,
-                        )
-                        loop[:, channel : channel + 1, :] = algebra.sandwich_product(
-                            rotor,
-                            x[:, channel : channel + 1, :],
-                        )
-                return (
-                    _max_abs_diff(per_channel, loop),
-                    _stability_tolerance(dtype, dim, 50.0),
-                    "per-channel fast path equals channel loop",
-                )
-
-            def exp_policy_consistency() -> tuple[float, float, str]:
-                if algebra.n < 2:
-                    return 0.0, 0.0, "skipped: no bivectors"
-                balanced = setup_algebra(
-                    signature.p,
-                    signature.q,
-                    signature.r,
-                    device=args.device,
-                    dtype=dtype,
-                    exp_policy=ExpPolicy.BALANCED,
-                    args=args,
-                )
-                with torch.no_grad():
-                    b = torch.zeros(
-                        args.stability_batch,
-                        dim,
-                        device=args.device,
-                        dtype=dtype,
-                    )
-                    values = torch.linspace(
-                        -0.7,
-                        0.7,
-                        args.stability_batch,
-                        device=args.device,
-                        dtype=dtype,
-                    )
-                    b[:, _basis_bivector_index(0, 1)] = values
-                    balanced_out = balanced.exp(b)
-                    precise_out = algebra.exp(b)
-                return (
-                    _max_abs_diff(balanced_out, precise_out),
-                    _stability_tolerance(dtype, dim, 20.0),
-                    "balanced and precise policies agree on simple bivectors",
-                )
-
-            def large_angle_unitarity() -> tuple[float, float, str]:
-                if algebra.n < 2:
-                    return 0.0, 0.0, "skipped: no bivectors"
-                with torch.no_grad():
-                    b = torch.zeros(
-                        args.stability_batch,
-                        dim,
-                        device=args.device,
-                        dtype=dtype,
-                    )
-                    b[:, _basis_bivector_index(0, 1)] = args.stability_large_angle
-                    rotor = algebra.exp(-0.5 * b)
-                    unit = algebra.geometric_product(rotor, algebra.reverse(rotor))
-                    identity = torch.zeros_like(unit)
-                    identity[..., 0] = 1.0
-                return (
-                    _max_abs_diff(unit, identity),
-                    _stability_tolerance(dtype, dim, 500.0),
-                    f"simple bivector angle={args.stability_large_angle:g}",
-                )
-
-            def grad_finite() -> tuple[float, float, str]:
-                a = _random_multivector(
-                    algebra,
-                    (args.stability_batch,),
-                    args.stability_input_scale,
-                ).requires_grad_(True)
-                b = _random_multivector(
-                    algebra,
-                    (args.stability_batch,),
-                    args.stability_input_scale,
-                ).requires_grad_(True)
-                out = algebra.geometric_product(a, b)
-                _loss_from_output(out).backward()
-                residual = _finite_grad_residual((a, b))
-                _zero_input_grads((a, b))
-                return residual, 0.0, "geometric product gradient finiteness"
-
-            def compile_parity() -> tuple[float, float, str]:
-                if not hasattr(torch, "compile"):
-                    return 0.0, 0.0, "skipped: torch.compile unavailable"
-                with torch.no_grad():
-                    module = CoreOpModule(algebra, "gp").eval()
-                    compiled = _compile_module(module, args.stability_compile_mode)
-                    inputs = _make_speed_inputs(
-                        algebra,
-                        "gp",
-                        args.stability_batch,
-                        args.channels,
-                        seed_base + 97,
-                        args.device,
-                    )
-                    eager_out = module(*inputs)
-                    compiled_out = compiled(*inputs)
-                return (
-                    _max_abs_diff(compiled_out, eager_out),
-                    _stability_tolerance(dtype, dim, 20.0),
-                    f"torch.compile parity via {args.stability_compile_mode}",
-                )
-
-            case_fns: dict[str, Callable[[], tuple[float, float, str]]] = {
-                "associativity": associativity,
-                "reverse_involution": reverse_involution,
-                "grade_projection": grade_projection,
-                "rotor_unitarity": rotor_unitarity,
-                "sandwich_consistency": sandwich_consistency,
-                "per_channel_sandwich": per_channel_sandwich,
-                "exp_policy_consistency": exp_policy_consistency,
-                "large_angle_unitarity": large_angle_unitarity,
-                "grad_finite": grad_finite,
-                "compile_parity": compile_parity,
-            }
-            for case in cases:
-                run_case(case, case_fns[case])
-
-            algebra = None
-            _release_memory(args.device)
-    return rows
 
 
-def _compile_module(module: nn.Module, mode: str) -> nn.Module:
+def _randn(shape: tuple[int, ...], *, device: str, dtype: torch.dtype, seed: int, scale: float = 1.0) -> torch.Tensor:
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    values = torch.randn(*shape, dtype=dtype, generator=generator)
+    return values.to(device=device) * scale
+
+
+def _layout_metadata(prefix: str, layout: GradeLayout) -> dict[str, Any]:
+    return {
+        f"{prefix}_grades": ":".join(str(grade) for grade in layout.grades),
+        f"{prefix}_lanes": layout.dim,
+    }
+
+
+def _product_policy_metadata(
+    algebra: AlgebraContext,
+    *,
+    op: str,
+    left_layout: GradeLayout,
+    right_layout: GradeLayout,
+    output_layout: GradeLayout,
+    dtype: torch.dtype,
+    device: str,
+) -> dict[str, Any]:
+    cost = estimate_product_executor_cost(
+        algebra,
+        op=op,
+        left_layout=left_layout,
+        right_layout=right_layout,
+        output_layout=output_layout,
+        dtype=dtype,
+        device=device,
+    )
+    return {
+        "policy_executor_family": cost.executor_family,
+        "policy_selected_score": cost.selected_score,
+        "policy_full_table_score": cost.full_table_score,
+        "policy_sparse_score": cost.sparse_score,
+        "policy_full_table_pair_count": cost.full_table_pair_count,
+        "policy_sparse_estimated_pairs": cost.sparse_estimated_pairs,
+        "policy_path_count": cost.path_count,
+        "policy_full_table_estimated_bytes": cost.full_table_estimated_bytes,
+        "policy_sparse_estimated_bytes": cost.sparse_estimated_bytes,
+        "policy_backend": cost.backend,
+    }
+
+
+def _product_target(
+    algebra: AlgebraContext,
+    *,
+    name: str,
+    op: str,
+    left_layout: GradeLayout,
+    right_layout: GradeLayout,
+    output_layout: GradeLayout | None,
+    batch: int,
+    device: str,
+    dtype: torch.dtype,
+    seed: int,
+) -> BenchTarget:
+    handle = algebra.plan_product(op=op, left_layout=left_layout, right_layout=right_layout, output_layout=output_layout)
+    left = _randn((batch, left_layout.dim), device=device, dtype=dtype, seed=seed)
+    right = _randn((batch, right_layout.dim), device=device, dtype=dtype, seed=seed + 1)
+    metadata = {
+        "category": "product_full" if left_layout.dim == left_layout.spec.dim else "product_active",
+        "call_method": "plan_product_handle",
+        **_layout_metadata("left", left_layout),
+        **_layout_metadata("right", right_layout),
+        **_layout_metadata("output", handle.output_layout),
+        "pair_count": handle.pair_count,
+        **_product_policy_metadata(
+            algebra,
+            op=op,
+            left_layout=left_layout,
+            right_layout=right_layout,
+            output_layout=handle.output_layout,
+            dtype=dtype,
+            device=device,
+        ),
+    }
+    return BenchTarget(
+        name=name,
+        family=handle.executor_family,
+        op=op,
+        layout_case=name,
+        module=handle,
+        args=(left, right),
+        metadata=metadata,
+    )
+
+
+def _build_target(
+    algebra: AlgebraContext,
+    *,
+    op_name: str,
+    batch: int,
+    channels: int,
+    actions: int,
+    pairs: int,
+    max_full_lanes: int,
+    device: str,
+    dtype: torch.dtype,
+    seed: int,
+) -> BenchTarget | None:
+    full = algebra.spec.full_layout()
+    vector = algebra.layout((1,))
+
+    if op_name == "full_sandwich":
+        if not _full_layout_allowed(full, max_full_lanes):
+            return None
+        handle = algebra.plan_sandwich_action(layout=full, dtype=dtype, device=device)
+        left = _randn((channels, full.dim), device=device, dtype=dtype, seed=seed, scale=0.1)
+        right = _randn((channels, full.dim), device=device, dtype=dtype, seed=seed + 1, scale=0.1)
+        values = _randn((batch, channels, full.dim), device=device, dtype=dtype, seed=seed + 2)
+        return BenchTarget(
+            name=op_name,
+            family=handle.executor_family,
+            op="sandwich_action",
+            layout_case=op_name,
+            module=handle,
+            args=(left, values, right),
+            metadata={
+                "category": "action_full",
+                "call_method": "plan_sandwich_action_handle",
+                **_layout_metadata("input", full),
+                **_layout_metadata("output", full),
+                "pair_count": full.dim * full.dim,
+            },
+        )
+
+    if op_name.startswith("full_"):
+        if not _full_layout_allowed(full, max_full_lanes):
+            return None
+        product_op = op_name.removeprefix("full_")
+        if product_op not in PRODUCT_OPS:
+            raise ValueError(f"unknown full product op {op_name!r}")
+        return _product_target(
+            algebra,
+            name=op_name,
+            op=product_op,
+            left_layout=full,
+            right_layout=full,
+            output_layout=full,
+            batch=batch,
+            device=device,
+            dtype=dtype,
+            seed=seed,
+        )
+
+    if op_name in {
+        "bivector_vector_commutator",
+        "bivector_bivector_commutator",
+        "bivector_exp",
+        "versor_vector",
+        "multi_versor_vector",
+        "paired_bivector_vector",
+    } and algebra.n < 2:
+        return None
+
+    bivector = algebra.layout((2,))
+
+    if op_name == "vector_gp":
+        return _product_target(
+            algebra,
+            name=op_name,
+            op="gp",
+            left_layout=vector,
+            right_layout=vector,
+            output_layout=algebra.layout(expand_output_grades(vector.grades, vector.grades, algebra.n, op="gp")),
+            batch=batch,
+            device=device,
+            dtype=dtype,
+            seed=seed,
+        )
+
+    if op_name == "bivector_vector_commutator":
+        return _product_target(
+            algebra,
+            name=op_name,
+            op="commutator",
+            left_layout=bivector,
+            right_layout=vector,
+            output_layout=algebra.layout(expand_output_grades(bivector.grades, vector.grades, algebra.n, op="commutator")),
+            batch=batch,
+            device=device,
+            dtype=dtype,
+            seed=seed,
+        )
+
+    if op_name == "bivector_bivector_commutator":
+        return _product_target(
+            algebra,
+            name=op_name,
+            op="commutator",
+            left_layout=bivector,
+            right_layout=bivector,
+            output_layout=algebra.layout(expand_output_grades(bivector.grades, bivector.grades, algebra.n, op="commutator")),
+            batch=batch,
+            device=device,
+            dtype=dtype,
+            seed=seed,
+        )
+
+    if op_name == "norm_vector":
+        executor = algebra.plan_norm_sq(input_layout=vector)
+        values = _randn((batch, vector.dim), device=device, dtype=dtype, seed=seed)
+        return BenchTarget(
+            name=op_name,
+            family=executor.executor_family,
+            op="norm_sq",
+            layout_case=op_name,
+            module=executor,
+            args=(values,),
+            metadata={
+                "category": "metric",
+                "call_method": "plan_norm_sq_executor",
+                **_layout_metadata("input", vector),
+                "output_lanes": 1,
+                "pair_count": vector.dim,
+            },
+        )
+
+    if op_name == "dual_vector":
+        output = algebra.layout((algebra.n - 1,))
+        executor = algebra.plan_dual(input_layout=vector, output_layout=output)
+        values = _randn((batch, vector.dim), device=device, dtype=dtype, seed=seed)
+        return BenchTarget(
+            name=op_name,
+            family=executor.executor_family,
+            op="dual",
+            layout_case=op_name,
+            module=executor,
+            args=(values,),
+            metadata={
+                "category": "permutation",
+                "call_method": "plan_dual_executor",
+                **_layout_metadata("input", vector),
+                **_layout_metadata("output", executor.output_layout),
+                "pair_count": vector.dim,
+            },
+        )
+
+    if op_name == "bivector_exp":
+        even = algebra.layout(range(0, algebra.n + 1, 2))
+        executor = algebra.plan_exp(input_layout=bivector, output_layout=even)
+        values = _randn((batch, bivector.dim), device=device, dtype=dtype, seed=seed, scale=0.1)
+        return BenchTarget(
+            name=op_name,
+            family=executor.executor_family,
+            op="bivector_exp",
+            layout_case=op_name,
+            module=executor,
+            args=(values,),
+            metadata={
+                "category": "exp",
+                "call_method": "plan_exp_executor",
+                **_layout_metadata("input", bivector),
+                **_layout_metadata("output", executor.output_layout),
+                "pair_count": getattr(executor.left_product, "pair_count", 0),
+            },
+        )
+
+    if op_name == "versor_vector":
+        handle = algebra.plan_versor_action(grade=2, input_layout=vector, output_layout=vector, parameter_layout=bivector)
+        values = _randn((batch, channels, vector.dim), device=device, dtype=dtype, seed=seed)
+        weights = _randn((channels, bivector.dim), device=device, dtype=dtype, seed=seed + 1, scale=0.1)
+        return BenchTarget(
+            name=op_name,
+            family=handle.executor_family,
+            op="versor_action",
+            layout_case=op_name,
+            module=handle,
+            args=(values, weights),
+            metadata={
+                "category": "action_active",
+                "call_method": "plan_versor_action_handle",
+                **_layout_metadata("input", vector),
+                **_layout_metadata("parameter", bivector),
+                **_layout_metadata("output", vector),
+            },
+        )
+
+    if op_name == "multi_versor_vector":
+        handle = algebra.plan_multi_versor_action(grade=2, input_layout=vector, output_layout=vector, parameter_layout=bivector)
+        values = _randn((batch, channels, vector.dim), device=device, dtype=dtype, seed=seed)
+        weights = _randn((actions, bivector.dim), device=device, dtype=dtype, seed=seed + 1, scale=0.1)
+        mix = _randn((channels, actions), device=device, dtype=dtype, seed=seed + 2)
+        return BenchTarget(
+            name=op_name,
+            family=handle.executor_family,
+            op="multi_versor_action",
+            layout_case=op_name,
+            module=handle,
+            args=(values, weights, mix),
+            metadata={
+                "category": "action_active",
+                "call_method": "plan_multi_versor_action_handle",
+                **_layout_metadata("input", vector),
+                **_layout_metadata("parameter", bivector),
+                **_layout_metadata("output", vector),
+                "actions": actions,
+            },
+        )
+
+    if op_name == "paired_bivector_vector":
+        handle = algebra.plan_paired_bivector_action(input_layout=vector, output_layout=vector, parameter_layout=bivector)
+        values = _randn((batch, channels, vector.dim), device=device, dtype=dtype, seed=seed)
+        left_weights = _randn((pairs, bivector.dim), device=device, dtype=dtype, seed=seed + 1, scale=0.1)
+        right_weights = _randn((pairs, bivector.dim), device=device, dtype=dtype, seed=seed + 2, scale=0.1)
+        channel_to_pair = torch.arange(channels, device=device, dtype=torch.long) % pairs
+        return BenchTarget(
+            name=op_name,
+            family=handle.executor_family,
+            op="paired_bivector_action",
+            layout_case=op_name,
+            module=handle,
+            args=(values, left_weights, right_weights, channel_to_pair),
+            metadata={
+                "category": "action_active",
+                "call_method": "plan_paired_bivector_action_handle",
+                **_layout_metadata("input", vector),
+                **_layout_metadata("parameter", bivector),
+                **_layout_metadata("output", vector),
+                "pairs": pairs,
+            },
+        )
+
+    raise ValueError(f"unknown benchmark op {op_name!r}")
+
+
+def _compile_callable(module: Callable[..., torch.Tensor] | nn.Module, mode: str) -> Callable[..., torch.Tensor] | nn.Module:
     if mode == "eager":
         return module
     if not hasattr(torch, "compile"):
         raise RuntimeError("torch.compile is not available")
     if mode == "aot_eager":
-        return torch.compile(module, backend="aot_eager")
-    if mode == "compile":
-        return torch.compile(module)
+        return torch.compile(module, backend="aot_eager", fullgraph=True)
+    if mode == "inductor":
+        return torch.compile(module, fullgraph=True)
     if mode == "reduce-overhead":
-        return torch.compile(module, mode="reduce-overhead")
-    if mode == "max-autotune":
-        return torch.compile(module, mode="max-autotune")
-    raise ValueError(f"unknown compile mode: {mode}")
+        return torch.compile(module, mode="reduce-overhead", fullgraph=True)
+    raise ValueError(f"unknown compile mode {mode!r}")
 
 
-def _count_graph_breaks(module: nn.Module, inputs: tuple[torch.Tensor, ...]) -> int:
-    """Return the dynamo graph-break count for ``module(*inputs)``.
+def _benchmark_target(
+    algebra: AlgebraContext,
+    target: BenchTarget,
+    *,
+    mode: str,
+    device: str,
+    warmup: int,
+    iterations: int,
+    compile_cache_scope: str,
+) -> dict[str, Any]:
+    cache_before = _cache_snapshot(algebra)
+    eager_timing = _time_callable(target.module, target.args, device=device, warmup=1, iterations=1)
+    expected = eager_timing["output"]
+    if mode == "eager":
+        timing = _time_callable(target.module, target.args, device=device, warmup=warmup, iterations=iterations)
+        cache_after = _cache_snapshot(algebra)
+        return {
+            "compile_ok": True,
+            "cache_mutation": _cache_delta(cache_before, cache_after),
+            "max_abs_diff": 0.0,
+            "max_rel_diff": 0.0,
+            "output_finite": bool(torch.isfinite(timing["output"]).all().item()),
+            "compile_cache_reset_before": False,
+            "compile_cache_reset_after": False,
+            **_timing_fields(timing),
+        }
 
-    ``torch.compile`` silently falls back to eager on graph break, so a
-    "compile" timing without this check can be just an eager run with a
-    different name. Returns -1 if dynamo doesn't expose the count.
-    """
+    reset_before = _reset_compile_cache() if compile_cache_scope == "row" else False
     try:
-        import torch._dynamo as dynamo
-    except ImportError:
-        return -1
-    try:
-        explained = dynamo.explain(module)(*inputs)
-    except TypeError:
-        try:
-            explained = dynamo.explain(module, *inputs)
-        except Exception:
-            return -1
-    except Exception:
-        return -1
-    for attr in ("graph_break_count", "break_reasons"):
-        value = getattr(explained, attr, None)
-        if value is None:
-            continue
-        if attr == "graph_break_count":
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                continue
-        if attr == "break_reasons":
-            try:
-                return int(len(value))
-            except TypeError:
-                continue
-    return -1
+        compiled = _compile_callable(target.module, mode)
+        timing = _time_callable(compiled, target.args, device=device, warmup=warmup, iterations=iterations)
+    finally:
+        reset_after = _reset_compile_cache() if compile_cache_scope == "row" else False
+    cache_after = _cache_snapshot(algebra)
+    return {
+        "compile_ok": True,
+        "cache_mutation": _cache_delta(cache_before, cache_after),
+        "max_abs_diff": _max_abs_diff(timing["output"], expected),
+        "max_rel_diff": _max_rel_diff(timing["output"], expected),
+        "output_finite": bool(torch.isfinite(timing["output"]).all().item()),
+        "compile_cache_reset_before": reset_before,
+        "compile_cache_reset_after": reset_after,
+        **_timing_fields(timing),
+    }
 
 
-def run_speed_suite(args: argparse.Namespace, dtypes: list[torch.dtype]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    modes = _ordered_modes(args.compile_modes)
-    ops = _parse_csv(args.ops)
-
-    for dtype in dtypes:
-        dtype_name = _dtype_name(dtype)
-        tf32_modes = _tf32_modes_for_dtype(args, dtype)
-        for n in args.n_values:
-            if n < 2:
-                print(f"Skipping n={n}: benchmark ops require n >= 2")
-                continue
-            for batch in args.batch_sizes:
-                for op in ops:
-                    for channels in _channels_for_op(args, op):
-                        for tf32_mode in tf32_modes:
-                            baseline_output: torch.Tensor | None = None
-                            baseline_stats: TimerStats | None = None
-                            for mode in modes:
-                                _release_memory(args.device)
-                                row: dict[str, Any] = {
-                                    "suite": "speed",
-                                    "device": args.device,
-                                    "dtype": dtype_name,
-                                    "n": n,
-                                    "dim": 2**n,
-                                    "batch": batch,
-                                    "channels": channels,
-                                    "op": op,
-                                    "compile_mode": mode,
-                                    "tf32_mode": tf32_mode,
-                                    "status": "ok",
-                                    "error": "",
-                                }
-                                try:
-                                    with _tf32_context(args.device, tf32_mode):
-                                        row.update(_current_tf32_flags(args.device, tf32_mode))
-                                        algebra = setup_algebra(
-                                            n,
-                                            0,
-                                            device=args.device,
-                                            dtype=dtype,
-                                            exp_policy=_op_exp_policy(op),
-                                            args=args,
-                                        )
-                                        row.update(
-                                            _analytic_forward_metrics(
-                                                algebra,
-                                                op,
-                                                batch,
-                                                channels,
-                                            )
-                                        )
-                                        module = CoreOpModule(algebra, op).eval()
-                                        inputs = _make_speed_inputs(
-                                            algebra,
-                                            op,
-                                            batch,
-                                            channels,
-                                            args.seed + n * 1009 + batch * 17 + channels,
-                                            args.device,
-                                        )
-                                        compiled = _compile_module(module, mode)
-                                        graph_breaks = (
-                                            -1 if mode == "eager"
-                                            else _count_graph_breaks(module, inputs)
-                                        )
-                                        stats, out = _time_callable(
-                                            compiled,
-                                            inputs,
-                                            args.device,
-                                            args.warmup,
-                                            args.runs,
-                                            args.min_time_ms,
-                                            args.max_runs,
-                                        )
-                                    if mode == "eager":
-                                        baseline_output = out.detach().cpu()
-                                        baseline_stats = stats
-                                        err = {
-                                            "max_abs_error": 0.0,
-                                            "rms_error": 0.0,
-                                            "max_rel_error": 0.0,
-                                        }
-                                    elif baseline_output is not None:
-                                        err = _error_stats(out, baseline_output)
-                                    else:
-                                        err = {
-                                            "max_abs_error": float("nan"),
-                                            "rms_error": float("nan"),
-                                            "max_rel_error": float("nan"),
-                                        }
-                                    row.update(
-                                        {
-                                            "first_call_ms": stats.first_call_ms,
-                                            "median_ms": stats.median_ms,
-                                            "mean_ms": stats.mean_ms,
-                                            "std_ms": stats.std_ms,
-                                            "p10_ms": stats.p10_ms,
-                                            "p90_ms": stats.p90_ms,
-                                            "timed_runs": stats.runs,
-                                            "graph_breaks": graph_breaks,
-                                            **_speedup_fields(
-                                                None if mode == "eager" else baseline_stats,
-                                                stats,
-                                                args.bootstrap_samples,
-                                                args.seed + n * 4099 + batch * 97 + channels * 13,
-                                            ),
-                                            **err,
-                                        }
-                                    )
-                                    _add_rate_metrics(row, stats.median_ms)
-                                    channel_suffix = (
-                                        f" c={channels:<4d}" if op == "sandwich" else ""
-                                    )
-                                    tf32_suffix = (
-                                        f" tf32={row['tf32_mode']:<7s}"
-                                        if row["tf32_mode"] != "default"
-                                        else ""
-                                    )
-                                    print(
-                                        f"speed {args.device:>4s} {dtype_name:>8s} "
-                                        f"n={n:<2d} b={batch:<4d}{channel_suffix} "
-                                        f"{op:<11s} {mode:<15s}{tf32_suffix} "
-                                        f"{stats.median_ms:9.4f} ms "
-                                        f"err={row['max_abs_error']:.2e} "
-                                        f"breaks={graph_breaks}"
-                                    )
-                                except Exception as exc:
-                                    row.update(
-                                        {
-                                            "status": "failed",
-                                            "error": f"{type(exc).__name__}: {exc}",
-                                            "traceback": traceback.format_exc(limit=4),
-                                            "first_call_ms": float("nan"),
-                                            "median_ms": float("nan"),
-                                            "mean_ms": float("nan"),
-                                            "std_ms": float("nan"),
-                                            "p10_ms": float("nan"),
-                                            "p90_ms": float("nan"),
-                                            "timed_runs": 0,
-                                            "logical_items_per_call": float("nan"),
-                                            "items_per_sec": float("nan"),
-                                            "analytic_forward_flops": float("nan"),
-                                            "achieved_forward_gflops": float("nan"),
-                                            "analytic_io_bytes": float("nan"),
-                                            "achieved_io_gbps": float("nan"),
-                                            "graph_breaks": float("nan"),
-                                            "speedup_vs_eager": float("nan"),
-                                            "speedup_vs_eager_ci_low": float("nan"),
-                                            "speedup_vs_eager_ci_high": float("nan"),
-                                            "speedup_vs_eager_ci_excludes_1": False,
-                                            "speedup_vs_eager_significant": False,
-                                            "max_abs_error": float("nan"),
-                                            "rms_error": float("nan"),
-                                            "max_rel_error": float("nan"),
-                                        }
-                                    )
-                                    print(
-                                        f"speed failed {args.device} {dtype_name} "
-                                        f"n={n} b={batch} c={channels} {op} {mode}: {exc}"
-                                    )
-                                finally:
-                                    rows.append(row)
-                                    try:
-                                        del algebra, module, compiled, inputs, out
-                                    except UnboundLocalError:
-                                        pass
-                                    _release_memory(args.device)
-    return rows
+def _timing_fields(timing: dict[str, Any]) -> dict[str, Any]:
+    output = timing["output"]
+    return {
+        "first_call_ms": timing["first_call_ms"],
+        "median_ms": timing["median_ms"],
+        "mean_ms": timing["mean_ms"],
+        "std_ms": timing["std_ms"],
+        "min_ms": timing["min_ms"],
+        "max_ms": timing["max_ms"],
+        "p10_ms": timing["p10_ms"],
+        "p90_ms": timing["p90_ms"],
+        "runs": timing["runs"],
+        "samples_ms": timing["samples_ms"],
+        "output_numel": int(output.numel()) if isinstance(output, torch.Tensor) else 0,
+        "output_bytes": _output_bytes(output),
+    }
 
 
-def run_backward_suite(args: argparse.Namespace, dtypes: list[torch.dtype]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    modes = _ordered_modes(args.backward_compile_modes)
-    ops = _parse_csv(args.backward_ops)
-
-    for dtype in dtypes:
-        dtype_name = _dtype_name(dtype)
-        tf32_modes = _tf32_modes_for_dtype(args, dtype)
-        for n in args.backward_n_values:
-            if n < 2:
-                print(f"Skipping backward n={n}: benchmark ops require n >= 2")
-                continue
-            for batch in args.backward_batch_sizes:
-                for op in ops:
-                    for channels in _channels_for_op(args, op):
-                        for tf32_mode in tf32_modes:
-                            baseline_output: torch.Tensor | None = None
-                            baseline_stats: TimerStats | None = None
-                            for mode in modes:
-                                _release_memory(args.device)
-                                row: dict[str, Any] = {
-                                    "suite": "backward",
-                                    "device": args.device,
-                                    "dtype": dtype_name,
-                                    "n": n,
-                                    "dim": 2**n,
-                                    "batch": batch,
-                                    "channels": channels,
-                                    "op": op,
-                                    "compile_mode": mode,
-                                    "tf32_mode": tf32_mode,
-                                    "status": "ok",
-                                    "error": "",
-                                }
-                                try:
-                                    with _tf32_context(args.device, tf32_mode):
-                                        row.update(_current_tf32_flags(args.device, tf32_mode))
-                                        algebra = setup_algebra(
-                                            n,
-                                            0,
-                                            device=args.device,
-                                            dtype=dtype,
-                                            exp_policy=_op_exp_policy(op),
-                                            args=args,
-                                        )
-                                        row.update(
-                                            _analytic_forward_metrics(
-                                                algebra,
-                                                op,
-                                                batch,
-                                                channels,
-                                            )
-                                        )
-                                        module = CoreOpModule(algebra, op).eval()
-                                        inputs = _make_speed_inputs(
-                                            algebra,
-                                            op,
-                                            batch,
-                                            channels,
-                                            args.seed + n * 1709 + batch * 31 + channels,
-                                            args.device,
-                                        )
-                                        compiled = _compile_module(module, mode)
-                                        graph_breaks = (
-                                            -1 if mode == "eager"
-                                            else _count_graph_breaks(module, inputs)
-                                        )
-                                        stats, out, grad_norm = _time_forward_backward(
-                                            compiled,
-                                            inputs,
-                                            args.device,
-                                            args.backward_warmup,
-                                            args.backward_runs,
-                                            args.backward_min_time_ms,
-                                            args.backward_max_runs,
-                                        )
-                                    if mode == "eager":
-                                        baseline_output = out.detach().cpu()
-                                        baseline_stats = stats
-                                        err = {
-                                            "max_abs_error": 0.0,
-                                            "rms_error": 0.0,
-                                            "max_rel_error": 0.0,
-                                        }
-                                    elif baseline_output is not None:
-                                        err = _error_stats(out, baseline_output)
-                                    else:
-                                        err = {
-                                            "max_abs_error": float("nan"),
-                                            "rms_error": float("nan"),
-                                            "max_rel_error": float("nan"),
-                                        }
-                                    row.update(
-                                        {
-                                            "first_call_ms": stats.first_call_ms,
-                                            "median_ms": stats.median_ms,
-                                            "mean_ms": stats.mean_ms,
-                                            "std_ms": stats.std_ms,
-                                            "p10_ms": stats.p10_ms,
-                                            "p90_ms": stats.p90_ms,
-                                            "timed_runs": stats.runs,
-                                            "graph_breaks": graph_breaks,
-                                            "grad_norm": grad_norm,
-                                            **_speedup_fields(
-                                                None if mode == "eager" else baseline_stats,
-                                                stats,
-                                                args.bootstrap_samples,
-                                                args.seed + n * 5101 + batch * 113 + channels * 17,
-                                            ),
-                                            **err,
-                                        }
-                                    )
-                                    _add_rate_metrics(row, stats.median_ms)
-                                    channel_suffix = (
-                                        f" c={channels:<4d}" if op == "sandwich" else ""
-                                    )
-                                    tf32_suffix = (
-                                        f" tf32={row['tf32_mode']:<7s}"
-                                        if row["tf32_mode"] != "default"
-                                        else ""
-                                    )
-                                    print(
-                                        f"backward {args.device:>4s} {dtype_name:>8s} "
-                                        f"n={n:<2d} b={batch:<4d}{channel_suffix} "
-                                        f"{op:<11s} {mode:<15s}{tf32_suffix} "
-                                        f"{stats.median_ms:9.4f} ms grad={grad_norm:.2e} "
-                                        f"breaks={graph_breaks}"
-                                    )
-                                except Exception as exc:
-                                    row.update(
-                                        {
-                                            "status": "failed",
-                                            "error": f"{type(exc).__name__}: {exc}",
-                                            "traceback": traceback.format_exc(limit=4),
-                                            "first_call_ms": float("nan"),
-                                            "median_ms": float("nan"),
-                                            "mean_ms": float("nan"),
-                                            "std_ms": float("nan"),
-                                            "p10_ms": float("nan"),
-                                            "p90_ms": float("nan"),
-                                            "timed_runs": 0,
-                                            "logical_items_per_call": float("nan"),
-                                            "items_per_sec": float("nan"),
-                                            "analytic_forward_flops": float("nan"),
-                                            "achieved_forward_gflops": float("nan"),
-                                            "analytic_io_bytes": float("nan"),
-                                            "achieved_io_gbps": float("nan"),
-                                            "graph_breaks": float("nan"),
-                                            "speedup_vs_eager": float("nan"),
-                                            "speedup_vs_eager_ci_low": float("nan"),
-                                            "speedup_vs_eager_ci_high": float("nan"),
-                                            "speedup_vs_eager_ci_excludes_1": False,
-                                            "speedup_vs_eager_significant": False,
-                                            "grad_norm": float("nan"),
-                                            "max_abs_error": float("nan"),
-                                            "rms_error": float("nan"),
-                                            "max_rel_error": float("nan"),
-                                        }
-                                    )
-                                    print(
-                                        f"backward failed {args.device} {dtype_name} "
-                                        f"n={n} b={batch} c={channels} {op} {mode}: {exc}"
-                                    )
-                                finally:
-                                    rows.append(row)
-                                    try:
-                                        del algebra, module, compiled, inputs, out
-                                    except UnboundLocalError:
-                                        pass
-                                    _release_memory(args.device)
-    return rows
-
-
-def run_fusion_suite(
+def _base_row(
+    *,
     args: argparse.Namespace,
-    dtypes: list[torch.dtype],
-    out_dir: Path,
-) -> list[dict[str, Any]]:
+    spec: SignatureSpec,
+    dtype: torch.dtype,
+    batch: int,
+    target: BenchTarget,
+    algebra_ms: float,
+    plan_ms: float,
+) -> dict[str, Any]:
+    row = {
+        "signature": spec.label,
+        "n": spec.n,
+        "device": args.device,
+        "dtype": dtype_name(dtype),
+        "batch": batch,
+        "channels": args.channels,
+        "actions": args.actions,
+        "pairs": args.pairs,
+        "target": target.name,
+        "op": target.op,
+        "layout_case": target.layout_case,
+        "executor_family": target.family,
+        "algebra_init_ms": algebra_ms,
+        "cold_plan_ms": plan_ms,
+    }
+    row.update(_policy_metadata(args))
+    row.update(target.metadata)
+    row.update(_memory_estimate_fields(target, row, dtype))
+    return row
+
+
+def _skip_reason(algebra: AlgebraContext, *, op_name: str, max_full_lanes: int) -> str:
+    full = algebra.spec.full_layout()
+    if op_name.startswith("full_") or op_name == "full_sandwich":
+        if not _full_layout_allowed(full, max_full_lanes):
+            return "full_lane_cap"
+    if op_name in {
+        "bivector_vector_commutator",
+        "bivector_bivector_commutator",
+        "bivector_exp",
+        "versor_vector",
+        "multi_versor_vector",
+        "paired_bivector_vector",
+    } and algebra.n < 2:
+        return "grade_absent"
+    return "not_applicable"
+
+
+def run_benchmarks(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
-    modes = _ordered_modes(args.profiler_compile_modes)
-    ops = _parse_csv(args.profiler_ops)
-    phases = _parse_csv(args.profiler_phases)
-    baseline: dict[tuple[str, int, int, int, str, str, str], dict[str, float]] = {}
+    failures: list[dict[str, Any]] = []
+    skips: list[dict[str, Any]] = []
+    signatures = _resolve_signature_specs(args)
+    dtypes = [resolve_dtype(DTYPES[name] if name in DTYPES else name) for name in _parse_csv(args.dtypes)]
+    batches = _parse_int_csv(args.batch_sizes)
+    ops = _parse_csv(args.ops)
+    modes = _parse_csv(args.compile_modes)
 
-    for dtype in dtypes:
-        dtype_name = _dtype_name(dtype)
-        tf32_modes = _tf32_modes_for_dtype(args, dtype)
-        for n in args.profiler_n_values:
-            if n < 2:
-                print(f"Skipping profiler n={n}: benchmark ops require n >= 2")
-                continue
-            batch = args.profiler_batch_size
-            for op in ops:
-                for channels in _channels_for_op(args, op):
-                    for tf32_mode in tf32_modes:
-                        for phase in phases:
-                            for mode in modes:
-                                _release_memory(args.device)
-                                row: dict[str, Any] = {
-                                    "suite": "fusion",
-                                    "device": args.device,
-                                    "dtype": dtype_name,
-                                    "n": n,
-                                    "dim": 2**n,
-                                    "batch": batch,
-                                    "channels": channels,
-                                    "op": op,
-                                    "phase": phase,
-                                    "compile_mode": mode,
-                                    "tf32_mode": tf32_mode,
-                                    "profiler_steps": args.profiler_steps,
-                                    "status": "ok",
-                                    "error": "",
-                                    "trace_path": "",
-                                }
-                                try:
-                                    with _tf32_context(args.device, tf32_mode):
-                                        row.update(_current_tf32_flags(args.device, tf32_mode))
-                                        algebra = setup_algebra(
-                                            n,
-                                            0,
-                                            device=args.device,
-                                            dtype=dtype,
-                                            exp_policy=_op_exp_policy(op),
-                                            args=args,
-                                        )
-                                        row.update(
-                                            _analytic_forward_metrics(
-                                                algebra,
-                                                op,
-                                                batch,
-                                                channels,
-                                            )
-                                        )
-                                        module = CoreOpModule(algebra, op).eval()
-                                        inputs = _make_speed_inputs(
-                                            algebra,
-                                            op,
-                                            batch,
-                                            channels,
-                                            args.seed + n * 2029 + batch * 43 + channels,
-                                            args.device,
-                                        )
-                                        compiled = _compile_module(module, mode)
-                                        graph_breaks = (
-                                            -1 if mode == "eager"
-                                            else _count_graph_breaks(module, inputs)
-                                        )
-                                        trace_path = None
-                                        if args.export_profiler_traces:
-                                            safe = (
-                                                f"{dtype_name}_n{n}_b{batch}_c{channels}_"
-                                                f"{op}_{phase}_{tf32_mode}_{mode}.json"
-                                            )
-                                            trace_path = out_dir / "traces" / safe
-                                            row["trace_path"] = str(trace_path)
-                                        metrics = _profile_module(
-                                            compiled,
-                                            inputs,
-                                            phase,
-                                            args.device,
-                                            args.profiler_warmup,
-                                            args.profiler_steps,
-                                            trace_path,
-                                        )
-                                    key = (dtype_name, n, batch, channels, op, phase, tf32_mode)
-                                    row.update(metrics)
-                                    row.update(
-                                        {
-                                            "graph_breaks": graph_breaks,
-                                            "aten_reduction_vs_eager": float("nan"),
-                                            "kernel_reduction_vs_eager": float("nan"),
-                                            "cpu_time_speedup_vs_eager": float("nan"),
-                                            "device_time_speedup_vs_eager": float("nan"),
-                                        }
-                                    )
-                                    if mode == "eager":
-                                        baseline[key] = metrics
-                                    elif key in baseline:
-                                        eager = baseline[key]
-                                        aten = float(metrics["aten_ops_per_step"])
-                                        kernels = float(metrics["kernel_events_per_step"])
-                                        cpu_time = float(metrics["profiler_self_cpu_time_ms_per_step"])
-                                        device_time = float(metrics["profiler_self_device_time_ms_per_step"])
-                                        eager_aten = float(eager["aten_ops_per_step"])
-                                        eager_kernels = float(eager["kernel_events_per_step"])
-                                        eager_cpu = float(eager["profiler_self_cpu_time_ms_per_step"])
-                                        eager_device = float(eager["profiler_self_device_time_ms_per_step"])
-                                        row["aten_reduction_vs_eager"] = (
-                                            eager_aten / aten if aten > 0 else float("nan")
-                                        )
-                                        row["kernel_reduction_vs_eager"] = (
-                                            eager_kernels / kernels if kernels > 0 else float("nan")
-                                        )
-                                        row["cpu_time_speedup_vs_eager"] = (
-                                            eager_cpu / cpu_time if cpu_time > 0 else float("nan")
-                                        )
-                                        row["device_time_speedup_vs_eager"] = (
-                                            eager_device / device_time if device_time > 0 else float("nan")
-                                        )
-                                    print(
-                                        f"fusion {args.device:>4s} {dtype_name:>8s} "
-                                        f"n={n:<2d} b={batch:<4d} "
-                                        f"{'c=' + str(channels):<7s} {op:<11s} "
-                                        f"{phase:<8s} {mode:<15s} "
-                                        f"tf32={row['tf32_mode']:<7s} "
-                                        f"aten/step={row['aten_ops_per_step']:.1f} "
-                                        f"kernels/step={row['kernel_events_per_step']:.1f} "
-                                        f"peak_delta={row['peak_delta_mb']:.2f} MB"
-                                    )
-                                except Exception as exc:
-                                    row.update(
-                                        {
-                                            "status": "failed",
-                                            "error": f"{type(exc).__name__}: {exc}",
-                                            "traceback": traceback.format_exc(limit=4),
-                                            "profiler_total_events": float("nan"),
-                                            "profiler_total_events_per_step": float("nan"),
-                                            "aten_ops": float("nan"),
-                                            "aten_ops_per_step": float("nan"),
-                                            "compiled_region_events": float("nan"),
-                                            "compiled_region_events_per_step": float("nan"),
-                                            "kernel_events": float("nan"),
-                                            "kernel_events_per_step": float("nan"),
-                                            "triton_kernel_events": float("nan"),
-                                            "triton_kernel_events_per_step": float("nan"),
-                                            "cuda_runtime_events": float("nan"),
-                                            "cuda_runtime_events_per_step": float("nan"),
-                                            "profiler_self_cpu_time_ms": float("nan"),
-                                            "profiler_self_cpu_time_ms_per_step": float("nan"),
-                                            "profiler_self_device_time_ms": float("nan"),
-                                            "profiler_self_device_time_ms_per_step": float("nan"),
-                                            "profiler_positive_self_cpu_memory_mb": float("nan"),
-                                            "profiler_positive_self_device_memory_mb": float("nan"),
-                                            "allocated_before_mb": float("nan"),
-                                            "allocated_after_mb": float("nan"),
-                                            "peak_allocated_mb": float("nan"),
-                                            "peak_delta_mb": float("nan"),
-                                            "allocated_delta_mb": float("nan"),
-                                            "logical_items_per_call": float("nan"),
-                                            "analytic_forward_flops": float("nan"),
-                                            "analytic_io_bytes": float("nan"),
-                                            "graph_breaks": float("nan"),
-                                            "aten_reduction_vs_eager": float("nan"),
-                                            "kernel_reduction_vs_eager": float("nan"),
-                                            "cpu_time_speedup_vs_eager": float("nan"),
-                                            "device_time_speedup_vs_eager": float("nan"),
-                                        }
-                                    )
-                                    print(
-                                        f"fusion failed {args.device} {dtype_name} "
-                                        f"n={n} b={batch} c={channels} {op} {phase} {mode}: {exc}"
-                                    )
-                                finally:
-                                    rows.append(row)
-                                    try:
-                                        del algebra, module, compiled, inputs
-                                    except UnboundLocalError:
-                                        pass
-                                    _release_memory(args.device)
-    return rows
-
-
-def run_nonsimple_suite(args: argparse.Namespace, dtypes: list[torch.dtype]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    policies = ["balanced", "precise"]
-    for n in args.nonsimple_n_values:
-        if n < 4:
-            continue
-        ref_alg = setup_algebra(n, 0, device="cpu", dtype=torch.float64, exp_policy="precise", args=args)
-        b_ref = _make_commuting_nonsimple_bivector(ref_alg, args.error_batch, args.bivector_scale)
-        r_ref = _exact_commuting_exp(ref_alg, b_ref)
-        bb_ref = ref_alg.geometric_product(b_ref, b_ref)
-        scalar_ref = ref_alg.grade_projection(bb_ref, 0)
-        nonscalar_norm = float((bb_ref - scalar_ref).norm(dim=-1).max().item())
-
+    for spec in signatures:
         for dtype in dtypes:
-            dtype_name = _dtype_name(dtype)
-            for policy in policies:
-                _release_memory(args.device)
-                row: dict[str, Any] = {
-                    "suite": "nonsimple_exp",
-                    "device": args.device,
-                    "dtype": dtype_name,
-                    "n": n,
-                    "dim": 2**n,
-                    "batch": args.error_batch,
-                    "policy": policy,
-                    "status": "ok",
-                    "error": "",
-                    "nonscalar_BB_norm": nonscalar_norm,
-                }
-                try:
-                    algebra = setup_algebra(
-                        n,
-                        0,
-                        device=args.device,
-                        dtype=dtype,
-                        exp_policy=policy,
-                        args=args,
-                    )
-                    b = _make_commuting_nonsimple_bivector(
-                        algebra,
-                        args.error_batch,
-                        args.bivector_scale,
-                    )
-                    _seed_all(args.seed + n * 211 + len(policy), args.device)
-                    stats, r = _time_callable(
-                        algebra.exp,
-                        (b,),
-                        args.device,
-                        max(1, args.warmup // 2),
-                        max(1, min(args.runs, args.error_runs)),
-                        args.min_time_ms,
-                        args.max_runs,
-                    )
-                    unit = algebra.geometric_product(r, algebra.reverse(r))
-                    identity = torch.zeros_like(unit)
-                    identity[..., 0] = 1.0
-                    row.update(
-                        {
-                            **_error_stats(r, r_ref),
-                            "unitarity_error": _error_stats(unit, identity)["max_abs_error"],
-                            "median_ms": stats.median_ms,
-                            "p90_ms": stats.p90_ms,
-                            "timed_runs": stats.runs,
+            for batch in batches:
+                for op_index, op_name in enumerate(ops):
+                    seed = args.seed + spec.n * 1009 + batch * 37 + op_index * 17
+                    try:
+                        algebra, algebra_ms = _time_block(
+                            lambda: _make_algebra(args, spec, dtype),
+                            device=args.device,
+                        )
+                        target, plan_ms = _time_block(
+                            lambda: _build_target(
+                                algebra,
+                                op_name=op_name,
+                                batch=batch,
+                                channels=args.channels,
+                                actions=args.actions,
+                                pairs=args.pairs,
+                                max_full_lanes=args.max_full_lanes,
+                                device=args.device,
+                                dtype=dtype,
+                                seed=seed,
+                            ),
+                            device=args.device,
+                        )
+                        if target is None:
+                            skip = {
+                                "signature": spec.label,
+                                "n": spec.n,
+                                "device": args.device,
+                                "dtype": dtype_name(dtype),
+                                "batch": batch,
+                                "target": op_name,
+                                "reason": _skip_reason(algebra, op_name=op_name, max_full_lanes=args.max_full_lanes),
+                            }
+                            skip.update(_policy_metadata(args))
+                            skips.append(skip)
+                            print(
+                                f"SKIP {spec.label} {dtype_name(dtype)} {op_name}: "
+                                f"{skip['reason']}"
+                            )
+                            continue
+                        base = _base_row(args=args, spec=spec, dtype=dtype, batch=batch, target=target, algebra_ms=algebra_ms, plan_ms=plan_ms)
+                        for mode in modes:
+                            row = dict(base)
+                            row["compile_mode"] = mode
+                            try:
+                                row.update(
+                                    _benchmark_target(
+                                        algebra,
+                                        target,
+                                        mode=mode,
+                                        device=args.device,
+                                        warmup=args.warmup,
+                                        iterations=args.iterations,
+                                        compile_cache_scope=args.compile_cache_scope,
+                                    )
+                                )
+                                rows.append(row)
+                                _print_row(row)
+                            except Exception as exc:  # noqa: BLE001 - benchmark rows record failures instead of aborting.
+                                failure = dict(base)
+                                failure.update({"compile_mode": mode, "error": repr(exc), "compile_ok": False})
+                                failures.append(failure)
+                                print(f"FAIL {spec.label} {dtype_name(dtype)} {op_name} {mode}: {exc}")
+                    except Exception as exc:  # noqa: BLE001 - keep the benchmark matrix moving.
+                        failure = {
+                            "signature": spec.label,
+                            "n": spec.n,
+                            "device": args.device,
+                            "dtype": dtype_name(dtype),
+                            "batch": batch,
+                            "target": op_name,
+                            "error": repr(exc),
                         }
-                    )
-                    print(
-                        f"nonsimple {args.device:>4s} {dtype_name:>8s} "
-                        f"n={n:<2d} {policy:<5s} err={row['max_abs_error']:.2e} "
-                        f"unit={row['unitarity_error']:.2e}"
-                    )
-                except Exception as exc:
-                    row.update(
-                        {
-                            "status": "failed",
-                            "error": f"{type(exc).__name__}: {exc}",
-                            "traceback": traceback.format_exc(limit=4),
-                            "max_abs_error": float("nan"),
-                            "rms_error": float("nan"),
-                            "max_rel_error": float("nan"),
-                            "unitarity_error": float("nan"),
-                            "median_ms": float("nan"),
-                            "p90_ms": float("nan"),
-                            "timed_runs": 0,
-                        }
-                    )
-                    print(f"nonsimple failed {args.device} {dtype_name} n={n} {policy}: {exc}")
-                finally:
-                    rows.append(row)
-                    algebra = None
-                    b = None
-                    r = None
-                    unit = None
-                    identity = None
-                    _release_memory(args.device)
-        del ref_alg, b_ref, r_ref, bb_ref, scalar_ref
-    return rows
+                        failures.append(failure)
+                        print(f"FAIL {spec.label} {dtype_name(dtype)} {op_name}: {exc}")
+                    finally:
+                        _release_memory(args.device)
+    return rows, failures, skips
 
 
-def run_cumulative_suite(args: argparse.Namespace, dtypes: list[torch.dtype]) -> list[dict[str, Any]]:
+def _print_row(row: dict[str, Any]) -> None:
+    print(
+        f"{row['signature']:<12s} {row['dtype']:<8s} {row['target']:<30s} "
+        f"{row['compile_mode']:<12s} {row['executor_family']:<18s} "
+        f"plan={float(row['cold_plan_ms']):7.3f}ms med={float(row['median_ms']):8.3f}ms "
+        f"cache+={row['cache_mutation']} diff={float(row['max_abs_diff']):.2e}"
+    )
+
+
+def _ordered_modes(value: str) -> list[str]:
+    modes = _parse_csv(value)
+    if "eager" not in modes:
+        return modes
+    return ["eager"] + [mode for mode in modes if mode != "eager"]
+
+
+def _diagnostic_suites(value: str) -> list[str]:
+    suites = [suite for suite in _parse_csv(value) if suite.lower() not in {"none", "off"}]
+    unknown = sorted(set(suites) - DIAGNOSTIC_SUITES)
+    if unknown:
+        raise ValueError(f"unknown diagnostic suite {unknown}; valid: {sorted(DIAGNOSTIC_SUITES)}")
+    return suites
+
+
+def _diagnostic_signature_specs(args: argparse.Namespace, dimension_range: str | None) -> list[SignatureSpec]:
+    selected_range = args.dimension_range if dimension_range is None else dimension_range
+    return _signatures_from_range(selected_range, args.signature_families)
+
+
+def _diagnostic_dtypes(args: argparse.Namespace) -> list[torch.dtype]:
+    return [resolve_dtype(DTYPES[name] if name in DTYPES else name) for name in _parse_csv(args.dtypes)]
+
+
+def _diagnostic_gate(row: dict[str, Any], args: argparse.Namespace) -> bool:
+    if row.get("status") != "ok":
+        return False
+    if not bool(row.get("output_finite", True)):
+        return False
+    if not bool(row.get("grad_finite", True)):
+        return False
+    if float(row.get("max_abs_diff") or 0.0) > float(args.correctness_atol):
+        return False
+    if float(row.get("max_rel_diff") or 0.0) > float(args.correctness_rtol):
+        return False
+    if float(row.get("max_abs_error") or 0.0) > float(args.diagnostic_error_atol):
+        return False
+    if float(row.get("max_rel_error") or 0.0) > float(args.diagnostic_error_rtol):
+        return False
+    if float(row.get("norm_drift") or 0.0) > float(args.diagnostic_norm_drift_atol):
+        return False
+    if float(row.get("grade_leak") or 0.0) > float(args.diagnostic_grade_leak_atol):
+        return False
+    if float(row.get("unitarity_error") or 0.0) > float(args.diagnostic_error_atol):
+        return False
+    return True
+
+
+def _diagnostic_failure_row(
+    *,
+    suite: str,
+    args: argparse.Namespace,
+    spec: SignatureSpec,
+    dtype: torch.dtype,
+    batch: int,
+    target: str,
+    exc: Exception,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    row = {
+        "suite": suite,
+        "status": "failed",
+        "error": repr(exc),
+        "signature": spec.label,
+        "n": spec.n,
+        "device": args.device,
+        "dtype": dtype_name(dtype),
+        "batch": batch,
+        "target": target,
+    }
+    row.update(_policy_metadata(args))
+    if extra:
+        row.update(extra)
+    row["diagnostic_gate_ok"] = False
+    return row
+
+
+def run_backward_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    steps_to_sample = set(_sample_steps(args.chain_steps, args.chain_samples))
+    signatures = _diagnostic_signature_specs(args, args.backward_dimension_range)
+    dtypes = _diagnostic_dtypes(args)
+    batches = _parse_int_csv(args.backward_batch_sizes or args.batch_sizes)
+    ops = _parse_csv(args.backward_ops)
+    modes = _ordered_modes(args.backward_compile_modes or args.compile_modes)
 
-    for n in args.cumulative_n_values:
-        if n < 4:
-            continue
-        for batch in args.cumulative_batch_sizes:
-            ref_alg = setup_algebra(n, 0, device="cpu", dtype=torch.float64, exp_policy="precise", args=args)
-            b_ref = _make_commuting_nonsimple_bivector(
-                ref_alg,
-                batch,
-                args.chain_bivector_scale,
-            )
-            x0_ref = torch.zeros(batch, 1, ref_alg.dim, dtype=torch.float64)
-            x0_ref[..., 1] = 1.0
-
-            for dtype in dtypes:
-                dtype_name = _dtype_name(dtype)
-                _release_memory(args.device)
-                try:
-                    algebra = setup_algebra(
-                        n,
-                        0,
-                        device=args.device,
-                        dtype=dtype,
-                        exp_policy="balanced",
-                        args=args,
-                    )
-                    b = _make_commuting_nonsimple_bivector(
-                        algebra,
-                        batch,
-                        args.chain_bivector_scale,
-                    )
-                    rotor = _exact_commuting_exp(algebra, -0.5 * b).detach()
-                    x = torch.zeros(batch, 1, algebra.dim, device=args.device, dtype=dtype)
-                    x[..., 1] = 1.0
-                    grade1_mask = algebra.grade_masks_float[1]
-                    if grade1_mask.dtype != dtype:
-                        grade1_mask = grade1_mask.to(dtype=dtype)
-
-                    _sync(args.device)
-                    start_ns = time.perf_counter_ns()
-                    last: dict[str, Any] = {}
-                    for step in range(1, args.chain_steps + 1):
-                        x = algebra.sandwich_product(rotor, x)
-                        if step not in steps_to_sample:
+    for spec in signatures:
+        for dtype in dtypes:
+            for batch in batches:
+                for op_index, op_name in enumerate(ops):
+                    seed = args.seed + spec.n * 2801 + batch * 79 + op_index * 23
+                    try:
+                        algebra, algebra_ms = _time_block(
+                            lambda: _make_algebra(args, spec, dtype),
+                            device=args.device,
+                        )
+                        target, plan_ms = _time_block(
+                            lambda: _build_target(
+                                algebra,
+                                op_name=op_name,
+                                batch=batch,
+                                channels=args.channels,
+                                actions=args.actions,
+                                pairs=args.pairs,
+                                max_full_lanes=args.max_full_lanes,
+                                device=args.device,
+                                dtype=dtype,
+                                seed=seed,
+                            ),
+                            device=args.device,
+                        )
+                        if target is None:
+                            row = {
+                                "suite": "backward",
+                                "status": "skipped",
+                                "signature": spec.label,
+                                "n": spec.n,
+                                "device": args.device,
+                                "dtype": dtype_name(dtype),
+                                "batch": batch,
+                                "target": op_name,
+                                "reason": _skip_reason(algebra, op_name=op_name, max_full_lanes=args.max_full_lanes),
+                            }
+                            row.update(_policy_metadata(args))
+                            row["diagnostic_gate_ok"] = not args.fail_on_skip
+                            rows.append(row)
+                            print(f"DIAG SKIP backward {spec.label} {dtype_name(dtype)} {op_name}: {row['reason']}")
                             continue
 
-                        step_ref_rotor = _exact_commuting_exp(ref_alg, -0.5 * float(step) * b_ref)
-                        x_ref = ref_alg.sandwich_product(step_ref_rotor, x0_ref)
-                        x_cpu = x.detach().cpu().to(torch.float64)
-                        err = _error_stats(x_cpu, x_ref)
-                        per_sample_norm = x.detach().float().norm(dim=-1)
-                        norm = float(per_sample_norm.mean().item())
-                        norm_drift = float((per_sample_norm - 1.0).abs().max().item())
-                        grade_leak = float((x * (1.0 - grade1_mask)).detach().float().norm().item())
-                        elapsed_ms = (time.perf_counter_ns() - start_ns) / 1e6
+                        expected = target.module(*target.args).detach()
+                        base = _base_row(
+                            args=args,
+                            spec=spec,
+                            dtype=dtype,
+                            batch=batch,
+                            target=target,
+                            algebra_ms=algebra_ms,
+                            plan_ms=plan_ms,
+                        )
+                        for mode in modes:
+                            row = dict(base)
+                            row.update({"suite": "backward", "status": "ok", "compile_mode": mode})
+                            cache_before = _cache_snapshot(algebra)
+                            reset_before = False
+                            reset_after = False
+                            try:
+                                if mode == "eager":
+                                    callable_target = target.module
+                                else:
+                                    reset_before = _reset_compile_cache() if args.compile_cache_scope == "row" else False
+                                    callable_target = _compile_callable(target.module, mode)
+                                timing = _time_forward_backward(
+                                    callable_target,
+                                    target.args,
+                                    device=args.device,
+                                    warmup=args.backward_warmup,
+                                    iterations=args.backward_iterations,
+                                )
+                            finally:
+                                if mode != "eager" and args.compile_cache_scope == "row":
+                                    reset_after = _reset_compile_cache()
+                            cache_after = _cache_snapshot(algebra)
+                            row.update(
+                                {
+                                    "cache_mutation": _cache_delta(cache_before, cache_after),
+                                    "max_abs_diff": _max_abs_diff(timing["output"], expected),
+                                    "max_rel_diff": _max_rel_diff(timing["output"], expected),
+                                    "output_finite": bool(torch.isfinite(timing["output"]).all().item()),
+                                    "grad_norm": timing["grad_norm"],
+                                    "grad_finite": timing["grad_finite"],
+                                    "compile_cache_reset_before": reset_before,
+                                    "compile_cache_reset_after": reset_after,
+                                    **_timing_fields(timing),
+                                }
+                            )
+                            row["diagnostic_gate_ok"] = _diagnostic_gate(row, args)
+                            rows.append(row)
+                            print(
+                                f"DIAG backward {spec.label:<12s} {dtype_name(dtype):<8s} {op_name:<30s} "
+                                f"{mode:<12s} med={float(row['median_ms']):8.3f}ms "
+                                f"grad={float(row['grad_norm']):.2e} gate={row['diagnostic_gate_ok']}"
+                            )
+                    except Exception as exc:  # noqa: BLE001 - diagnostic rows preserve the matrix.
+                        row = _diagnostic_failure_row(
+                            suite="backward",
+                            args=args,
+                            spec=spec,
+                            dtype=dtype,
+                            batch=batch,
+                            target=op_name,
+                            exc=exc,
+                        )
+                        rows.append(row)
+                        print(f"DIAG FAIL backward {spec.label} {dtype_name(dtype)} {op_name}: {exc}")
+                    finally:
+                        _release_memory(args.device)
+    return rows
+
+
+def run_cumulative_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    signatures = [spec for spec in _diagnostic_signature_specs(args, args.cumulative_dimension_range) if spec.n >= 4]
+    dtypes = _diagnostic_dtypes(args)
+    batches = _parse_int_csv(args.cumulative_batch_sizes)
+    sample_steps = set(_sample_steps(args.chain_steps, args.chain_samples))
+
+    for spec in signatures:
+        full_lanes = 1 << spec.n
+        if args.diagnostic_max_full_lanes > 0 and full_lanes > args.diagnostic_max_full_lanes:
+            for dtype in dtypes:
+                row = {
+                    "suite": "cumulative",
+                    "status": "skipped",
+                    "signature": spec.label,
+                    "n": spec.n,
+                    "device": args.device,
+                    "dtype": dtype_name(dtype),
+                    "batch": 0,
+                    "target": "cumulative_action",
+                    "reason": "diagnostic_full_lane_cap",
+                    "diagnostic_gate_ok": not args.fail_on_skip,
+                }
+                row.update(_policy_metadata(args))
+                rows.append(row)
+            continue
+
+        for batch in batches:
+            ref_alg = _make_algebra(args, spec, torch.float64, device="cpu")
+            ref_full = ref_alg.spec.full_layout()
+            ref_even = ref_alg.layout(range(0, ref_alg.n + 1, 2))
+            ref_b = _make_commuting_bivector(ref_alg, batch, args.chain_bivector_scale)
+            ref_reverse = ref_alg.plan_unary(op="reverse", input_layout=ref_even, output_layout=ref_even)
+            ref_action = ref_alg.plan_sandwich_action(layout=ref_full, dtype=torch.float64, device="cpu")
+            ref_x0 = torch.zeros(batch, ref_full.dim, dtype=torch.float64)
+            ref_x0[:, 1] = 1.0
+
+            for dtype in dtypes:
+                try:
+                    algebra = _make_algebra(args, spec, dtype)
+                    full = algebra.spec.full_layout()
+                    even = algebra.layout(range(0, algebra.n + 1, 2))
+                    vector = algebra.layout((1,))
+                    b = _make_commuting_bivector(algebra, batch, args.chain_bivector_scale)
+                    rotor = _exact_commuting_exp(algebra, -0.5 * b, even)
+                    reverse = algebra.plan_unary(op="reverse", input_layout=even, output_layout=even)
+                    action = algebra.plan_sandwich_action(layout=full, dtype=dtype, device=args.device)
+                    left = even.full(rotor)
+                    right = even.full(reverse(rotor))
+                    x = torch.zeros(batch, full.dim, device=args.device, dtype=dtype)
+                    x[:, 1] = 1.0
+                    _sync(args.device)
+                    start = _now_ms()
+                    last_row: dict[str, Any] | None = None
+                    for step in range(1, args.chain_steps + 1):
+                        x = action.batched(left, x, right)
+                        if step not in sample_steps:
+                            continue
+                        ref_rotor = _exact_commuting_exp(ref_alg, -0.5 * float(step) * ref_b, ref_even)
+                        ref_left = ref_even.full(ref_rotor)
+                        ref_right = ref_even.full(ref_reverse(ref_rotor))
+                        ref_x = ref_action.batched(ref_left, ref_x0, ref_right)
+                        errors = _error_stats(x, ref_x)
+                        norm = x.detach().float().norm(dim=-1)
+                        norm_drift = float((norm - 1.0).abs().max().item()) if spec.q == 0 and spec.r == 0 else 0.0
+                        grade_leak = _grade_leak(x, full, 1)
                         row = {
                             "suite": "cumulative",
+                            "status": "ok",
+                            "signature": spec.label,
+                            "n": spec.n,
                             "device": args.device,
-                            "dtype": dtype_name,
-                            "n": n,
-                            "dim": algebra.dim,
+                            "dtype": dtype_name(dtype),
                             "batch": batch,
+                            "target": "cumulative_action",
                             "step": step,
                             "chain_steps": args.chain_steps,
-                            "norm": norm,
+                            "elapsed_ms": _now_ms() - start,
+                            "norm": float(norm.mean().item()),
                             "norm_drift": norm_drift,
                             "grade_leak": grade_leak,
-                            "elapsed_ms": elapsed_ms,
-                            "status": "ok",
-                            "error": "",
-                            **err,
+                            "output_finite": bool(torch.isfinite(x).all().item()),
+                            **errors,
                         }
+                        row.update(_policy_metadata(args))
+                        row["diagnostic_gate_ok"] = _diagnostic_gate(row, args)
                         rows.append(row)
-                        last = row
-                    print(
-                        f"cumulative {args.device:>4s} {dtype_name:>8s} "
-                        f"n={n:<2d} b={batch:<4d} steps={args.chain_steps:<5d} "
-                        f"err={last.get('max_abs_error', float('nan')):.2e} "
-                        f"drift={last.get('norm_drift', float('nan')):.2e}"
-                    )
-                except Exception as exc:
-                    row = {
-                        "suite": "cumulative",
-                        "device": args.device,
-                        "dtype": dtype_name,
-                        "n": n,
-                        "dim": 2**n,
-                        "batch": batch,
-                        "step": 0,
-                        "chain_steps": args.chain_steps,
-                        "norm": float("nan"),
-                        "norm_drift": float("nan"),
-                        "grade_leak": float("nan"),
-                        "elapsed_ms": float("nan"),
-                        "status": "failed",
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "traceback": traceback.format_exc(limit=4),
-                        "max_abs_error": float("nan"),
-                        "rms_error": float("nan"),
-                        "max_rel_error": float("nan"),
-                    }
-                    rows.append(row)
-                    print(f"cumulative failed {args.device} {dtype_name} n={n} b={batch}: {exc}")
-                finally:
-                    try:
-                        del algebra, b, rotor, x, grade1_mask
-                    except UnboundLocalError:
-                        pass
-                    _release_memory(args.device)
-            del ref_alg, b_ref, x0_ref
-    return rows
-
-
-def run_convergence_suite(args: argparse.Namespace, dtypes: list[torch.dtype]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    iterations = args.convergence_iters
-    for n in args.convergence_n_values:
-        if n < 4:
-            continue
-        ref_alg = setup_algebra(n, 0, device="cpu", dtype=torch.float64, exp_policy="precise", args=args)
-        b_ref = _make_commuting_nonsimple_bivector(ref_alg, args.error_batch, args.bivector_scale)
-        r_ref = _exact_commuting_exp(ref_alg, b_ref)
-
-        for dtype in dtypes:
-            dtype_name = _dtype_name(dtype)
-            for fixed_iterations in iterations:
-                _release_memory(args.device)
-                row: dict[str, Any] = {
-                    "suite": "convergence",
-                    "device": args.device,
-                    "dtype": dtype_name,
-                    "n": n,
-                    "dim": 2**n,
-                    "batch": args.error_batch,
-                    "fixed_iterations": fixed_iterations,
-                    "status": "ok",
-                    "error": "",
-                }
-                try:
-                    algebra = setup_algebra(
-                        n,
-                        0,
-                        device=args.device,
-                        dtype=dtype,
-                        exp_policy="precise",
-                        args=args,
-                    )
-                    b = _make_commuting_nonsimple_bivector(
-                        algebra,
-                        args.error_batch,
-                        args.bivector_scale,
-                    )
-
-                    _seed_all(args.seed + n * 307 + fixed_iterations, args.device)
-
-                    def exp_fixed(
-                        inp: torch.Tensor,
-                        alg: AlgebraLike = algebra,
-                        iterations: int = fixed_iterations,
-                    ) -> torch.Tensor:
-                        return compiled_safe_decomposed_exp(
-                            alg,
-                            inp,
-                            fixed_iterations=iterations,
+                        last_row = row
+                    if last_row is not None:
+                        print(
+                            f"DIAG cumulative {spec.label:<12s} {dtype_name(dtype):<8s} b={batch:<4d} "
+                            f"steps={args.chain_steps:<5d} err={float(last_row['max_abs_error']):.2e} "
+                            f"leak={float(last_row['grade_leak']):.2e} gate={last_row['diagnostic_gate_ok']}"
                         )
-
-                    stats, r = _time_callable(
-                        exp_fixed,
-                        (b,),
-                        args.device,
-                        max(1, args.warmup // 2),
-                        max(1, min(args.runs, args.error_runs)),
-                        args.min_time_ms,
-                        args.max_runs,
+                except Exception as exc:  # noqa: BLE001
+                    rows.append(
+                        _diagnostic_failure_row(
+                            suite="cumulative",
+                            args=args,
+                            spec=spec,
+                            dtype=dtype,
+                            batch=batch,
+                            target="cumulative_action",
+                            exc=exc,
+                        )
                     )
-                    unit = algebra.geometric_product(r, algebra.reverse(r))
-                    identity = torch.zeros_like(unit)
-                    identity[..., 0] = 1.0
-                    row.update(
-                        {
-                            **_error_stats(r, r_ref),
-                            "unitarity_error": _error_stats(unit, identity)["max_abs_error"],
-                            "median_ms": stats.median_ms,
-                            "p90_ms": stats.p90_ms,
-                            "timed_runs": stats.runs,
-                        }
-                    )
-                    print(
-                        f"converge {args.device:>4s} {dtype_name:>8s} "
-                        f"n={n:<2d} it={fixed_iterations:<3d} "
-                        f"err={row['max_abs_error']:.2e}"
-                    )
-                except Exception as exc:
-                    row.update(
-                        {
-                            "status": "failed",
-                            "error": f"{type(exc).__name__}: {exc}",
-                            "traceback": traceback.format_exc(limit=4),
-                            "max_abs_error": float("nan"),
-                            "rms_error": float("nan"),
-                            "max_rel_error": float("nan"),
-                            "unitarity_error": float("nan"),
-                            "median_ms": float("nan"),
-                            "p90_ms": float("nan"),
-                            "timed_runs": 0,
-                        }
-                    )
-                    print(
-                        f"convergence failed {args.device} {dtype_name} "
-                        f"n={n} it={fixed_iterations}: {exc}"
-                    )
+                    print(f"DIAG FAIL cumulative {spec.label} {dtype_name(dtype)} b={batch}: {exc}")
                 finally:
-                    rows.append(row)
-                    algebra = None
-                    b = None
-                    r = None
-                    unit = None
-                    identity = None
                     _release_memory(args.device)
-        del ref_alg, b_ref, r_ref
     return rows
 
 
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not rows:
-        path.write_text("")
+def run_convergence_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    signatures = [spec for spec in _diagnostic_signature_specs(args, args.convergence_dimension_range) if spec.n >= 4]
+    dtypes = _diagnostic_dtypes(args)
+    iterations = _parse_int_csv(args.convergence_iters)
+
+    for spec in signatures:
+        for dtype in dtypes:
+            ref_alg = _make_algebra(args, spec, torch.float64, device="cpu")
+            ref_even = ref_alg.layout(range(0, ref_alg.n + 1, 2))
+            ref_b = _make_commuting_bivector(ref_alg, args.diagnostic_batch_size, args.diagnostic_bivector_scale)
+            ref_rotor = _exact_commuting_exp(ref_alg, ref_b, ref_even)
+            for fixed_iterations in iterations:
+                try:
+                    algebra = _make_algebra(args, spec, dtype, fixed_iterations=fixed_iterations)
+                    bivector = algebra.layout((2,))
+                    even = algebra.layout(range(0, algebra.n + 1, 2))
+                    executor = algebra.plan_exp(input_layout=bivector, output_layout=even)
+                    b = _make_commuting_bivector(algebra, args.diagnostic_batch_size, args.diagnostic_bivector_scale)
+                    timing = _time_callable(
+                        executor,
+                        (b,),
+                        device=args.device,
+                        warmup=args.diagnostic_warmup,
+                        iterations=args.diagnostic_iterations,
+                    )
+                    output = timing["output"]
+                    reverse = algebra.plan_unary(op="reverse", input_layout=even, output_layout=even)
+                    product = algebra.plan_product(op="gp", left_layout=even, right_layout=even, output_layout=even)
+                    unit = product(output, reverse(output))
+                    identity = _identity_for_layout(even, like=unit)
+                    errors = _error_stats(output, ref_rotor)
+                    row = {
+                        "suite": "convergence",
+                        "status": "ok",
+                        "signature": spec.label,
+                        "n": spec.n,
+                        "device": args.device,
+                        "dtype": dtype_name(dtype),
+                        "batch": args.diagnostic_batch_size,
+                        "target": "bivector_exp_convergence",
+                        "fixed_iterations": fixed_iterations,
+                        "executor_family": executor.executor_family,
+                        "convergence_active": executor.executor_family == "decomposed",
+                        "unitarity_error": _error_stats(unit, identity)["max_abs_error"],
+                        "output_finite": bool(torch.isfinite(output).all().item()),
+                        **errors,
+                        **_timing_fields(timing),
+                    }
+                    row.update(_policy_metadata(args))
+                    row["diagnostic_gate_ok"] = _diagnostic_gate(row, args)
+                    rows.append(row)
+                    print(
+                        f"DIAG convergence {spec.label:<12s} {dtype_name(dtype):<8s} "
+                        f"it={fixed_iterations:<4d} {executor.executor_family:<16s} "
+                        f"err={float(row['max_abs_error']):.2e} gate={row['diagnostic_gate_ok']}"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    rows.append(
+                        _diagnostic_failure_row(
+                            suite="convergence",
+                            args=args,
+                            spec=spec,
+                            dtype=dtype,
+                            batch=args.diagnostic_batch_size,
+                            target="bivector_exp_convergence",
+                            exc=exc,
+                            extra={"fixed_iterations": fixed_iterations},
+                        )
+                    )
+                    print(f"DIAG FAIL convergence {spec.label} {dtype_name(dtype)} it={fixed_iterations}: {exc}")
+                finally:
+                    _release_memory(args.device)
+    return rows
+
+
+def run_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    suites = _diagnostic_suites(args.extra_suites)
+    if "backward" in suites:
+        rows.extend(run_backward_diagnostics(args))
+    if "cumulative" in suites:
+        rows.extend(run_cumulative_diagnostics(args))
+    if "convergence" in suites:
+        rows.extend(run_convergence_diagnostics(args))
+    return rows
+
+
+def _calibration_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+    return (
+        str(row.get("device", "")),
+        str(row.get("dtype", "")),
+        str(row.get("signature", "")),
+        str(row.get("target", "")),
+        str(row.get("op", "")),
+        str(row.get("layout_case", "")),
+    )
+
+
+def _estimated_working_set_bytes(row: dict[str, Any]) -> int:
+    return int(row.get("static_estimated_bytes") or 0) + int(row.get("output_bytes") or 0)
+
+
+def _row_valid_for_validation(row: dict[str, Any], args: argparse.Namespace) -> bool:
+    if not bool(row.get("compile_ok", False)):
+        return False
+    if not bool(row.get("output_finite", False)):
+        return False
+    if int(row.get("cache_mutation") or 0) > int(args.max_cache_mutation):
+        return False
+    if float(row.get("max_abs_diff") or 0.0) > float(args.correctness_atol):
+        return False
+    if float(row.get("max_rel_diff") or 0.0) > float(args.correctness_rtol):
+        return False
+    max_bytes = int(args.max_estimated_bytes)
+    return max_bytes <= 0 or _estimated_working_set_bytes(row) <= max_bytes
+
+
+def _calibration_summary_rows(
+    rows: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+    skips: list[dict[str, Any]],
+    *,
+    args: argparse.Namespace,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str, str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(_calibration_key(row), []).append(row)
+
+    failure_counts: dict[tuple[str, str, str, str, str, str], int] = {}
+    for failure in failures:
+        key = _calibration_key(failure)
+        failure_counts[key] = failure_counts.get(key, 0) + 1
+
+    skip_counts: dict[tuple[str, str, str, str, str, str], int] = {}
+    for skip in skips:
+        key = _calibration_key(skip)
+        skip_counts[key] = skip_counts.get(key, 0) + 1
+
+    summaries: list[dict[str, Any]] = []
+    for key, group_rows in sorted(grouped.items()):
+        valid_rows = [row for row in group_rows if _row_valid_for_validation(row, args)]
+        ranked_rows = valid_rows if valid_rows else group_rows
+        best = min(ranked_rows, key=lambda row: float(row.get("median_ms", float("inf"))))
+        eager_rows = [row for row in group_rows if row.get("compile_mode") == "eager" and bool(row.get("compile_ok", False))]
+        compiled_rows = [row for row in group_rows if row.get("compile_mode") != "eager"]
+        valid_compiled_rows = [row for row in compiled_rows if _row_valid_for_validation(row, args)]
+
+        eager_median = min((float(row["median_ms"]) for row in eager_rows), default=float("nan"))
+        best_compiled_median = min((float(row["median_ms"]) for row in valid_compiled_rows), default=float("nan"))
+        best_median = float(best.get("median_ms", float("nan")))
+        speedup_vs_eager = eager_median / best_median if math.isfinite(eager_median) and best_median > 0 else float("nan")
+
+        correctness_gate_ok = all(float(row.get("max_abs_diff") or 0.0) <= float(args.correctness_atol) for row in group_rows)
+        relative_gate_ok = all(float(row.get("max_rel_diff") or 0.0) <= float(args.correctness_rtol) for row in group_rows)
+        finite_gate_ok = all(bool(row.get("output_finite", False)) for row in group_rows)
+        cache_gate_ok = all(int(row.get("cache_mutation") or 0) <= int(args.max_cache_mutation) for row in group_rows)
+        max_bytes = int(args.max_estimated_bytes)
+        memory_gate_ok = max_bytes <= 0 or all(_estimated_working_set_bytes(row) <= max_bytes for row in group_rows)
+        failure_count = failure_counts.get(key, 0)
+        fullgraph_gate_ok = failure_count == 0
+        if compiled_rows:
+            fullgraph_gate_ok = (
+                failure_count == 0
+                and bool(valid_compiled_rows)
+                and all(bool(row.get("compile_ok", False)) for row in compiled_rows)
+            )
+
+        summaries.append(
+            {
+                "device": key[0],
+                "dtype": key[1],
+                "signature": key[2],
+                "target": key[3],
+                "op": key[4],
+                "layout_case": key[5],
+                "observed_best_executor_family": best.get("executor_family"),
+                "observed_best_compile_mode": best.get("compile_mode"),
+                "observed_best_median_ms": best_median,
+                "eager_median_ms": eager_median,
+                "best_compiled_median_ms": best_compiled_median,
+                "speedup_vs_eager": speedup_vs_eager,
+                "cold_plan_ms": float(best.get("cold_plan_ms", float("nan"))),
+                "cache_mutation": int(best.get("cache_mutation") or 0),
+                "max_abs_diff": float(best.get("max_abs_diff") or 0.0),
+                "arg_bytes": int(best.get("arg_bytes") or 0),
+                "output_bytes": int(best.get("output_bytes") or 0),
+                "pair_buffer_estimate_bytes": int(best.get("pair_buffer_estimate_bytes") or 0),
+                "estimated_working_set_bytes": _estimated_working_set_bytes(best),
+                "pair_count": int(best.get("pair_count") or 0),
+                "row_count": len(group_rows),
+                "valid_row_count": len(valid_rows),
+                "failure_count": failure_count,
+                "skip_count": skip_counts.get(key, 0),
+                "fullgraph_gate_ok": fullgraph_gate_ok,
+                "correctness_gate_ok": correctness_gate_ok,
+                "relative_gate_ok": relative_gate_ok,
+                "finite_gate_ok": finite_gate_ok,
+                "cache_gate_ok": cache_gate_ok,
+                "memory_gate_ok": memory_gate_ok,
+                "validation_gate_ok": bool(valid_rows)
+                and fullgraph_gate_ok
+                and correctness_gate_ok
+                and relative_gate_ok
+                and finite_gate_ok
+                and cache_gate_ok
+                and memory_gate_ok,
+            }
+        )
+    return summaries
+
+
+def _print_calibration_summary(calibration_rows: list[dict[str, Any]]) -> None:
+    if not calibration_rows:
         return
-    fieldnames = sorted({key for row in rows for key in row.keys()})
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    print("\nCalibration summary:")
+    for row in calibration_rows:
+        print(
+            f"{row['signature']:<12s} {row['dtype']:<8s} {row['target']:<30s} "
+            f"{str(row['observed_best_compile_mode']):<12s} {str(row['observed_best_executor_family']):<18s} "
+            f"med={float(row['observed_best_median_ms']):8.3f}ms "
+            f"speedup={float(row['speedup_vs_eager']):6.2f}x gate={row['validation_gate_ok']}"
+        )
 
 
-def _json_safe(value: Any) -> Any:
+def _json_default(value: Any) -> Any:
     if isinstance(value, torch.dtype):
-        return _dtype_name(value)
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, set):
-        return sorted(_json_safe(v) for v in value)
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
+        return dtype_name(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     return value
 
 
-def _ok_rows(rows: list[dict[str, Any]], suite: str | None = None) -> list[dict[str, Any]]:
-    return [
-        row
-        for row in rows
-        if row.get("status") == "ok" and (suite is None or row.get("suite") == suite)
-    ]
-
-
-def _configure_plots(dpi: int) -> None:
-    plt.rcParams.update(
-        {
-            "figure.dpi": dpi,
-            "savefig.dpi": dpi,
-            "font.size": 10,
-            "axes.titlesize": 12,
-            "axes.labelsize": 10,
-            "legend.fontsize": 8,
-            "axes.grid": True,
-            "grid.alpha": 0.25,
-            "lines.linewidth": 1.8,
-            "lines.markersize": 4,
-        }
-    )
-
-
-def _save_heatmap(
-    matrix: list[list[float]],
-    xlabels: list[str],
-    ylabels: list[str],
-    title: str,
-    cbar_label: str,
-    path: Path,
-    log10: bool = False,
-) -> None:
-    if not matrix:
-        return
-    data = np.array(matrix, dtype=float)
-    if data.size == 0:
-        return
-    finite_positive = data[np.isfinite(data) & (data > 0)]
-    if log10:
-        floor = float(finite_positive.min()) if finite_positive.size else 1e-18
-        data = np.where(np.isfinite(data), np.maximum(data, floor), np.nan)
-        data = np.log10(data)
-        cbar_label = f"log10 {cbar_label}"
-
-    height = max(4.5, 0.45 * len(ylabels) + 2.0)
-    width = max(6.5, 0.75 * len(xlabels) + 2.5)
-    fig, ax = plt.subplots(figsize=(width, height))
-    im = ax.imshow(data, aspect="auto", cmap="viridis")
-    ax.set_xticks(range(len(xlabels)))
-    ax.set_xticklabels(xlabels, rotation=35, ha="right")
-    ax.set_yticks(range(len(ylabels)))
-    ax.set_yticklabels(ylabels)
-    ax.set_title(title)
-    for y in range(len(ylabels)):
-        for x in range(len(xlabels)):
-            value = data[y, x]
-            if not np.isfinite(value):
-                continue
-            label = f"{value:.2f}" if log10 else f"{value:.2g}"
-            ax.text(x, y, label, ha="center", va="center", color="white", fontsize=7)
-    cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label(cbar_label)
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
-
-
-def _heatmap_matrix(
+def _write_artifacts(
     rows: list[dict[str, Any]],
-    x_key: str,
-    y_key: str,
-    value_key: str,
-) -> tuple[list[list[float]], list[str], list[str]]:
-    def sort_key(value: Any) -> tuple[int, float | str]:
-        if isinstance(value, (int, float)):
-            return (0, float(value))
-        return (1, str(value))
+    failures: list[dict[str, Any]],
+    skips: list[dict[str, Any]],
+    diagnostics: list[dict[str, Any]],
+    *,
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    calibration_rows = _calibration_summary_rows(rows, failures, skips, args=args)
+    csv_path = output_dir / "rows.csv"
+    all_columns = sorted({key for row in rows + failures + skips for key in row})
+    with csv_path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=all_columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
-    x_values = sorted({row[x_key] for row in rows}, key=sort_key)
-    y_values = sorted({row[y_key] for row in rows}, key=sort_key)
-    by_key = {(row[y_key], row[x_key]): row for row in rows}
-    matrix: list[list[float]] = []
-    for y in y_values:
-        line = []
-        for x in x_values:
-            row = by_key.get((y, x))
-            if row is None:
-                line.append(float("nan"))
-            else:
-                line.append(float(row.get(value_key, float("nan"))))
-        matrix.append(line)
-    return matrix, [str(x) for x in x_values], [str(y) for y in y_values]
+    calibration_csv_path = output_dir / "calibration_summary.csv"
+    calibration_columns = sorted({key for row in calibration_rows for key in row})
+    with calibration_csv_path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=calibration_columns)
+        writer.writeheader()
+        for row in calibration_rows:
+            writer.writerow(row)
 
-
-def plot_speed(rows: list[dict[str, Any]], out_dir: Path, args: argparse.Namespace) -> None:
-    ok = _ok_rows(rows, "speed")
-    if not ok:
-        return
-    dtype = _dtype_name(args.dtypes_resolved[0])
-    batch = max(args.batch_sizes)
-    filtered = [
-        r
-        for r in ok
-        if _matches_plot_axes(args, r, dtype)
-        and r["batch"] == batch
-        and r["compile_mode"] == "eager"
-    ]
-    if not filtered:
-        return
-    fig, ax = plt.subplots(figsize=(9.5, 5.5))
-    for op in sorted({r["op"] for r in filtered}):
-        pts = sorted((int(r["n"]), float(r["median_ms"])) for r in filtered if r["op"] == op)
-        if not pts:
-            continue
-        xs, ys = zip(*pts)
-        ax.plot(xs, ys, marker="o", label=op)
-    ax.set_yscale("log")
-    ax.set_xlabel("algebra dimension n (basis dim = 2^n)")
-    ax.set_ylabel("median latency (ms)")
-    ax.set_title(f"Core operator scaling, eager, {dtype}, batch={batch}")
-    ax.legend(ncol=2)
-    fig.tight_layout()
-    fig.savefig(out_dir / "operator_latency_by_n.png")
-    plt.close(fig)
-
-
-def plot_compile_speedup(rows: list[dict[str, Any]], out_dir: Path, args: argparse.Namespace) -> None:
-    ok = _ok_rows(rows, "speed")
-    if not ok:
-        return
-    dtype = _dtype_name(args.dtypes_resolved[0])
-    batch = max(args.batch_sizes)
-    n = max(args.n_values)
-    filtered = [
-        r
-        for r in ok
-        if _matches_plot_axes(args, r, dtype)
-        and r["batch"] == batch
-        and r["n"] == n
-    ]
-    if not filtered:
-        return
-    eager_by_op = {
-        r["op"]: float(r["median_ms"])
-        for r in filtered
-        if r["compile_mode"] == "eager" and float(r["median_ms"]) > 0
+    (output_dir / "rows.json").write_text(json.dumps(rows, indent=2, default=_json_default))
+    (output_dir / "calibration_summary.json").write_text(json.dumps(calibration_rows, indent=2, default=_json_default))
+    (output_dir / "failures.json").write_text(json.dumps(failures, indent=2, default=_json_default))
+    (output_dir / "skips.json").write_text(json.dumps(skips, indent=2, default=_json_default))
+    if diagnostics:
+        diagnostics_csv_path = output_dir / "diagnostics.csv"
+        diagnostics_columns = sorted({key for row in diagnostics for key in row})
+        with diagnostics_csv_path.open("w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=diagnostics_columns)
+            writer.writeheader()
+            for row in diagnostics:
+                writer.writerow(row)
+    (output_dir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, default=_json_default))
+    metadata = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "argv": sys.argv,
+        "torch_version": torch.__version__,
+        "device": args.device,
+        "config": vars(args),
+        "policy": _policy_metadata(args),
+        "row_count": len(rows),
+        "failure_count": len(failures),
+        "skip_count": len(skips),
+        "diagnostic_row_count": len(diagnostics),
+        "diagnostic_failure_count": sum(1 for row in diagnostics if row.get("status") == "failed"),
+        "diagnostic_gate_failure_count": sum(1 for row in diagnostics if not bool(row.get("diagnostic_gate_ok", True))),
+        "calibration_row_count": len(calibration_rows),
     }
-    modes = [m for m in _parse_csv(args.compile_modes) if m != "eager"]
-    ops = sorted(eager_by_op)
-    if not modes or not ops:
-        return
-
-    width = 0.8 / max(len(modes), 1)
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    for mode_idx, mode in enumerate(modes):
-        heights = []
-        for op in ops:
-            row = next((r for r in filtered if r["op"] == op and r["compile_mode"] == mode), None)
-            if row is None or float(row["median_ms"]) <= 0:
-                heights.append(float("nan"))
-            else:
-                heights.append(eager_by_op[op] / float(row["median_ms"]))
-        xs = [i + (mode_idx - (len(modes) - 1) / 2) * width for i in range(len(ops))]
-        ax.bar(xs, heights, width=width, label=mode)
-    ax.axhline(1.0, color="black", linewidth=0.9)
-    ax.set_xticks(range(len(ops)))
-    ax.set_xticklabels(ops, rotation=25, ha="right")
-    ax.set_ylabel("speedup vs eager")
-    ax.set_title(f"Compile speedup, {dtype}, n={n}, batch={batch}")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out_dir / "compile_speedup.png")
-    plt.close(fig)
+    (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, default=_json_default))
+    (output_dir / "summary.md").write_text(_summary_markdown(rows, failures, skips, diagnostics, calibration_rows, metadata))
+    print(f"Wrote benchmark artifacts to {output_dir}")
 
 
-def plot_compile_error(rows: list[dict[str, Any]], out_dir: Path, args: argparse.Namespace) -> None:
-    ok = _ok_rows(rows, "speed")
-    if not ok:
-        return
-    dtype = _dtype_name(args.dtypes_resolved[0])
-    batch = max(args.batch_sizes)
-    n = max(args.n_values)
-    filtered = [
-        r
-        for r in ok
-        if _matches_plot_axes(args, r, dtype)
-        and r["batch"] == batch
-        and r["n"] == n
-        and r["compile_mode"] != "eager"
-    ]
-    if not filtered:
-        return
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    by_mode = sorted({r["compile_mode"] for r in filtered})
-    by_op = sorted({r["op"] for r in filtered})
-    width = 0.8 / max(len(by_mode), 1)
-    for mode_idx, mode in enumerate(by_mode):
-        ys = []
-        for op in by_op:
-            row = next((r for r in filtered if r["op"] == op and r["compile_mode"] == mode), None)
-            value = float(row["max_abs_error"]) if row is not None else float("nan")
-            ys.append(max(value, 1e-18))
-        xs = [i + (mode_idx - (len(by_mode) - 1) / 2) * width for i in range(len(by_op))]
-        ax.bar(xs, ys, width=width, label=mode)
-    ax.set_yscale("log")
-    ax.set_xticks(range(len(by_op)))
-    ax.set_xticklabels(by_op, rotation=25, ha="right")
-    ax.set_ylabel("max abs error vs eager")
-    ax.set_title(f"Compile numerical parity, {dtype}, n={n}, batch={batch}")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out_dir / "compile_error_vs_eager.png")
-    plt.close(fig)
-
-
-def plot_nonsimple(rows: list[dict[str, Any]], out_dir: Path) -> None:
-    ok = _ok_rows(rows, "nonsimple_exp")
-    if not ok:
-        return
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-    for dtype in sorted({r["dtype"] for r in ok}):
-        for policy in sorted({r["policy"] for r in ok}):
-            pts = sorted(
-                (int(r["n"]), max(float(r["max_abs_error"]), 1e-18))
-                for r in ok
-                if r["dtype"] == dtype and r["policy"] == policy
-            )
-            if pts:
-                xs, ys = zip(*pts)
-                ax.plot(xs, ys, marker="o", label=f"{policy} / {dtype}")
-    ax.set_yscale("log")
-    ax.set_xlabel("algebra dimension n")
-    ax.set_ylabel("max abs error vs commuting-plane reference")
-    ax.set_title("Non-simple bivector exp error (n >= 4)")
-    ax.legend(ncol=2)
-    fig.tight_layout()
-    fig.savefig(out_dir / "nonsimple_exp_error.png")
-    plt.close(fig)
-
-
-def plot_cumulative(rows: list[dict[str, Any]], out_dir: Path) -> None:
-    ok = _ok_rows(rows, "cumulative")
-    if not ok:
-        return
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-    for dtype in sorted({r["dtype"] for r in ok}):
-        for n in sorted({int(r["n"]) for r in ok}):
-            for batch in sorted({int(r.get("batch", 1)) for r in ok if r["dtype"] == dtype and int(r["n"]) == n}):
-                pts = sorted(
-                    (int(r["step"]), max(float(r["max_abs_error"]), 1e-18))
-                    for r in ok
-                    if r["dtype"] == dtype
-                    and int(r["n"]) == n
-                    and int(r.get("batch", 1)) == batch
-                )
-                if pts:
-                    xs, ys = zip(*pts)
-                    ax.plot(xs, ys, marker=".", label=f"n={n} b={batch} / {dtype}")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("chain step")
-    ax.set_ylabel("max abs error vs float64 single-exp reference")
-    ax.set_title("Cumulative sandwich error by precision")
-    ax.legend(ncol=2)
-    fig.tight_layout()
-    fig.savefig(out_dir / "cumulative_error.png")
-    plt.close(fig)
-
-
-def plot_convergence(rows: list[dict[str, Any]], out_dir: Path) -> None:
-    ok = _ok_rows(rows, "convergence")
-    if not ok:
-        return
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-    for dtype in sorted({r["dtype"] for r in ok}):
-        for n in sorted({int(r["n"]) for r in ok}):
-            pts = sorted(
-                (
-                    int(r["fixed_iterations"]),
-                    max(float(r["max_abs_error"]), 1e-18),
-                )
-                for r in ok
-                if r["dtype"] == dtype and int(r["n"]) == n
-            )
-            if pts:
-                xs, ys = zip(*pts)
-                ax.plot(xs, ys, marker="o", label=f"n={n} / {dtype}")
-    ax.set_xscale("log", base=2)
-    ax.set_yscale("log")
-    ax.set_xlabel("fixed power-iteration steps")
-    ax.set_ylabel("max abs exp error")
-    ax.set_title("Compiled-safe decomposed exp convergence")
-    ax.legend(ncol=2)
-    fig.tight_layout()
-    fig.savefig(out_dir / "decomposed_exp_convergence.png")
-    plt.close(fig)
-
-
-def plot_stability(rows: list[dict[str, Any]], out_dir: Path, args: argparse.Namespace) -> None:
-    ok = _ok_rows(rows, "stability")
-    if not ok:
-        return
-    dtype = _dtype_name(args.dtypes_resolved[0])
-    filtered: list[dict[str, Any]] = []
-    for row in ok:
-        if row["dtype"] != dtype:
-            continue
-        ratio = float(row.get("residual_to_tolerance", float("nan")))
-        if not math.isfinite(ratio):
-            ratio = 1e6
-        plot_row = dict(row)
-        plot_row["plot_ratio"] = max(ratio, 1e-18)
-        filtered.append(plot_row)
-    if not filtered:
-        return
-    matrix, xlabels, ylabels = _heatmap_matrix(
-        filtered,
-        "signature",
-        "case",
-        "plot_ratio",
-    )
-    _save_heatmap(
-        matrix,
-        xlabels,
-        ylabels,
-        f"Stability residual/tolerance, {dtype}",
-        "residual / tolerance",
-        out_dir / "stability_residual_ratio.png",
-        log10=True,
-    )
-
-
-def plot_backward(rows: list[dict[str, Any]], out_dir: Path, args: argparse.Namespace) -> None:
-    ok = _ok_rows(rows, "backward")
-    if not ok:
-        return
-    dtype = _dtype_name(args.dtypes_resolved[0])
-    batch = max(args.backward_batch_sizes)
-    filtered = [
-        row
-        for row in ok
-        if _matches_plot_axes(args, row, dtype)
-        and row["batch"] == batch
-        and row["compile_mode"] == "eager"
-    ]
-    if not filtered:
-        return
-    fig, ax = plt.subplots(figsize=(9.5, 5.5))
-    for op in sorted({row["op"] for row in filtered}):
-        pts = sorted(
-            (int(row["n"]), float(row["median_ms"]))
-            for row in filtered
-            if row["op"] == op
-        )
-        if pts:
-            xs, ys = zip(*pts)
-            ax.plot(xs, ys, marker="o", label=op)
-    ax.set_yscale("log")
-    ax.set_xlabel("algebra dimension n (basis dim = 2^n)")
-    ax.set_ylabel("forward+backward median latency (ms)")
-    ax.set_title(f"Backward-pass scaling, eager, {dtype}, batch={batch}")
-    ax.legend(ncol=2)
-    fig.tight_layout()
-    fig.savefig(out_dir / "backward_latency_by_n.png")
-    plt.close(fig)
-
-
-def plot_fusion(rows: list[dict[str, Any]], out_dir: Path, args: argparse.Namespace) -> None:
-    ok = _ok_rows(rows, "fusion")
-    if not ok:
-        return
-    dtype = _dtype_name(args.dtypes_resolved[0])
-    n = max(args.profiler_n_values)
-    batch = args.profiler_batch_size
-    filtered = [
-        row
-        for row in ok
-        if _matches_plot_axes(args, row, dtype)
-        and int(row["n"]) == n
-        and int(row["batch"]) == batch
-        and row["phase"] == "forward"
-    ]
-    if not filtered:
-        return
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    modes = [mode for mode in _parse_csv(args.profiler_compile_modes) if mode != "eager"]
-    ops = sorted({row["op"] for row in filtered})
-    width = 0.8 / max(len(modes), 1)
-    for mode_idx, mode in enumerate(modes):
-        ys = []
-        for op in ops:
-            row = next(
-                (
-                    item
-                    for item in filtered
-                    if item["op"] == op and item["compile_mode"] == mode
-                ),
-                None,
-            )
-            ys.append(
-                float(row["aten_reduction_vs_eager"])
-                if row is not None
-                else float("nan")
-            )
-        xs = [i + (mode_idx - (len(modes) - 1) / 2) * width for i in range(len(ops))]
-        ax.bar(xs, ys, width=width, label=mode)
-    ax.axhline(1.0, color="black", linewidth=0.9)
-    ax.set_xticks(range(len(ops)))
-    ax.set_xticklabels(ops, rotation=25, ha="right")
-    ax.set_ylabel("aten op-count reduction vs eager")
-    ax.set_title(f"Profiler fusion proxy, {dtype}, n={n}, batch={batch}")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out_dir / "profiler_fusion_reduction.png")
-    plt.close(fig)
-
-
-def plot_heatmaps(rows: list[dict[str, Any]], out_dir: Path, args: argparse.Namespace) -> None:
-    dtype = _dtype_name(args.dtypes_resolved[0])
-
-    speed_rows = [
-        row
-        for row in _ok_rows(rows, "speed")
-        if _matches_plot_axes(args, row, dtype)
-        and row["compile_mode"] == "eager"
-        and int(row["batch"]) == max(args.batch_sizes)
-    ]
-    matrix, xlabels, ylabels = _heatmap_matrix(speed_rows, "n", "op", "median_ms")
-    _save_heatmap(
-        matrix,
-        xlabels,
-        ylabels,
-        f"Forward latency heatmap, eager, {dtype}",
-        "median ms",
-        out_dir / "heatmap_forward_latency.png",
-        log10=True,
-    )
-
-    backward_rows = [
-        row
-        for row in _ok_rows(rows, "backward")
-        if _matches_plot_axes(args, row, dtype)
-        and row["compile_mode"] == "eager"
-        and int(row["batch"]) == max(args.backward_batch_sizes)
-    ]
-    matrix, xlabels, ylabels = _heatmap_matrix(backward_rows, "n", "op", "median_ms")
-    _save_heatmap(
-        matrix,
-        xlabels,
-        ylabels,
-        f"Forward+backward latency heatmap, eager, {dtype}",
-        "median ms",
-        out_dir / "heatmap_backward_latency.png",
-        log10=True,
-    )
-
-    fusion_rows = [
-        row
-        for row in _ok_rows(rows, "fusion")
-        if _matches_plot_axes(args, row, dtype)
-        and row["compile_mode"] == "eager"
-        and row["phase"] == "backward"
-    ]
-    matrix, xlabels, ylabels = _heatmap_matrix(
-        fusion_rows,
-        "n",
-        "op",
-        "peak_delta_mb",
-    )
-    _save_heatmap(
-        matrix,
-        xlabels,
-        ylabels,
-        f"Peak allocation heatmap, backward, eager, {dtype}",
-        "peak delta MB",
-        out_dir / "heatmap_peak_allocation.png",
-        log10=False,
-    )
-
-    fusion_forward = [
-        row
-        for row in _ok_rows(rows, "fusion")
-        if _matches_plot_axes(args, row, dtype)
-        and int(row["n"]) == max(args.profiler_n_values)
-        and row["phase"] == "forward"
-        and row["compile_mode"] != "eager"
-    ]
-    matrix, xlabels, ylabels = _heatmap_matrix(
-        fusion_forward,
-        "compile_mode",
-        "op",
-        "aten_reduction_vs_eager",
-    )
-    _save_heatmap(
-        matrix,
-        xlabels,
-        ylabels,
-        f"Fusion proxy heatmap, forward, {dtype}",
-        "aten reduction vs eager",
-        out_dir / "heatmap_fusion_reduction.png",
-        log10=False,
-    )
-
-
-def write_summary(out_dir: Path, rows: list[dict[str, Any]], args: argparse.Namespace) -> None:
-    speed = _ok_rows(rows, "speed")
-    backward = _ok_rows(rows, "backward")
-    fusion = _ok_rows(rows, "fusion")
-    nonsimple = _ok_rows(rows, "nonsimple_exp")
-    cumulative = _ok_rows(rows, "cumulative")
-    convergence = _ok_rows(rows, "convergence")
-    stability = _ok_rows(rows, "stability")
-    stability_not_passed = [r for r in stability if not bool(r.get("passed", False))]
-    failed = [r for r in rows if r.get("status") != "ok"]
-
-    def _num(value: Any, default: float = float("nan")) -> float:
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    def _finite(value: Any) -> bool:
-        return math.isfinite(_num(value))
-
-    def _fmt(value: Any, digits: int = 2, style: str = "f") -> str:
-        number = _num(value)
-        if not math.isfinite(number):
-            return ""
-        return f"{number:.{digits}{style}}"
-
-    def _fmt_ms(value: Any) -> str:
-        return _fmt(value, 4)
-
-    def _fmt_sci(value: Any) -> str:
-        return _fmt(value, 2, "e")
-
-    def _fmt_compact(value: Any) -> str:
-        number = _num(value)
-        if not math.isfinite(number):
-            return ""
-        abs_number = abs(number)
-        for scale, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
-            if abs_number >= scale:
-                return f"{number / scale:.2f}{suffix}"
-        return f"{number:.2f}"
-
-    def _fmt_io_kib(value: Any) -> str:
-        number = _num(value)
-        if not math.isfinite(number):
-            return ""
-        return _fmt_compact(number / 1024.0)
-
-    def _fmt_speedup(row: dict[str, Any], key: str = "speedup_vs_eager") -> str:
-        value = _num(row.get(key))
-        if math.isfinite(value):
-            return f"{value:.2f}x"
-        if row.get("compile_mode") == "eager":
-            return "1.00x"
-        return ""
-
-    def _fmt_ci(row: dict[str, Any]) -> str:
-        low = _num(row.get("speedup_vs_eager_ci_low"))
-        high = _num(row.get("speedup_vs_eager_ci_high"))
-        if not math.isfinite(low) or not math.isfinite(high):
-            return ""
-        return f"{low:.2f}-{high:.2f}x"
-
-    def _md(value: Any) -> str:
-        return str(value).replace("|", "/")
-
-    def _case_label(row: dict[str, Any]) -> str:
-        parts = [str(row.get("dtype", "")), f"n{row.get('n', '')}"]
-        if row.get("batch", "") != "":
-            parts.append(f"b{row.get('batch')}")
-        channels = int(_num(row.get("channels", 0), 0.0))
-        if channels:
-            parts.append(f"c{channels}")
-        for key in ("op", "phase", "policy"):
-            if row.get(key, "") != "":
-                parts.append(str(row[key]))
-        if row.get("fixed_iterations", "") != "":
-            parts.append(f"it{row['fixed_iterations']}")
-        if row.get("compile_mode", "") != "":
-            parts.append(str(row["compile_mode"]))
-        tf32 = str(row.get("tf32_mode", "default"))
-        if tf32 and tf32 != "default":
-            parts.append(f"tf32={tf32}")
-        return " ".join(parts)
-
-    def _best_row(
-        source: list[dict[str, Any]],
-        key: str,
-        *,
-        highest: bool = True,
-    ) -> dict[str, Any] | None:
-        candidates = [row for row in source if _finite(row.get(key))]
-        if not candidates:
-            return None
-        selector = max if highest else min
-        return selector(candidates, key=lambda r: _num(r[key]))
-
+def _summary_markdown(
+    rows: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+    skips: list[dict[str, Any]],
+    diagnostics: list[dict[str, Any]],
+    calibration_rows: list[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> str:
     lines = [
-        "# Core Benchmark Dashboard",
+        "# benchmark_core Summary",
         "",
-        f"Generated: {datetime.now().isoformat(timespec='seconds')}",
-        f"PyTorch: {torch.__version__}",
-        f"Device: {args.device}",
-        f"Dtypes: {', '.join(_dtype_name(d) for d in args.dtypes_resolved)}",
-        (
-            f"Rows: {len(rows)} total, {len(failed)} failed, "
-            f"{len(stability_not_passed)} stability non-pass"
-        ),
+        f"- created: {metadata['created_at']}",
+        f"- torch: {metadata['torch_version']}",
+        f"- device: {metadata['device']}",
+        f"- rows: {len(rows)}",
+        f"- failures: {len(failures)}",
+        f"- skips: {len(skips)}",
+        f"- diagnostic rows: {len(diagnostics)}",
+        f"- calibration rows: {len(calibration_rows)}",
+        f"- tier: {metadata['policy']['tier']}",
+        f"- dimension range: {metadata['policy']['dimension_range']}",
+        f"- policy unlocked: {metadata['policy']['policy_unlocked']}",
         "",
-    ]
-
-    suite_specs = [
-        ("speed", speed, "speed.csv"),
-        ("backward", backward, "backward.csv"),
-        ("fusion", fusion, "fusion.csv"),
-        ("nonsimple_exp", nonsimple, "nonsimple_exp.csv"),
-        ("cumulative", cumulative, "cumulative.csv"),
-        ("convergence", convergence, "convergence.csv"),
-        ("stability", stability, "stability.csv"),
-    ]
-    lines += [
-        "## Run Snapshot",
+        "## Calibration Summary",
         "",
-        "| suite | ok rows | failed rows | detail CSV |",
-        "|-------|---------|-------------|------------|",
+        "| signature | dtype | target | observed best mode | family | median ms | speedup vs eager | workset bytes | gate |",
+        "|---|---|---|---|---|---:|---:|---:|---|",
     ]
-    for suite, ok_rows, csv_name in suite_specs:
-        total = sum(1 for row in rows if row.get("suite") == suite)
-        fail_count = sum(1 for row in rows if row.get("suite") == suite and row.get("status") != "ok")
-        detail = f"`{csv_name}`" if total else ""
-        lines.append(f"| {suite} | {len(ok_rows)} | {fail_count} | {detail} |")
-    lines += [f"| all | {len(rows) - len(failed)} | {len(failed)} | `all_rows.csv` |", ""]
-
-    lines += [
-        "## KPI Strip",
-        "",
-        "| metric | value | case |",
-        "|--------|-------|------|",
-    ]
-    kpi_specs: list[tuple[str, list[dict[str, Any]], str, Callable[[Any], str], bool]] = [
-        ("forward min latency", speed, "median_ms", _fmt_ms, False),
-        ("forward max throughput", speed, "items_per_sec", _fmt_compact, True),
-        ("forward max GFLOP/s", speed, "achieved_forward_gflops", lambda v: _fmt(v, 2), True),
-        ("forward max IO GB/s", speed, "achieved_io_gbps", lambda v: _fmt(v, 2), True),
-        ("forward max speedup", speed, "speedup_vs_eager", lambda v: f"{_fmt(v, 2)}x" if _fmt(v, 2) else "", True),
-        ("backward min latency", backward, "median_ms", _fmt_ms, False),
-        ("backward max throughput", backward, "items_per_sec", _fmt_compact, True),
-        ("backward max GFLOP/s proxy", backward, "achieved_forward_gflops", lambda v: _fmt(v, 2), True),
-        ("backward max speedup", backward, "speedup_vs_eager", lambda v: f"{_fmt(v, 2)}x" if _fmt(v, 2) else "", True),
-        ("max aten reduction", fusion, "aten_reduction_vs_eager", lambda v: f"{_fmt(v, 2)}x" if _fmt(v, 2) else "", True),
-        ("max kernel reduction", fusion, "kernel_reduction_vs_eager", lambda v: f"{_fmt(v, 2)}x" if _fmt(v, 2) else "", True),
-        ("max profiler CPU speedup", fusion, "cpu_time_speedup_vs_eager", lambda v: f"{_fmt(v, 2)}x" if _fmt(v, 2) else "", True),
-        ("max profiler device speedup", fusion, "device_time_speedup_vs_eager", lambda v: f"{_fmt(v, 2)}x" if _fmt(v, 2) else "", True),
-        ("max peak allocation delta", fusion, "peak_delta_mb", lambda v: f"{_fmt(v, 2)} MB" if _fmt(v, 2) else "", True),
-    ]
-    for label, source, key, formatter, highest in kpi_specs:
-        row = _best_row(source, key, highest=highest)
-        if row is not None:
-            lines.append(f"| {label} | {formatter(row[key])} | {_md(_case_label(row))} |")
-    if stability:
-        passed = len(stability) - len(stability_not_passed)
-        lines.append(f"| stability pass rate | {passed}/{len(stability)} | {len(stability_not_passed)} non-pass |")
-        worst = _best_row(stability, "residual_to_tolerance", highest=True)
-        if worst is not None:
+    for row in calibration_rows:
+        speedup = float(row["speedup_vs_eager"])
+        speedup_text = f"{speedup:.3f}" if math.isfinite(speedup) else ""
+        lines.append(
+            f"| {row['signature']} | {row['dtype']} | {row['target']} | {row['observed_best_compile_mode']} | "
+            f"{row['observed_best_executor_family']} | {float(row['observed_best_median_ms']):.4f} | {speedup_text} | "
+            f"{row['estimated_working_set_bytes']} | {row['validation_gate_ok']} |"
+        )
+    if skips:
+        lines += ["", "## Skips", "", "| signature | dtype | batch | target | reason |", "|---|---|---:|---|---|"]
+        for skip in skips[:80]:
             lines.append(
-                f"| worst stability residual/tolerance | {_fmt(worst['residual_to_tolerance'], 2)} | "
-                f"{_md(worst.get('dtype', ''))} {_md(worst.get('signature', ''))} {_md(worst.get('case', ''))} |"
+                f"| {skip.get('signature', '')} | {skip.get('dtype', '')} | {skip.get('batch', '')} | "
+                f"{skip.get('target', '')} | {skip.get('reason', '')} |"
+            )
+        if len(skips) > 80:
+            lines.append(f"| ... | ... | ... | ... | {len(skips) - 80} more in `skips.json` |")
+    if diagnostics:
+        lines += [
+            "",
+            "## Diagnostics",
+            "",
+            "| suite | signature | dtype | target | mode/step | median ms | error | gate |",
+            "|---|---|---|---|---|---:|---:|---|",
+        ]
+        for row in diagnostics[:120]:
+            mode_or_step = row.get("compile_mode", row.get("step", row.get("fixed_iterations", "")))
+            median = row.get("median_ms", "")
+            median_text = f"{float(median):.4f}" if isinstance(median, (int, float)) and math.isfinite(float(median)) else ""
+            error = row.get("max_abs_error", row.get("max_abs_diff", ""))
+            error_text = f"{float(error):.3e}" if isinstance(error, (int, float)) and math.isfinite(float(error)) else ""
+            lines.append(
+                f"| {row.get('suite', '')} | {row.get('signature', '')} | {row.get('dtype', '')} | "
+                f"{row.get('target', '')} | {mode_or_step} | {median_text} | {error_text} | "
+                f"{row.get('diagnostic_gate_ok', '')} |"
+            )
+        if len(diagnostics) > 120:
+            lines.append(f"| ... | ... | ... | ... | ... | ... | ... | {len(diagnostics) - 120} more in `diagnostics.json` |")
+    lines += [
+        "",
+        "## Fastest Rows By Target",
+        "",
+        "| signature | dtype | target | mode | family | median ms | cold plan ms | cache mutation |",
+        "|---|---|---|---|---|---:|---:|---:|",
+    ]
+    best: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (str(row["signature"]), str(row["dtype"]), str(row["target"]))
+        if key not in best or float(row["median_ms"]) < float(best[key]["median_ms"]):
+            best[key] = row
+    for row in sorted(best.values(), key=lambda r: (r["signature"], r["dtype"], r["target"])):
+        lines.append(
+            f"| {row['signature']} | {row['dtype']} | {row['target']} | {row['compile_mode']} | "
+            f"{row['executor_family']} | {float(row['median_ms']):.4f} | {float(row['cold_plan_ms']):.4f} | "
+            f"{row['cache_mutation']} |"
+        )
+    if failures:
+        lines += ["", "## Failures", "", "| signature | dtype | target | mode | error |", "|---|---|---|---|---|"]
+        for failure in failures[:50]:
+            lines.append(
+                f"| {failure.get('signature', '')} | {failure.get('dtype', '')} | {failure.get('target', '')} | "
+                f"{failure.get('compile_mode', '')} | {failure.get('error', '')} |"
             )
     lines.append("")
-
-    if not args.skip_plots:
-        plot_links: list[tuple[str, str]] = []
-        if speed:
-            plot_links += [
-                ("Operator latency", "plots/operator_latency_by_n.png"),
-                ("Compile speedup", "plots/compile_speedup.png"),
-                ("Compile parity", "plots/compile_error_vs_eager.png"),
-                ("Forward latency heatmap", "plots/heatmap_forward_latency.png"),
-            ]
-        if backward:
-            plot_links += [
-                ("Backward latency", "plots/backward_latency_by_n.png"),
-                ("Backward latency heatmap", "plots/heatmap_backward_latency.png"),
-            ]
-        if fusion:
-            plot_links += [
-                ("Profiler fusion", "plots/profiler_fusion_reduction.png"),
-                ("Fusion heatmap", "plots/heatmap_fusion_reduction.png"),
-                ("Peak allocation", "plots/heatmap_peak_allocation.png"),
-            ]
-        if nonsimple:
-            plot_links.append(("Non-simple exp error", "plots/nonsimple_exp_error.png"))
-        if cumulative:
-            plot_links.append(("Cumulative error", "plots/cumulative_error.png"))
-        if convergence:
-            plot_links.append(("Exp convergence", "plots/decomposed_exp_convergence.png"))
-        if stability:
-            plot_links.append(("Stability residuals", "plots/stability_residual_ratio.png"))
-        available_plots = [(title, path) for title, path in plot_links if (out_dir / path).exists()]
-        if available_plots:
-            lines += [
-                "## Plot Index",
-                "",
-                "| plot | file |",
-                "|------|------|",
-            ]
-            for title, path in available_plots:
-                lines.append(f"| {title} | [{path}]({path}) |")
-            lines.append("")
-
-    if stability:
-        passed = len(stability) - len(stability_not_passed)
-        lines += [
-            "## Accuracy And Stability",
-            "",
-            f"Passed: **{passed}/{len(stability)}**",
-            "",
-            "| dtype | signature | case | residual | tolerance | residual/tol | passed | note |",
-            "|-------|-----------|------|----------|-----------|--------------|--------|------|",
-        ]
-        sorted_stability = sorted(
-            stability,
-            key=lambda r: (
-                bool(r.get("passed", False)),
-                -_num(r.get("residual_to_tolerance"), float("-inf")),
-                r["dtype"],
-                r["signature"],
-                r["case"],
-            ),
-        )
-        for r in sorted_stability[:32]:
-            mark = "PASS" if bool(r.get("passed", False)) else "FAIL"
-            note = _md(r.get("note", ""))
-            lines.append(
-                f"| {r['dtype']} | {r['signature']} | {r['case']} | "
-                f"{_fmt_sci(r.get('residual'))} | {_fmt_sci(r.get('tolerance'))} | "
-                f"{_fmt(r.get('residual_to_tolerance'), 3)} | "
-                f"{mark} | {note} |"
-            )
-        if len(sorted_stability) > 32:
-            lines.append(
-                f"| ... | ... | ... | ... | ... | ... | ... | "
-                f"{len(sorted_stability) - 32} more rows in `stability.csv` |"
-            )
-        lines.append("")
-
-    if speed:
-        lines += [
-            "## Forward Performance",
-            "",
-            "Best row per dtype/tf32/n/batch/channel/operator, selected by median latency.",
-            "",
-            "| dtype | tf32 | n | dim | batch | ch | op | mode | med ms | p90 ms | items/s | FLOP/call | GF/s | IO KiB | GB/s | speedup | CI | err | breaks |",
-            "|-------|------|---|-----|-------|----|----|------|--------|--------|---------|-----------|------|--------|------|---------|----|-----|--------|",
-        ]
-        keys = sorted(
-            {
-                (
-                    r["dtype"],
-                    r.get("tf32_mode", "default"),
-                    r["n"],
-                    r["batch"],
-                    r.get("channels", 0),
-                    r["op"],
-                )
-                for r in speed
-            }
-        )
-        for key in keys[:80]:
-            candidates = [
-                r
-                for r in speed
-                if (
-                    r["dtype"],
-                    r.get("tf32_mode", "default"),
-                    r["n"],
-                    r["batch"],
-                    r.get("channels", 0),
-                    r["op"],
-                )
-                == key
-                and math.isfinite(float(r["median_ms"]))
-            ]
-            if not candidates:
-                continue
-            best = min(candidates, key=lambda r: float(r["median_ms"]))
-            ci = _fmt_ci(best)
-            lines.append(
-                f"| {key[0]} | {key[1]} | {key[2]} | {best.get('dim', '')} | {key[3]} | {key[4]} | "
-                f"{key[5]} | {best['compile_mode']} | {_fmt_ms(best['median_ms'])} | "
-                f"{_fmt_ms(best.get('p90_ms'))} | {_fmt_compact(best.get('items_per_sec'))} | "
-                f"{_fmt_compact(best.get('analytic_forward_flops'))} | "
-                f"{_fmt(best.get('achieved_forward_gflops'), 2)} | "
-                f"{_fmt_io_kib(best.get('analytic_io_bytes'))} | "
-                f"{_fmt(best.get('achieved_io_gbps'), 2)} | {_fmt_speedup(best)} | "
-                f"{ci} | {_fmt_sci(best.get('max_abs_error'))} | {_fmt(best.get('graph_breaks'), 0)} |"
-            )
-        if len(keys) > 80:
-            lines += ["", f"Showing 80 of {len(keys)} workloads; complete rows are in `speed.csv`."]
-        lines.append("")
-
-    if backward:
-        lines += [
-            "## Backward Performance",
-            "",
-            "GFLOP/s and IO columns use the existing analytic forward-work proxy divided by forward+backward latency.",
-            "",
-            "| dtype | tf32 | n | dim | batch | ch | op | mode | med ms | p90 ms | items/s | fwd FLOP/call | fwd GF/s | IO KiB | GB/s | speedup | CI | grad | err | breaks |",
-            "|-------|------|---|-----|-------|----|----|------|--------|--------|---------|---------------|----------|--------|------|---------|----|------|-----|--------|",
-        ]
-        keys = sorted(
-            {
-                (
-                    r["dtype"],
-                    r.get("tf32_mode", "default"),
-                    r["n"],
-                    r["batch"],
-                    r.get("channels", 0),
-                    r["op"],
-                )
-                for r in backward
-            }
-        )
-        for key in keys[:80]:
-            candidates = [
-                r
-                for r in backward
-                if (
-                    r["dtype"],
-                    r.get("tf32_mode", "default"),
-                    r["n"],
-                    r["batch"],
-                    r.get("channels", 0),
-                    r["op"],
-                )
-                == key
-                and math.isfinite(float(r["median_ms"]))
-            ]
-            if not candidates:
-                continue
-            best = min(candidates, key=lambda r: float(r["median_ms"]))
-            ci = _fmt_ci(best)
-            lines.append(
-                f"| {key[0]} | {key[1]} | {key[2]} | {best.get('dim', '')} | {key[3]} | {key[4]} | "
-                f"{key[5]} | {best['compile_mode']} | {_fmt_ms(best['median_ms'])} | "
-                f"{_fmt_ms(best.get('p90_ms'))} | {_fmt_compact(best.get('items_per_sec'))} | "
-                f"{_fmt_compact(best.get('analytic_forward_flops'))} | "
-                f"{_fmt(best.get('achieved_forward_gflops'), 2)} | "
-                f"{_fmt_io_kib(best.get('analytic_io_bytes'))} | "
-                f"{_fmt(best.get('achieved_io_gbps'), 2)} | {_fmt_speedup(best)} | "
-                f"{ci} | {_fmt_sci(best.get('grad_norm'))} | "
-                f"{_fmt_sci(best.get('max_abs_error'))} | {_fmt(best.get('graph_breaks'), 0)} |"
-            )
-        if len(keys) > 80:
-            lines += ["", f"Showing 80 of {len(keys)} workloads; complete rows are in `backward.csv`."]
-        lines.append("")
-
-    if fusion:
-        lines += [
-            "## Profiler And Fusion",
-            "",
-            "| dtype | tf32 | n | batch | ch | op | phase | mode | breaks | aten/step | kern/step | triton/step | cpu ms/step | dev ms/step | peak MB | aten x | kern x | CPU x | dev x |",
-            "|-------|------|---|-------|----|----|-------|------|--------|-----------|-----------|-------------|-------------|-------------|---------|--------|--------|-------|-------|",
-        ]
-        sorted_fusion = sorted(
-            fusion,
-            key=lambda r: (
-                r["dtype"],
-                r.get("tf32_mode", "default"),
-                int(r["n"]),
-                int(r.get("batch", 0)),
-                int(r.get("channels", 0)),
-                r["op"],
-                r["phase"],
-                r["compile_mode"],
-            ),
-        )
-        for r in sorted_fusion[:120]:
-            lines.append(
-                f"| {r['dtype']} | {r.get('tf32_mode', 'default')} | {r['n']} | "
-                f"{r.get('batch', '')} | {r.get('channels', 0)} | {r['op']} | {r['phase']} | "
-                f"{r['compile_mode']} | {_fmt(r.get('graph_breaks'), 0)} | "
-                f"{_fmt(r.get('aten_ops_per_step'), 1)} | "
-                f"{_fmt(r.get('kernel_events_per_step'), 1)} | "
-                f"{_fmt(r.get('triton_kernel_events_per_step'), 1)} | "
-                f"{_fmt(r.get('profiler_self_cpu_time_ms_per_step'), 3)} | "
-                f"{_fmt(r.get('profiler_self_device_time_ms_per_step'), 3)} | "
-                f"{_fmt(r.get('peak_delta_mb'), 2)} | "
-                f"{_fmt_speedup(r, 'aten_reduction_vs_eager')} | "
-                f"{_fmt_speedup(r, 'kernel_reduction_vs_eager')} | "
-                f"{_fmt_speedup(r, 'cpu_time_speedup_vs_eager')} | "
-                f"{_fmt_speedup(r, 'device_time_speedup_vs_eager')} |"
-            )
-        if len(sorted_fusion) > 120:
-            lines += ["", f"Showing 120 of {len(sorted_fusion)} profiler rows; complete rows are in `fusion.csv`."]
-        lines.append("")
-
-    if nonsimple:
-        lines += [
-            "## Non-Simple Bivector Exp",
-            "",
-            "| dtype | n | policy | med ms | p90 ms | max abs error | unitarity error |",
-            "|-------|---|--------|--------|--------|---------------|-----------------|",
-        ]
-        for r in sorted(nonsimple, key=lambda x: (x["dtype"], int(x["n"]), x["policy"])):
-            lines.append(
-                f"| {r['dtype']} | {r['n']} | {r['policy']} | "
-                f"{_fmt_ms(r.get('median_ms'))} | "
-                f"{_fmt_ms(r.get('p90_ms'))} | "
-                f"{_fmt_sci(r.get('max_abs_error'))} | "
-                f"{_fmt_sci(r.get('unitarity_error'))} |"
-            )
-        lines.append("")
-
-    if cumulative:
-        lines += [
-            "## Cumulative Error At Final Sample",
-            "",
-            "| dtype | n | batch | step | max abs error | norm drift | grade leak | elapsed ms |",
-            "|-------|---|-------|------|---------------|------------|------------|------------|",
-        ]
-        by_key: dict[tuple[str, int, int], dict[str, Any]] = {}
-        for r in cumulative:
-            key = (r["dtype"], int(r["n"]), int(r.get("batch", 1)))
-            if key not in by_key or int(r["step"]) > int(by_key[key]["step"]):
-                by_key[key] = r
-        for (dtype, n, batch), r in sorted(by_key.items()):
-            lines.append(
-                f"| {dtype} | {n} | {batch} | {r['step']} | "
-                f"{_fmt_sci(r.get('max_abs_error'))} | "
-                f"{_fmt_sci(r.get('norm_drift'))} | "
-                f"{_fmt_sci(r.get('grade_leak'))} | "
-                f"{_fmt_ms(r.get('elapsed_ms'))} |"
-            )
-        lines.append("")
-
-    if convergence:
-        lines += [
-            "## Best Convergence Row",
-            "",
-            "| dtype | n | fixed iterations | med ms | p90 ms | max abs error | unitarity error |",
-            "|-------|---|------------------|--------|--------|---------------|-----------------|",
-        ]
-        for dtype in sorted({r["dtype"] for r in convergence}):
-            for n in sorted({int(r["n"]) for r in convergence if r["dtype"] == dtype}):
-                candidates = [r for r in convergence if r["dtype"] == dtype and int(r["n"]) == n]
-                best = min(candidates, key=lambda r: float(r["max_abs_error"]))
-                lines.append(
-                    f"| {dtype} | {n} | {best['fixed_iterations']} | "
-                    f"{_fmt_ms(best.get('median_ms'))} | "
-                    f"{_fmt_ms(best.get('p90_ms'))} | "
-                    f"{_fmt_sci(best.get('max_abs_error'))} | "
-                    f"{_fmt_sci(best.get('unitarity_error'))} |"
-                )
-        lines.append("")
-
-    if failed:
-        lines += [
-            "## Failures",
-            "",
-            "| suite | dtype | n | op/policy | mode | error |",
-            "|-------|-------|---|-----------|------|-------|",
-        ]
-        for r in failed[:80]:
-            op = r.get("op", r.get("case", r.get("policy", r.get("fixed_iterations", ""))))
-            mode = r.get("compile_mode", "")
-            error = str(r.get("error", "")).replace("|", "/")
-            lines.append(
-                f"| {r.get('suite', '')} | {r.get('dtype', '')} | "
-                f"{r.get('n', '')} | {op} | {mode} | {error} |"
-            )
-        if len(failed) > 80:
-            lines.append(f"| ... | ... | ... | ... | ... | {len(failed) - 80} more |")
-        lines.append("")
-
-    (out_dir / "summary.md").write_text("\n".join(lines) + "\n")
+    return "\n".join(lines)
 
 
-def _collect_runtime_metadata(device: str) -> dict[str, Any]:
-    """Capture host/runtime knobs that swing perf 2-3x silently.
-
-    Without these, two runs on the same hardware can produce wildly different
-    numbers and the artifact is not reproducible.
-    """
-    info: dict[str, Any] = {
-        "torch_threads": int(torch.get_num_threads()),
-        "torch_interop_threads": int(torch.get_num_interop_threads()),
-        "env_omp_num_threads": os.environ.get("OMP_NUM_THREADS", ""),
-        "env_mkl_num_threads": os.environ.get("MKL_NUM_THREADS", ""),
-        "anomaly_detection_enabled": bool(torch.is_anomaly_enabled()),
-        "float32_matmul_precision": (
-            torch.get_float32_matmul_precision()
-            if hasattr(torch, "get_float32_matmul_precision")
-            else ""
-        ),
-    }
-    if device.startswith("cuda") and torch.cuda.is_available():
-        idx = int(device.split(":", 1)[1]) if ":" in device else 0
-        props = torch.cuda.get_device_properties(idx)
-        info.update(
-            {
-                "cuda_device_name": torch.cuda.get_device_name(idx),
-                "cuda_capability": f"{props.major}.{props.minor}",
-                "cuda_total_memory_mb": float(props.total_memory) / (1024.0 * 1024.0),
-                "cuda_multi_processor_count": int(props.multi_processor_count),
-                "cuda_runtime_version": torch.version.cuda,
-                "cudnn_available": bool(torch.backends.cudnn.is_available()),
-                "cudnn_version": (
-                    int(torch.backends.cudnn.version())
-                    if torch.backends.cudnn.is_available()
-                    and torch.backends.cudnn.version() is not None
-                    else None
-                ),
-                "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
-                "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
-                "cudnn_allow_tf32": bool(torch.backends.cudnn.allow_tf32),
-                "cuda_matmul_allow_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
-                "cuda_matmul_allow_fp16_reduced_precision_reduction": bool(
-                    getattr(
-                        torch.backends.cuda.matmul,
-                        "allow_fp16_reduced_precision_reduction",
-                        False,
-                    )
-                ),
-            }
-        )
-    elif device == "mps":
-        mps_backend = getattr(torch.backends, "mps", None)
-        info["mps_built"] = bool(mps_backend and mps_backend.is_built())
-        info["mps_available"] = bool(mps_backend and mps_backend.is_available())
-    return info
+def _apply_tier_defaults(args: argparse.Namespace) -> None:
+    if args.quick:
+        args.tier = "smoke"
+    if args.tier not in TIER_PRESETS:
+        raise ValueError(f"unknown tier {args.tier!r}; valid: {sorted(TIER_PRESETS)}")
+    preset = TIER_PRESETS[args.tier]
+    for field in (
+        "dimension_range",
+        "signature_families",
+        "batch_sizes",
+        "ops",
+        "compile_modes",
+        "warmup",
+        "iterations",
+        "channels",
+        "actions",
+        "pairs",
+        "max_full_lanes",
+    ):
+        if getattr(args, field) is None:
+            setattr(args, field, getattr(preset, field))
+    if args.unlock_policy_limits and args.max_full_lanes == preset.max_full_lanes:
+        args.max_full_lanes = 0
 
 
-def make_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Benchmark the clifra core package.")
-    parser.add_argument("--device", default="auto", help="cpu, cuda, mps, or auto")
-    parser.add_argument("--algebra-kernel", default="auto", choices=("auto", "dense", "context"))
-    parser.add_argument("--dense-threshold", type=int, default=8)
-    parser.add_argument("--out", default="benchmarks/results", help="artifact root")
-    parser.add_argument("--sections", default="speed,backward,fusion,nonsimple,cumulative,convergence,stability")
-    parser.add_argument("--n-values", type=_parse_int_csv, default=_parse_int_csv("2,3,4,5,6"))
-    parser.add_argument("--batch-sizes", type=_parse_int_csv, default=_parse_int_csv("1,32"))
-    parser.add_argument("--backward-n-values", type=_parse_int_csv, default=_parse_int_csv("2,3,4,5"))
-    parser.add_argument("--backward-batch-sizes", type=_parse_int_csv, default=_parse_int_csv("1,16"))
-    parser.add_argument("--nonsimple-n-values", type=_parse_int_csv, default=_parse_int_csv("4,5,6"))
-    parser.add_argument("--cumulative-n-values", type=_parse_int_csv, default=_parse_int_csv("4,5,6"))
-    parser.add_argument("--cumulative-batch-sizes", type=_parse_int_csv, default=_parse_int_csv("1,32"))
-    parser.add_argument("--convergence-n-values", type=_parse_int_csv, default=_parse_int_csv("4,5,6"))
-    parser.add_argument("--profiler-n-values", type=_parse_int_csv, default=_parse_int_csv("3,4,5"))
-    parser.add_argument("--stability-signatures", default="2:0:0,1:1:0,2:0:1,2:1:0,3:0:0,4:0:0,4:1:0,6:0:0")
-    parser.add_argument("--dtypes", default="auto", help="auto or comma list: float64,float32,bfloat16,float16")
-    parser.add_argument("--ops", default="gp,wedge,inner,commutator,grade2,reverse,norm_sq,exp,exp_precise,sandwich")
-    parser.add_argument("--backward-ops", default="gp,wedge,inner,commutator,grade2,reverse,norm_sq,exp,sandwich")
-    parser.add_argument("--profiler-ops", default="gp,exp,sandwich")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--device", default="cpu", help="cpu, mps, cuda, cuda:0, or auto")
+    parser.add_argument("--dtypes", default="float32", help="comma-separated dtype names")
+    parser.add_argument("--tier", default="standard", choices=sorted(TIER_PRESETS), help="benchmark matrix preset")
+    parser.add_argument("--dimension-range", default=None, help="inclusive n range such as 3:8; filled by --tier when omitted")
+    parser.add_argument("--n-min", type=int, default=None, help="optional lower n filter applied after tier/signature resolution")
+    parser.add_argument("--n-max", type=int, default=None, help="optional upper n filter applied after tier/signature resolution")
     parser.add_argument(
-        "--stability-cases",
-        default=(
-            "associativity,reverse_involution,grade_projection,rotor_unitarity,"
-            "sandwich_consistency,per_channel_sandwich,exp_policy_consistency,"
-            "large_angle_unitarity,grad_finite"
-        ),
-    )
-    parser.add_argument(
-        "--compile-modes",
-        default="auto",
-        help="auto or comma list: eager,aot_eager,compile,reduce-overhead,max-autotune",
-    )
-    parser.add_argument(
-        "--backward-compile-modes",
-        default="auto",
-        help="auto or comma list: eager,aot_eager,compile,reduce-overhead,max-autotune",
-    )
-    parser.add_argument(
-        "--profiler-compile-modes",
-        default="auto",
-        help="auto or comma list: eager,aot_eager,compile,reduce-overhead,max-autotune",
-    )
-    parser.add_argument("--stability-compile-mode", default="aot_eager")
-    parser.add_argument(
-        "--tf32-modes",
-        default="auto",
-        help="auto or comma list: default,strict,tf32. Applies only to CUDA float32 rows.",
-    )
-    parser.add_argument("--profiler-phases", default="forward,backward")
-    parser.add_argument("--channels", type=int, default=4)
-    parser.add_argument(
-        "--sandwich-channel-values",
-        type=_parse_optional_int_csv,
+        "--signature-families",
         default=None,
-        help=(
-            "Comma list of sandwich channels for speed/backward/profiler. "
-            "Defaults to 32,64,128; --channels remains the stability-suite size."
-        ),
+        help="comma list for generated signatures: euclidean,minkowski,degenerate",
     )
-    parser.add_argument("--runs", type=int, default=20)
-    parser.add_argument("--error-runs", type=int, default=10)
-    parser.add_argument("--warmup", type=int, default=5)
-    parser.add_argument("--min-time-ms", type=float, default=25.0)
-    parser.add_argument("--max-runs", type=int, default=200)
-    parser.add_argument("--backward-runs", type=int, default=10)
-    parser.add_argument("--backward-warmup", type=int, default=3)
-    parser.add_argument("--backward-min-time-ms", type=float, default=25.0)
-    parser.add_argument("--backward-max-runs", type=int, default=100)
-    parser.add_argument("--profiler-batch-size", type=int, default=16)
-    parser.add_argument("--profiler-steps", type=int, default=5)
-    parser.add_argument("--profiler-warmup", type=int, default=2)
-    parser.add_argument("--error-batch", type=int, default=8)
-    parser.add_argument("--bivector-scale", type=float, default=1.0)
-    parser.add_argument("--stability-batch", type=int, default=8)
-    parser.add_argument("--stability-input-scale", type=float, default=0.25)
-    parser.add_argument("--stability-bivector-scale", type=float, default=0.15)
-    parser.add_argument("--stability-large-angle", type=float, default=12.0)
-    parser.add_argument("--chain-bivector-scale", type=float, default=0.025)
-    parser.add_argument("--chain-steps", type=int, default=512)
-    parser.add_argument("--chain-samples", type=int, default=28)
-    parser.add_argument("--convergence-iters", type=_parse_int_csv, default=_parse_int_csv("1,2,3,4,5,6,7,8,16,32,64,96,128"))
+    parser.add_argument("--signatures", default=None, help="explicit comma-separated n, p:q, or p:q:r signatures")
+    parser.add_argument("--batch-sizes", default=None, help="comma-separated batch sizes; filled by --tier when omitted")
+    parser.add_argument("--ops", default=None, help="comma-separated benchmark targets; filled by --tier when omitted")
+    parser.add_argument("--compile-modes", default=None, help="eager,aot_eager,inductor,reduce-overhead")
+    parser.add_argument("--channels", type=int, default=None, help="channel count for action benchmarks")
+    parser.add_argument("--actions", type=int, default=None, help="action count for multi-versor benchmarks")
+    parser.add_argument("--pairs", type=int, default=None, help="rotor-pair count for paired-bivector benchmarks")
+    parser.add_argument("--max-full-lanes", type=int, default=None, help="skip full-layout targets above this lane count; 0 disables this benchmark cap")
+    parser.add_argument("--warmup", type=int, default=None, help="warmup calls before timed iterations")
+    parser.add_argument("--iterations", type=int, default=None, help="timed calls per benchmark row")
     parser.add_argument(
-        "--dtype-probe-n-values",
-        type=_parse_optional_int_csv,
+        "--compile-cache-scope",
+        default="row",
+        choices=("row", "global"),
+        help="row resets torch.compile caches around each compiled row; global preserves cache pressure across rows",
+    )
+    parser.add_argument("--correctness-atol", type=float, default=1e-4, help="max_abs_diff allowed by calibration summary")
+    parser.add_argument("--correctness-rtol", type=float, default=1e-4, help="max_rel_diff allowed by calibration summary")
+    parser.add_argument("--max-cache-mutation", type=int, default=0, help="cache entries allowed during measured forward")
+    parser.add_argument(
+        "--extra-suites",
+        default="",
+        help="optional diagnostics: backward,cumulative,convergence",
+    )
+    parser.add_argument("--backward-ops", default="vector_gp,bivector_exp,versor_vector", help="diagnostic backward targets")
+    parser.add_argument("--backward-dimension-range", default=None, help="dimension range for backward diagnostics")
+    parser.add_argument("--backward-batch-sizes", default=None, help="batch sizes for backward diagnostics")
+    parser.add_argument("--backward-compile-modes", default=None, help="compile modes for backward diagnostics")
+    parser.add_argument("--backward-warmup", type=int, default=1, help="backward diagnostic warmup calls")
+    parser.add_argument("--backward-iterations", type=int, default=3, help="backward diagnostic timed calls")
+    parser.add_argument("--cumulative-dimension-range", default="4:6", help="dimension range for cumulative diagnostics")
+    parser.add_argument("--cumulative-batch-sizes", default="4", help="batch sizes for cumulative diagnostics")
+    parser.add_argument("--chain-steps", type=int, default=128, help="steps in cumulative action diagnostics")
+    parser.add_argument("--chain-samples", type=int, default=8, help="log-spaced cumulative samples")
+    parser.add_argument("--chain-bivector-scale", type=float, default=0.025, help="controlled bivector scale for cumulative diagnostics")
+    parser.add_argument("--convergence-dimension-range", default="4:6", help="dimension range for exp convergence diagnostics")
+    parser.add_argument("--convergence-iters", default="1,2,4,8,16,32,64", help="fixed exp iteration probes")
+    parser.add_argument("--diagnostic-batch-size", type=int, default=4, help="batch size for convergence diagnostics")
+    parser.add_argument("--diagnostic-bivector-scale", type=float, default=0.15, help="controlled bivector scale for convergence diagnostics")
+    parser.add_argument("--diagnostic-warmup", type=int, default=1, help="convergence diagnostic warmup calls")
+    parser.add_argument("--diagnostic-iterations", type=int, default=3, help="convergence diagnostic timed calls")
+    parser.add_argument(
+        "--diagnostic-max-full-lanes",
+        type=int,
         default=None,
-        help="Comma list for dtype support probes. Defaults to the requested benchmark n-values.",
+        help="full-lane cap for diagnostics; defaults to --max-full-lanes",
     )
-    parser.add_argument("--bootstrap-samples", type=int, default=1000)
-    parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--diagnostic-error-atol", type=float, default=1e-3, help="diagnostic max absolute error gate")
+    parser.add_argument("--diagnostic-error-rtol", type=float, default=1e-3, help="diagnostic max relative error gate")
+    parser.add_argument("--diagnostic-norm-drift-atol", type=float, default=1e-3, help="Euclidean cumulative norm drift gate")
+    parser.add_argument("--diagnostic-grade-leak-atol", type=float, default=1e-3, help="cumulative off-grade leak gate")
     parser.add_argument(
-        "--torch-threads",
+        "--max-estimated-bytes",
         type=int,
         default=0,
-        help=(
-            "If > 0, pin torch.set_num_threads to this value before timing. "
-            "Recorded in metadata.json regardless. CPU benchmarks are not "
-            "comparable across machines without a fixed thread count."
-        ),
+        help="optional estimated working-set byte cap for calibration summary; 0 disables the memory gate",
     )
-    parser.add_argument("--plot-dpi", type=int, default=300)
-    parser.add_argument("--skip-plots", action="store_true")
-    parser.add_argument("--export-profiler-traces", action="store_true")
-    return parser
+    parser.add_argument(
+        "--unlock-policy-limits",
+        action="store_true",
+        help="raise planner lane/pair limits and full-table policy limits so requested cases can execute",
+    )
+    parser.add_argument("--max-plan-lanes", type=int, default=None, help="override planner max_lanes for this benchmark")
+    parser.add_argument("--max-plan-pairs", type=int, default=None, help="override planner max_pairs for this benchmark")
+    parser.add_argument("--full-table-max-lanes", type=int, default=None, help="override product policy full_table_max_lanes")
+    parser.add_argument("--fail-on-error", action="store_true", help="exit nonzero if any benchmark row fails")
+    parser.add_argument("--fail-on-gate", action="store_true", help="exit nonzero if any calibration validation gate fails")
+    parser.add_argument("--fail-on-skip", action="store_true", help="exit nonzero if any case is skipped")
+    parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--out", default="benchmarks/results", help="artifact root")
+    parser.add_argument("--no-save", action="store_true", help="print rows without writing artifacts")
+    parser.add_argument("--quick", action="store_true", help="small smoke benchmark matrix")
+    args = parser.parse_args()
+    args.device = _resolve_device(args.device)
+    _apply_tier_defaults(args)
+    if args.diagnostic_max_full_lanes is None:
+        args.diagnostic_max_full_lanes = args.max_full_lanes
+    return args
 
 
 def main() -> None:
-    parser = make_argparser()
-    args = parser.parse_args()
-    args.device = resolve_device(args.device)
-    if not _device_available(args.device):
-        raise SystemExit(f"Requested device is unavailable: {args.device}")
-
-    if args.torch_threads and args.torch_threads > 0:
-        torch.set_num_threads(args.torch_threads)
-
-    args.compile_modes = _resolve_compile_modes(args.compile_modes, args.device)
-    args.backward_compile_modes = _resolve_compile_modes(args.backward_compile_modes, args.device)
-    args.profiler_compile_modes = _resolve_compile_modes(args.profiler_compile_modes, args.device)
-    _tf32_modes_for_dtype(args, torch.float32)
-    if args.sandwich_channel_values is None:
-        args.sandwich_channel_values = [32, 64, 128]
-
-    args.n_values = sorted(set(args.n_values))
-    args.batch_sizes = sorted(set(args.batch_sizes))
-    args.backward_n_values = sorted(set(args.backward_n_values))
-    args.backward_batch_sizes = sorted(set(args.backward_batch_sizes))
-    args.nonsimple_n_values = sorted(set(args.nonsimple_n_values))
-    args.cumulative_n_values = sorted(set(args.cumulative_n_values))
-    args.cumulative_batch_sizes = sorted(set(args.cumulative_batch_sizes))
-    args.convergence_n_values = sorted(set(args.convergence_n_values))
-    args.profiler_n_values = sorted(set(args.profiler_n_values))
-    args.sandwich_channel_values = sorted(set(args.sandwich_channel_values))
-    args.convergence_iters = sorted(set(args.convergence_iters))
-    args.sections = set(_parse_csv(args.sections))
-
-    stability_probe_ns = [spec.n for spec in _parse_signature_csv(args.stability_signatures)]
-    if args.dtype_probe_n_values is None:
-        probe_sources: list[int] = []
-        if "speed" in args.sections:
-            probe_sources += args.n_values
-        if "backward" in args.sections:
-            probe_sources += args.backward_n_values
-        if "nonsimple" in args.sections:
-            probe_sources += args.nonsimple_n_values
-        if "cumulative" in args.sections:
-            probe_sources += args.cumulative_n_values
-        if "convergence" in args.sections:
-            probe_sources += args.convergence_n_values
-        if "fusion" in args.sections or "profiler" in args.sections or "memory" in args.sections:
-            probe_sources += args.profiler_n_values
-        if "stability" in args.sections or "verify" in args.sections:
-            probe_sources += stability_probe_ns
-        args.dtype_probe_n_values = sorted(set(probe_sources or args.n_values))
-    else:
-        args.dtype_probe_n_values = sorted(set(args.dtype_probe_n_values))
-
-    dtypes = _supported_dtypes(args, args.dtypes, args.dtype_probe_n_values)
-    args.dtypes_resolved = dtypes
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = Path(args.out) / f"benchmark_core_{timestamp}"
-    plots_dir = out_dir / "plots"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
-    metadata = {
-        "timestamp": timestamp,
-        "torch": torch.__version__,
-        "device": args.device,
-        "argv": sys.argv,
-        "cwd": os.getcwd(),
-        "runtime": _collect_runtime_metadata(args.device),
-        "args": _json_safe(vars(args)),
-    }
-    (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
-
-    print(
-        f"PyTorch {torch.__version__} | device={args.device} | "
-        f"dtypes={','.join(_dtype_name(d) for d in dtypes)} | out={out_dir}"
-    )
-
-    all_rows: list[dict[str, Any]] = []
-
-    if "speed" in args.sections:
-        print("\n[1/7] operator scaling and compile modes")
-        speed_rows = run_speed_suite(args, dtypes)
-        all_rows.extend(speed_rows)
-        _write_csv(out_dir / "speed.csv", speed_rows)
-
-    if "backward" in args.sections:
-        print("\n[2/7] backward pass")
-        backward_rows = run_backward_suite(args, dtypes)
-        all_rows.extend(backward_rows)
-        _write_csv(out_dir / "backward.csv", backward_rows)
-
-    if "fusion" in args.sections or "profiler" in args.sections or "memory" in args.sections:
-        print("\n[3/7] profiler fusion and peak allocation")
-        fusion_rows = run_fusion_suite(args, dtypes, out_dir)
-        all_rows.extend(fusion_rows)
-        _write_csv(out_dir / "fusion.csv", fusion_rows)
-
-    if "nonsimple" in args.sections:
-        print("\n[4/7] non-simple bivector exp error")
-        nonsimple_rows = run_nonsimple_suite(args, dtypes)
-        all_rows.extend(nonsimple_rows)
-        _write_csv(out_dir / "nonsimple_exp.csv", nonsimple_rows)
-
-    if "cumulative" in args.sections:
-        print("\n[5/7] cumulative sandwich error")
-        cumulative_rows = run_cumulative_suite(args, dtypes)
-        all_rows.extend(cumulative_rows)
-        _write_csv(out_dir / "cumulative.csv", cumulative_rows)
-
-    if "convergence" in args.sections:
-        print("\n[6/7] decomposed exp convergence")
-        convergence_rows = run_convergence_suite(args, dtypes)
-        all_rows.extend(convergence_rows)
-        _write_csv(out_dir / "convergence.csv", convergence_rows)
-
-    if "stability" in args.sections or "verify" in args.sections:
-        print("\n[7/7] algebraic stability verification")
-        stability_rows = run_stability_suite(args, dtypes)
-        all_rows.extend(stability_rows)
-        _write_csv(out_dir / "stability.csv", stability_rows)
-
-    _write_csv(out_dir / "all_rows.csv", all_rows)
-    write_summary(out_dir, all_rows, args)
-
-    if not args.skip_plots:
-        _configure_plots(args.plot_dpi)
-        plot_speed(all_rows, plots_dir, args)
-        plot_compile_speedup(all_rows, plots_dir, args)
-        plot_compile_error(all_rows, plots_dir, args)
-        plot_nonsimple(all_rows, plots_dir)
-        plot_cumulative(all_rows, plots_dir)
-        plot_convergence(all_rows, plots_dir)
-        plot_stability(all_rows, plots_dir, args)
-        plot_backward(all_rows, plots_dir, args)
-        plot_fusion(all_rows, plots_dir, args)
-        plot_heatmaps(all_rows, plots_dir, args)
-        write_summary(out_dir, all_rows, args)
-
-    print(f"\nArtifacts written to {out_dir}")
+    args = parse_args()
+    rows, failures, skips = run_benchmarks(args)
+    diagnostics = run_diagnostics(args)
+    if not rows:
+        if not skips and not diagnostics:
+            raise SystemExit("No benchmark rows were produced.")
+        if not args.no_save:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = Path(args.out) / f"benchmark_core_{timestamp}"
+            _write_artifacts(rows, failures, skips, diagnostics, args=args, output_dir=output_dir)
+        if args.fail_on_skip:
+            raise SystemExit(f"{len(skips)} benchmark skips")
+        diagnostic_failures = [row for row in diagnostics if row.get("status") == "failed"]
+        if args.fail_on_error and diagnostic_failures:
+            raise SystemExit(f"{len(diagnostic_failures)} diagnostic failures")
+        if args.fail_on_gate and not all(bool(row.get("diagnostic_gate_ok", True)) for row in diagnostics):
+            raise SystemExit("one or more diagnostic gates failed")
+        return
+    calibration_rows = _calibration_summary_rows(rows, failures, skips, args=args)
+    _print_calibration_summary(calibration_rows)
+    if not args.no_save:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(args.out) / f"benchmark_core_{timestamp}"
+        _write_artifacts(rows, failures, skips, diagnostics, args=args, output_dir=output_dir)
+    diagnostic_failures = [row for row in diagnostics if row.get("status") == "failed"]
+    if args.fail_on_error and failures:
+        raise SystemExit(f"{len(failures)} benchmark failures")
+    if args.fail_on_error and diagnostic_failures:
+        raise SystemExit(f"{len(diagnostic_failures)} diagnostic failures")
+    if args.fail_on_skip and skips:
+        raise SystemExit(f"{len(skips)} benchmark skips")
+    if args.fail_on_gate and not all(bool(row.get("validation_gate_ok")) for row in calibration_rows):
+        raise SystemExit("one or more calibration gates failed")
+    if args.fail_on_gate and not all(bool(row.get("diagnostic_gate_ok", True)) for row in diagnostics):
+        raise SystemExit("one or more diagnostic gates failed")
 
 
 if __name__ == "__main__":
