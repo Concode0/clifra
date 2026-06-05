@@ -72,10 +72,10 @@ class GeometricAttentionScoreExecutor(nn.Module):
         k_by_channel = self.reverse_executor.forward_compact(k_by_channel)
         product = self.score_product.forward_pairwise_compact(q_by_channel, k_by_channel)
 
-        scalar = torch.index_select(product, -1, self._score_scalar_positions.to(device=product.device))
+        scalar = torch.index_select(product, -1, self._score_scalar_positions)
         score_g0 = scalar.sum(dim=(2, -1))
 
-        bivectors = torch.index_select(product, -1, self._score_bivector_positions.to(device=product.device))
+        bivectors = torch.index_select(product, -1, self._score_bivector_positions)
         if bivectors.shape[-1] > 0:
             score_g2 = bivectors.pow(2).sum(dim=(2, -1)).clamp_min(0.0).sqrt()
         else:

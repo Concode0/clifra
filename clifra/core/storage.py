@@ -97,7 +97,7 @@ class ValueLayout:
     def full_values(self, values: torch.Tensor) -> torch.Tensor:
         """Return full-basis values from values following this contract."""
         self.validate_tensor(values)
-        return self.layout.dense(values) if self.uses_active_lanes else values
+        return self.layout.full(values) if self.uses_active_lanes else values
 
 
 @dataclass(frozen=True)
@@ -352,7 +352,7 @@ def materialize_full(
     values, resolved = active_values(algebra, value, layout=layout, grades=grades)
     if resolved.dim == resolved.spec.dim and resolved.grades == tuple(range(resolved.spec.n + 1)):
         return values
-    return resolved.dense(values)
+    return resolved.full(values)
 
 
 def metric_self_signs(layout: GradeLayout, *, device=None, dtype=None) -> torch.Tensor:
@@ -378,12 +378,6 @@ def hermitian_signs(
         device = getattr(algebra, "device", None)
     if dtype is None:
         dtype = getattr(algebra, "dtype", torch.float32)
-
-    full_signs = getattr(algebra, "_hermitian_signs", None)
-    if full_signs is not None:
-        indices = resolved.indices_tensor(device=full_signs.device)
-        signs = torch.index_select(full_signs, -1, indices)
-        return signs.to(device=device, dtype=dtype)
 
     values = [_hermitian_sign_for_index(resolved.spec, index) for index in resolved.basis_indices]
     return torch.tensor(values, dtype=dtype, device=device)

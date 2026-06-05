@@ -31,9 +31,6 @@ def _hermitian_signs(
     The Hermitian inner product on Cl(p,q) is:
         <A, B>_H = sum_I (conj_sign_I * metric_sign_I) * a_I * b_I
 
-    This is precomputed as ``conj_signs * diagonal(cayley_signs)``
-    and registered as a buffer on the algebra in ``_init_derived_tables()``.
-
     Returns:
         Sign tensor [Dim] with values +1, -1, or 0 (null blades).
     """
@@ -46,7 +43,7 @@ def inner_product(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -> tor
     Computes <A B>_0.
 
     Args:
-        algebra (CliffordAlgebra): The algebra instance.
+        algebra: Layout-first algebra context.
         A (torch.Tensor): First multivector [Batch, Dim].
         B (torch.Tensor): Second multivector [Batch, Dim].
 
@@ -62,7 +59,7 @@ def induced_norm(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
     Computes ||A|| = sqrt(|<A ~A>_0|).
 
     Args:
-        algebra (CliffordAlgebra): The algebra instance.
+        algebra: Layout-first algebra context.
         A (torch.Tensor): Multivector [Batch, Dim].
 
     Returns:
@@ -83,7 +80,7 @@ def geometric_distance(algebra: AlgebraLike, A: torch.Tensor, B: torch.Tensor) -
     dist(A, B) = ||A - B||.
 
     Args:
-        algebra (CliffordAlgebra): The algebra instance.
+        algebra: Layout-first algebra context.
         A (torch.Tensor): First multivector.
         B (torch.Tensor): Second multivector.
 
@@ -100,20 +97,16 @@ def grade_purity(algebra: AlgebraLike, A: torch.Tensor, grade: int) -> torch.Ten
     Purity = ||<A>_k||^2 / ||A||^2.
 
     Args:
-        algebra (CliffordAlgebra): The algebra instance.
+        algebra: Layout-first algebra context.
         A (torch.Tensor): Multivector [..., Dim].
         grade (int): Target grade.
 
     Returns:
         torch.Tensor: Purity score [0, 1].
     """
-    # Compute energies (using standard squared norm of coefficients for stability)
-    grade_masks = getattr(algebra, "grade_masks_float", None)
-    if grade_masks is not None and A.shape[-1] == getattr(algebra, "dim"):
-        mask = grade_masks[int(grade)]
-        if mask.device != A.device or mask.dtype != A.dtype:
-            mask = mask.to(device=A.device, dtype=A.dtype)
-        energy_k = (A * A * mask).sum(dim=-1)
+    if A.shape[-1] == getattr(algebra, "dim"):
+        grade_indices = algebra.layout((int(grade),)).indices_tensor(device=A.device)
+        energy_k = torch.index_select(A, -1, grade_indices).pow(2).sum(dim=-1)
     else:
         A_k = algebra.grade_projection(A, grade)
         energy_k = (A_k**2).sum(dim=-1)
@@ -128,13 +121,13 @@ def mean_active_grade(algebra: AlgebraLike, A: torch.Tensor) -> torch.Tensor:
     Mean Grade = Sum(k * ||<A>_k||^2) / ||A||^2.
 
     Args:
-        algebra (CliffordAlgebra): The algebra instance.
+        algebra: Layout-first algebra context.
         A (torch.Tensor): Multivector.
 
     Returns:
         torch.Tensor: Average grade index.
     """
-    grade_energies = _dense_grade_energies(algebra, A)
+    grade_energies = _full_grade_energies(algebra, A)
     if grade_energies is None:
         energy_total = (A**2).sum(dim=-1).clamp(min=algebra.eps)
         weighted_sum = torch.zeros_like(energy_total)
@@ -457,14 +450,12 @@ def _signs_like(
     return _hermitian_signs(algebra, layout=layout, device=A_values.device, dtype=dtype)
 
 
-def _dense_grade_energies(algebra: AlgebraLike, A: torch.Tensor) -> Optional[torch.Tensor]:
-    grade_index = getattr(algebra, "grade_index", None)
-    if grade_index is None or A.shape[-1] != getattr(algebra, "dim"):
+def _full_grade_energies(algebra: AlgebraLike, A: torch.Tensor) -> Optional[torch.Tensor]:
+    if A.shape[-1] != getattr(algebra, "dim"):
         return None
-    if grade_index.device != A.device:
-        grade_index = grade_index.to(device=A.device)
 
     flat = (A * A).reshape(-1, algebra.dim)
+    grade_index = algebra.layout(range(algebra.n + 1)).grade_indices_tensor(device=A.device)
     idx = grade_index.unsqueeze(0).expand_as(flat)
     energies = flat.new_zeros(flat.shape[0], algebra.n + 1)
     energies.scatter_add_(1, idx, flat)

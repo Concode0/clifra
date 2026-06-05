@@ -10,11 +10,14 @@ import warnings
 from dataclasses import dataclass
 from typing import Optional
 
+import torch
+
 from clifra.core.foundation.basis import basis_count_for_grades, expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.planning.tree import GradePlanTree, build_grade_plan_tree
 
-DENSE_AUTO_MAX_N = 8
-DENSE_EXPLICIT_MAX_N = 12
+FULL_TABLE_AUTO_MAX_N = 8
+FULL_TABLE_EXPLICIT_MAX_N = 12
 
 
 @dataclass(frozen=True)
@@ -53,13 +56,150 @@ class PlanCost:
         return max(self.left_lanes, self.right_lanes, self.output_lanes)
 
 
+@dataclass(frozen=True)
+class ProductExecutionPolicy:
+    """Flexible static cost model for product executor selection.
+
+    The model is deliberately equation-based. Benchmarks can validate and tune
+    these weights, but product dispatch itself only depends on declared layouts,
+    grade-tree metadata, dtype, and backend.
+    """
+
+    cpu_full_table_pair_weight: float = 1.0
+    cpu_sparse_pair_weight: float = 1.5
+    cpu_full_table_path_weight: float = 0.0
+    cpu_sparse_path_weight: float = 5.0
+    cpu_full_table_output_weight: float = 0.05
+    cpu_sparse_output_weight: float = 0.05
+    mps_full_table_pair_weight: float = 1.2
+    mps_sparse_pair_weight: float = 0.9
+    mps_full_table_path_weight: float = 0.0
+    mps_sparse_path_weight: float = 1.0
+    mps_full_table_output_weight: float = 0.03
+    mps_sparse_output_weight: float = 0.03
+    default_full_table_pair_weight: float = 1.0
+    default_sparse_pair_weight: float = 1.25
+    default_full_table_path_weight: float = 0.0
+    default_sparse_path_weight: float = 3.0
+    default_full_table_output_weight: float = 0.05
+    default_sparse_output_weight: float = 0.05
+    memory_cost_unit_bytes: int = 4096
+    full_table_memory_weight: float = 1.0
+    sparse_memory_weight: float = 1.0
+    full_table_max_lanes: int = 4096
+
+
+@dataclass(frozen=True)
+class ProductExecutorCost:
+    """Static executor-selection score for one declared product request."""
+
+    executor_family: str
+    full_table_score: float
+    sparse_score: float
+    full_table_pair_count: int
+    sparse_estimated_pairs: int
+    full_table_estimated_bytes: int
+    sparse_estimated_bytes: int
+    path_count: int
+    backend: str
+    tree: GradePlanTree
+
+    @property
+    def selected_score(self) -> float:
+        """Return the score for the selected executor family."""
+        return self.full_table_score if self.executor_family == "full_table" else self.sparse_score
+
+
 DEFAULT_PLANNING_LIMITS = PlanningLimits()
+DEFAULT_PRODUCT_EXECUTION_POLICY = ProductExecutionPolicy()
 _WARNED_PLAN_COSTS: set[tuple[object, ...]] = set()
 
 
 def planning_limits_for(algebra) -> PlanningLimits:
     """Return per-algebra planning limits, falling back to defaults."""
     return getattr(algebra, "planning_limits", DEFAULT_PLANNING_LIMITS)
+
+
+def product_execution_policy_for(algebra) -> ProductExecutionPolicy:
+    """Return per-algebra product executor policy, falling back to defaults."""
+    return getattr(algebra, "product_execution_policy", DEFAULT_PRODUCT_EXECUTION_POLICY)
+
+
+def estimate_product_executor_cost(
+    algebra,
+    *,
+    op: str,
+    left_layout: GradeLayout,
+    right_layout: GradeLayout,
+    output_layout: GradeLayout,
+    dtype: torch.dtype,
+    device,
+    policy: Optional[ProductExecutionPolicy] = None,
+) -> ProductExecutorCost:
+    """Return static product executor scores and the selected family.
+
+    Sparse execution is always selected for non-full layouts because the
+    full-table executor is defined only for canonical full-lane input and
+    output. Full-layout requests compare full-table and sparse grade-tree
+    equations.
+    """
+    policy = product_execution_policy_for(algebra) if policy is None else policy
+    tree = build_grade_plan_tree(
+        left_layout.spec,
+        op=op,
+        left_grades=left_layout.grades,
+        right_grades=right_layout.grades,
+        output_grades=output_layout.grades,
+    )
+    backend = _device_backend(device)
+    dtype_bytes = _dtype_bytes(dtype)
+    full_table_pair_count = left_layout.dim * right_layout.dim
+    sparse_estimated_pairs = tree.estimated_pairs
+    full_table_estimated_bytes = full_table_pair_count * (8 + dtype_bytes)
+    sparse_estimated_bytes = sparse_estimated_pairs * (24 + dtype_bytes)
+
+    full_table_score = _executor_score(
+        pair_count=full_table_pair_count,
+        path_count=tree.path_count,
+        output_lanes=output_layout.dim,
+        estimated_bytes=full_table_estimated_bytes,
+        pair_weight=_weight(policy, backend, "full_table_pair"),
+        path_weight=_weight(policy, backend, "full_table_path"),
+        output_weight=_weight(policy, backend, "full_table_output"),
+        memory_weight=policy.full_table_memory_weight,
+        memory_cost_unit_bytes=policy.memory_cost_unit_bytes,
+    )
+    sparse_score = _executor_score(
+        pair_count=sparse_estimated_pairs,
+        path_count=tree.path_count,
+        output_lanes=output_layout.dim,
+        estimated_bytes=sparse_estimated_bytes,
+        pair_weight=_weight(policy, backend, "sparse_pair"),
+        path_weight=_weight(policy, backend, "sparse_path"),
+        output_weight=_weight(policy, backend, "sparse_output"),
+        memory_weight=policy.sparse_memory_weight,
+        memory_cost_unit_bytes=policy.memory_cost_unit_bytes,
+    )
+    full_grades = tuple(range(left_layout.spec.n + 1))
+    full_table_supported = (
+        left_layout.grades == full_grades
+        and right_layout.grades == full_grades
+        and output_layout.grades == full_grades
+        and output_layout.dim <= policy.full_table_max_lanes
+    )
+    family = "full_table" if full_table_supported and full_table_score <= sparse_score else "sparse"
+    return ProductExecutorCost(
+        executor_family=family,
+        full_table_score=full_table_score if full_table_supported else float("inf"),
+        sparse_score=sparse_score,
+        full_table_pair_count=full_table_pair_count,
+        sparse_estimated_pairs=sparse_estimated_pairs,
+        full_table_estimated_bytes=full_table_estimated_bytes,
+        sparse_estimated_bytes=sparse_estimated_bytes,
+        path_count=tree.path_count,
+        backend=backend,
+        tree=tree,
+    )
 
 
 def validate_layout_cost(algebra, layout: GradeLayout, *, role: str = "layout") -> GradeLayout:
@@ -185,6 +325,52 @@ def validate_plan_cost(algebra, cost: PlanCost, *, limits: Optional[PlanningLimi
         warnings_to_emit.append(f"basis interactions {cost.pair_count} are near max_pairs={limits.max_pairs}")
     if warnings_to_emit:
         _warn_plan_cost_once(cost, "; ".join(warnings_to_emit))
+
+
+def _executor_score(
+    *,
+    pair_count: int,
+    path_count: int,
+    output_lanes: int,
+    estimated_bytes: int,
+    pair_weight: float,
+    path_weight: float,
+    output_weight: float,
+    memory_weight: float,
+    memory_cost_unit_bytes: int,
+) -> float:
+    memory_units = estimated_bytes / max(int(memory_cost_unit_bytes), 1)
+    return (
+        float(pair_count) * float(pair_weight)
+        + float(path_count) * float(path_weight)
+        + float(output_lanes) * float(output_weight)
+        + float(memory_units) * float(memory_weight)
+    )
+
+
+def _device_backend(device) -> str:
+    if device is None:
+        return "cpu"
+    text = str(device)
+    if text.startswith("mps"):
+        return "mps"
+    if text.startswith("cuda"):
+        return "cuda"
+    if text.startswith("cpu"):
+        return "cpu"
+    return "default"
+
+
+def _dtype_bytes(dtype: torch.dtype) -> int:
+    return torch.empty((), dtype=dtype).element_size()
+
+
+def _weight(policy: ProductExecutionPolicy, backend: str, name: str) -> float:
+    if backend == "cpu":
+        return float(getattr(policy, f"cpu_{name}_weight"))
+    if backend == "mps":
+        return float(getattr(policy, f"mps_{name}_weight"))
+    return float(getattr(policy, f"default_{name}_weight"))
 
 
 def _warn_plan_cost_once(cost: PlanCost, detail: str) -> None:

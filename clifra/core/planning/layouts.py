@@ -21,7 +21,15 @@ from clifra.core.storage import (
     tensor_uses_active_lanes,
 )
 
-_VALID_PRODUCT_OPS = {"gp", "wedge", "inner", "commutator", "anti_commutator"}
+_VALID_PRODUCT_OPS = {
+    "gp",
+    "wedge",
+    "inner",
+    "commutator",
+    "anti_commutator",
+    "left_contraction",
+    "right_contraction",
+}
 
 __all__ = [
     "ProductRequest",
@@ -187,5 +195,8 @@ def resolve_output_layout(
         return output_layout
 
     if output_grades is None:
+        full_grades = tuple(range(spec.n + 1))
+        if left_layout.grades == full_grades and right_layout.grades == full_grades:
+            return spec.full_layout()
         output_grades = expand_output_grades(left_layout.grades, right_layout.grades, spec.n, op=op)
     return spec.layout(output_grades)

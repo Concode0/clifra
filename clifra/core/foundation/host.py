@@ -15,8 +15,17 @@ from clifra.core.execution.action import (
     PairedBivectorActionExecutor,
     VersorActionExecutor,
 )
-from clifra.core.foundation.basis import normalize_grades
+from clifra.core.execution.handles import (
+    FullSandwichActionHandle,
+    MultiVersorActionHandle,
+    PairedBivectorActionHandle,
+    ProductPlanHandle,
+    UnaryPlanHandle,
+    VersorActionHandle,
+)
+from clifra.core.foundation.basis import expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.planning.layouts import normalize_product_op
 from clifra.core.storage import compact_grade_norms
 from clifra.core.storage import hermitian_signs as _hermitian_signs
@@ -103,6 +112,254 @@ class AlgebraHostMixin:
             device=device,
             cache=cache,
         )
+
+    def plan_product(
+        self,
+        *,
+        op: str = "gp",
+        left_grades=None,
+        right_grades=None,
+        output_grades=None,
+        left_layout: Optional[GradeLayout] = None,
+        right_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        dtype: Optional[torch.dtype] = None,
+        device=None,
+        cache: bool = True,
+    ) -> ProductPlanHandle:
+        """Return an active-lane product handle with no runtime request inference."""
+        if dtype is None:
+            dtype = getattr(self, "dtype", torch.float32)
+        if device is None:
+            device = getattr(self, "device", None)
+        left_layout = self._declared_layout(left_grades, left_layout)
+        right_layout = self._declared_layout(right_grades, right_layout)
+        output_layout = self._product_output_layout(
+            op=op,
+            left_layout=left_layout,
+            right_layout=right_layout,
+            output_grades=output_grades,
+            output_layout=output_layout,
+        )
+        executor = self.planner.product_executor_for_layouts(
+            op=normalize_product_op(op),
+            left_layout=left_layout,
+            right_layout=right_layout,
+            output_layout=output_layout,
+            dtype=dtype,
+            device=device,
+            cache=cache,
+        )
+        return ProductPlanHandle(executor)
+
+    def plan_unary(
+        self,
+        *,
+        op: str,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        dtype: Optional[torch.dtype] = None,
+        device=None,
+        cache: bool = True,
+    ) -> UnaryPlanHandle:
+        """Return an active-lane unary handle with no runtime request inference."""
+        if dtype is None:
+            dtype = getattr(self, "dtype", torch.float32)
+        if device is None:
+            device = getattr(self, "device", None)
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout)
+        executor = self.planner.unary_executor(
+            op=op,
+            input_grades=input_layout.grades,
+            output_grades=None if output_layout is None else output_layout.grades,
+            dtype=dtype,
+            device=device,
+            cache=cache,
+        )
+        return UnaryPlanHandle(executor)
+
+    def plan_norm_sq(
+        self,
+        *,
+        grades=None,
+        input_grades=None,
+        layout: Optional[GradeLayout] = None,
+        input_layout: Optional[GradeLayout] = None,
+        dtype: Optional[torch.dtype] = None,
+        device=None,
+        cache: bool = True,
+    ):
+        """Return a diagonal norm executor for declared active-lane values."""
+        if input_grades is None:
+            input_grades = grades
+        if input_layout is None:
+            input_layout = layout
+        if dtype is None:
+            dtype = getattr(self, "dtype", torch.float32)
+        if device is None:
+            device = getattr(self, "device", None)
+        input_layout = self._declared_layout(input_grades, input_layout)
+        return self.planner.norm_sq_executor_for_layout(
+            input_layout=input_layout,
+            dtype=dtype,
+            device=device,
+            cache=cache,
+        )
+
+    def plan_dual(
+        self,
+        *,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        dtype: Optional[torch.dtype] = None,
+        device=None,
+        cache: bool = True,
+    ):
+        """Return a dual/pseudoscalar permutation executor for active-lane values."""
+        if dtype is None:
+            dtype = getattr(self, "dtype", torch.float32)
+        if device is None:
+            device = getattr(self, "device", None)
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout)
+        return self.planner.dual_executor_for_layout(
+            input_layout=input_layout,
+            output_layout=output_layout,
+            dtype=dtype,
+            device=device,
+            cache=cache,
+        )
+
+    def plan_exp(
+        self,
+        *,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        dtype: Optional[torch.dtype] = None,
+        device=None,
+        cache: bool = True,
+    ):
+        """Return a bivector exponential executor for active-lane values."""
+        if dtype is None:
+            dtype = getattr(self, "dtype", torch.float32)
+        if device is None:
+            device = getattr(self, "device", None)
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout)
+        if output_layout is None:
+            output_layout = self.layout(range(0, self.n + 1, 2))
+        if input_layout.grades != (2,):
+            raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
+        return self.planner.bivector_exp_executor_for_layouts(
+            input_layout=input_layout,
+            output_layout=output_layout,
+            dtype=dtype,
+            device=device,
+            cache=cache,
+        )
+
+    def plan_sandwich_action(
+        self,
+        *,
+        layout: Optional[GradeLayout] = None,
+        dtype: Optional[torch.dtype] = None,
+        device=None,
+        cache: bool = True,
+    ) -> FullSandwichActionHandle:
+        """Return a full-layout sandwich action handle."""
+        if dtype is None:
+            dtype = getattr(self, "dtype", torch.float32)
+        if device is None:
+            device = getattr(self, "device", None)
+        layout = self._full_sandwich_layout(layout)
+        executor = self.planner.full_sandwich_action_executor_for_layout(
+            layout=layout,
+            dtype=dtype,
+            device=device,
+            cache=cache,
+        )
+        return FullSandwichActionHandle(executor)
+
+    def plan_versor_action(
+        self,
+        *,
+        grade: int,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        parameter_layout: Optional[GradeLayout] = None,
+    ) -> VersorActionHandle:
+        """Return a grade-1 or grade-2 versor action handle."""
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout) or input_layout
+        parameter_layout = parameter_layout or self.layout((int(grade),))
+        executor = VersorActionExecutor(
+            self,
+            grade=int(grade),
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+        )
+        return VersorActionHandle(executor)
+
+    def plan_multi_versor_action(
+        self,
+        *,
+        grade: int,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        parameter_layout: Optional[GradeLayout] = None,
+    ) -> MultiVersorActionHandle:
+        """Return a weighted multi-versor action handle."""
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout) or input_layout
+        parameter_layout = parameter_layout or self.layout((int(grade),))
+        executor = MultiVersorActionExecutor(
+            self,
+            grade=int(grade),
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+        )
+        return MultiVersorActionHandle(executor)
+
+    def plan_paired_bivector_action(
+        self,
+        *,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        parameter_layout: Optional[GradeLayout] = None,
+    ) -> PairedBivectorActionHandle:
+        """Return an independent left/right bivector action handle."""
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout)
+        parameter_layout = parameter_layout or self.layout((2,))
+        plan = self.planner.paired_bivector_action_plan(
+            input_layout=input_layout,
+            output_layout=output_layout,
+            parameter_layout=parameter_layout,
+        )
+        executor = PairedBivectorActionExecutor(
+            self,
+            input_layout=plan.input_layout,
+            output_layout=plan.output_layout,
+            parameter_layout=plan.parameter_layout,
+            rotor_layout=plan.rotor_layout,
+            middle_layout=plan.middle_layout,
+        )
+        return PairedBivectorActionHandle(executor)
 
     def projected_product(
         self,
@@ -232,6 +489,22 @@ class AlgebraHostMixin:
         """Projected anti-commutator convenience wrapper."""
         return self.projected_product(A, B, op="anti_commutator", **kwargs)
 
+    def projected_left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Projected left contraction convenience wrapper."""
+        return self.projected_product(A, B, op="left_contraction", **kwargs)
+
+    def projected_right_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Projected right contraction convenience wrapper."""
+        return self.projected_product(A, B, op="right_contraction", **kwargs)
+
+    def left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Apply left contraction through a planned product executor."""
+        return self.projected_product(A, B, op="left_contraction", **kwargs)
+
+    def right_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Apply right contraction through a planned product executor."""
+        return self.projected_product(A, B, op="right_contraction", **kwargs)
+
     def planned_unary(
         self,
         values: torch.Tensor,
@@ -259,6 +532,246 @@ class AlgebraHostMixin:
         output = executor.forward_compact(request.input_value.active_values(values))
         return (output, request.output_layout) if return_layout else output
 
+    def norm_sq(
+        self,
+        values: torch.Tensor,
+        *,
+        grades=None,
+        input_grades=None,
+        layout: Optional[GradeLayout] = None,
+        input_layout: Optional[GradeLayout] = None,
+    ) -> torch.Tensor:
+        """Return ``<values reverse(values)>_0`` through a planned diagonal executor."""
+        if input_grades is None:
+            input_grades = grades
+        if input_layout is None:
+            input_layout = layout
+        resolved = self._declared_layout(input_grades, input_layout)
+        active_values = self._active_values_for_layout(values, resolved, "norm_sq values")
+        executor = self.planner.norm_sq_executor_for_layout(
+            input_layout=resolved,
+            dtype=active_values.dtype,
+            device=active_values.device,
+        )
+        return executor(active_values)
+
+    def dual(
+        self,
+        values: torch.Tensor,
+        *,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        return_layout: bool = False,
+    ) -> torch.Tensor:
+        """Apply right-pseudoscalar multiplication through a planned permutation."""
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout)
+        active_values = self._active_values_for_layout(values, input_layout, "dual values")
+        executor = self.planner.dual_executor_for_layout(
+            input_layout=input_layout,
+            output_layout=output_layout,
+            dtype=active_values.dtype,
+            device=active_values.device,
+        )
+        output = executor(active_values)
+        return (output, executor.output_layout) if return_layout else output
+
+    def pseudoscalar_product(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply right multiplication by the unit pseudoscalar."""
+        return self.dual(values, **kwargs)
+
+    def exp(
+        self,
+        values: torch.Tensor,
+        *,
+        input_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        return_layout: bool = False,
+    ) -> torch.Tensor:
+        """Exponentiate a declared bivector through a planner-owned executor."""
+        input_layout, output_layout = self._bivector_exp_layouts(
+            values,
+            input_grades=input_grades,
+            output_grades=output_grades,
+            input_layout=input_layout,
+            output_layout=output_layout,
+        )
+        active_values = self._active_values_for_layout(values, input_layout, "exp values")
+        executor = self.planner.bivector_exp_executor_for_layouts(
+            input_layout=input_layout,
+            output_layout=output_layout,
+            dtype=active_values.dtype,
+            device=active_values.device,
+        )
+        output = executor(active_values)
+        return (output, output_layout) if return_layout else output
+
+    def blade_inverse(
+        self,
+        blade: torch.Tensor,
+        *,
+        grades=None,
+        input_grades=None,
+        layout: Optional[GradeLayout] = None,
+        input_layout: Optional[GradeLayout] = None,
+        return_layout: bool = False,
+    ) -> torch.Tensor:
+        """Return ``reverse(blade) / <blade reverse(blade)>_0`` through planned executors."""
+        if input_grades is None:
+            input_grades = grades
+        if input_layout is None:
+            input_layout = layout
+        resolved = self._declared_layout(input_grades, input_layout)
+        active_blade = self._active_values_for_layout(blade, resolved, "blade_inverse values")
+        blade_rev = self.planned_unary(
+            active_blade,
+            op="reverse",
+            input_layout=resolved,
+            output_layout=resolved,
+        )
+        scalar = signed_clamp_min(self.norm_sq(active_blade, input_layout=resolved), self.eps_sq)
+        output = blade_rev / scalar
+        return (output, resolved) if return_layout else output
+
+    def blade_project(
+        self,
+        values: torch.Tensor,
+        blade: torch.Tensor,
+        *,
+        input_grades=None,
+        blade_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        blade_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        return_layout: bool = False,
+    ) -> torch.Tensor:
+        """Project ``values`` onto a blade subspace through planned products."""
+        input_layout = self._declared_layout(input_grades, input_layout)
+        blade_layout = self._declared_layout(blade_grades, blade_layout)
+        output_layout = self._optional_layout(output_grades, output_layout) or input_layout
+        active_values = self._active_values_for_layout(values, input_layout, "blade_project values")
+        active_blade = self._active_values_for_layout(blade, blade_layout, "blade_project blade")
+        inner_layout = self.layout(expand_output_grades(input_layout.grades, blade_layout.grades, self.n, op="inner"))
+        inner = self.inner_product(
+            active_values,
+            active_blade,
+            left_layout=input_layout,
+            right_layout=blade_layout,
+            output_layout=inner_layout,
+        )
+        blade_inv = self.blade_inverse(active_blade, input_layout=blade_layout)
+        output = self.geometric_product(
+            inner,
+            blade_inv,
+            left_layout=inner_layout,
+            right_layout=blade_layout,
+            output_layout=output_layout,
+        )
+        return (output, output_layout) if return_layout else output
+
+    def blade_reject(
+        self,
+        values: torch.Tensor,
+        blade: torch.Tensor,
+        *,
+        input_grades=None,
+        blade_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        blade_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        return_layout: bool = False,
+    ) -> torch.Tensor:
+        """Reject ``values`` from a blade subspace through planned projection."""
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout) or input_layout
+        if output_layout != input_layout:
+            raise ValueError("blade_reject output_layout must match input_layout for subtraction")
+        active_values = self._active_values_for_layout(values, input_layout, "blade_reject values")
+        projection = self.blade_project(
+            active_values,
+            blade,
+            input_layout=input_layout,
+            blade_grades=blade_grades,
+            blade_layout=blade_layout,
+            output_layout=output_layout,
+        )
+        output = active_values - projection
+        return (output, output_layout) if return_layout else output
+
+    def reflect(
+        self,
+        values: torch.Tensor,
+        normal: torch.Tensor,
+        *,
+        input_grades=None,
+        normal_grades=None,
+        output_grades=None,
+        input_layout: Optional[GradeLayout] = None,
+        normal_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        return_layout: bool = False,
+    ) -> torch.Tensor:
+        """Reflect ``values`` through a vector normal using planned products."""
+        return self.versor_product(
+            normal,
+            values,
+            versor_grades=normal_grades,
+            input_grades=input_grades,
+            output_grades=output_grades,
+            versor_layout=normal_layout,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            return_layout=return_layout,
+        )
+
+    def versor_product(
+        self,
+        versor: torch.Tensor,
+        values: torch.Tensor,
+        *,
+        versor_grades=None,
+        input_grades=None,
+        output_grades=None,
+        versor_layout: Optional[GradeLayout] = None,
+        input_layout: Optional[GradeLayout] = None,
+        output_layout: Optional[GradeLayout] = None,
+        return_layout: bool = False,
+    ) -> torch.Tensor:
+        """Apply ``grade_involution(versor) * values * inverse(versor)`` through planned products."""
+        versor_layout = self._declared_layout(versor_grades, versor_layout)
+        input_layout = self._declared_layout(input_grades, input_layout)
+        output_layout = self._optional_layout(output_grades, output_layout) or input_layout
+        active_versor = self._active_values_for_layout(versor, versor_layout, "versor_product versor")
+        active_values = self._active_values_for_layout(values, input_layout, "versor_product values")
+        versor_hat = self.grade_involution(
+            active_versor,
+            input_layout=versor_layout,
+            output_layout=versor_layout,
+        )
+        versor_inv = self.blade_inverse(active_versor, input_layout=versor_layout)
+        middle_layout = self.layout(expand_output_grades(versor_layout.grades, input_layout.grades, self.n, op="gp"))
+        middle = self.geometric_product(
+            versor_hat,
+            active_values,
+            left_layout=versor_layout,
+            right_layout=input_layout,
+            output_layout=middle_layout,
+        )
+        output = self.geometric_product(
+            middle,
+            versor_inv,
+            left_layout=middle_layout,
+            right_layout=versor_layout,
+            output_layout=output_layout,
+        )
+        return (output, output_layout) if return_layout else output
+
     def planned_linear_action(
         self,
         values: torch.Tensor,
@@ -282,21 +795,98 @@ class AlgebraHostMixin:
         output = executor(action_values, matrix)
         return (output, output_layout) if return_layout else output
 
+    def sandwich_action_matrices(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor = None,
+        *,
+        layout: Optional[GradeLayout] = None,
+    ) -> torch.Tensor:
+        """Return full-layout sandwich action matrices through the planner."""
+        layout = self._full_sandwich_layout(layout)
+        left = self._active_values_for_layout(left, layout, "sandwich_action_matrices left")
+        if right is None:
+            right = self.reverse(left, input_layout=layout, output_layout=layout)
+        else:
+            right = self._active_values_for_layout(right, layout, "sandwich_action_matrices right")
+        left, right = self._promote_action_tensors(left, right)
+        handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
+        return handle.checked_action_matrices(left, right)
+
+    def sandwich_product(
+        self,
+        left: torch.Tensor,
+        values: torch.Tensor,
+        right: torch.Tensor = None,
+        *,
+        layout: Optional[GradeLayout] = None,
+    ) -> torch.Tensor:
+        """Apply one full-layout sandwich action per leading batch item."""
+        layout = self._full_sandwich_layout(layout)
+        left = self._active_values_for_layout(left, layout, "sandwich_product left")
+        values = self._active_values_for_layout(values, layout, "sandwich_product values")
+        if right is None:
+            right = self.reverse(left, input_layout=layout, output_layout=layout)
+        else:
+            right = self._active_values_for_layout(right, layout, "sandwich_product right")
+        left, values, right = self._promote_action_tensors(left, values, right)
+        handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
+        return handle.checked_batched(left, values, right)
+
+    def per_channel_sandwich(
+        self,
+        left: torch.Tensor,
+        values: torch.Tensor,
+        right: torch.Tensor = None,
+        *,
+        layout: Optional[GradeLayout] = None,
+    ) -> torch.Tensor:
+        """Apply one full-layout sandwich action per channel."""
+        layout = self._full_sandwich_layout(layout)
+        left = self._active_values_for_layout(left, layout, "per_channel_sandwich left")
+        values = self._active_values_for_layout(values, layout, "per_channel_sandwich values")
+        if right is None:
+            right = self.reverse(left, input_layout=layout, output_layout=layout)
+        else:
+            right = self._active_values_for_layout(right, layout, "per_channel_sandwich right")
+        left, values, right = self._promote_action_tensors(left, values, right)
+        handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
+        return handle.checked_per_channel(left, values, right)
+
+    def multi_rotor_sandwich(
+        self,
+        left: torch.Tensor,
+        values: torch.Tensor,
+        right: torch.Tensor = None,
+        *,
+        layout: Optional[GradeLayout] = None,
+    ) -> torch.Tensor:
+        """Apply every full-layout sandwich action to every input channel."""
+        layout = self._full_sandwich_layout(layout)
+        left = self._active_values_for_layout(left, layout, "multi_rotor_sandwich left")
+        values = self._active_values_for_layout(values, layout, "multi_rotor_sandwich values")
+        if right is None:
+            right = self.reverse(left, input_layout=layout, output_layout=layout)
+        else:
+            right = self._active_values_for_layout(right, layout, "multi_rotor_sandwich right")
+        left, values, right = self._promote_action_tensors(left, values, right)
+        handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
+        return handle.checked_multi(left, values, right)
+
     def versor_action(self, values: torch.Tensor, weights: torch.Tensor, **kwargs):
         """Execute a planned grade-1 or grade-2 versor action."""
         grade = int(kwargs["grade"])
         input_layout = self._declared_layout(kwargs.get("input_grades"), kwargs.get("input_layout"))
         output_layout = self._optional_layout(kwargs.get("output_grades"), kwargs.get("output_layout")) or input_layout
         parameter_layout = kwargs.get("parameter_layout") or self.layout((grade,))
-        executor = VersorActionExecutor(
-            self,
+        handle = self.plan_versor_action(
             grade=grade,
             input_layout=input_layout,
             output_layout=output_layout,
             parameter_layout=parameter_layout,
         )
         action_values = values if values.shape[-1] == input_layout.dim else input_layout.compact(values)
-        return executor(action_values, weights)
+        return handle.checked(action_values, weights)
 
     def multi_versor_action(self, values: torch.Tensor, weights: torch.Tensor, mix: torch.Tensor, **kwargs):
         """Execute a planned weighted grade-1 or grade-2 versor action."""
@@ -304,15 +894,14 @@ class AlgebraHostMixin:
         input_layout = self._declared_layout(kwargs.get("input_grades"), kwargs.get("input_layout"))
         output_layout = self._optional_layout(kwargs.get("output_grades"), kwargs.get("output_layout")) or input_layout
         parameter_layout = kwargs.get("parameter_layout") or self.layout((grade,))
-        executor = MultiVersorActionExecutor(
-            self,
+        handle = self.plan_multi_versor_action(
             grade=grade,
             input_layout=input_layout,
             output_layout=output_layout,
             parameter_layout=parameter_layout,
         )
         action_values = values if values.shape[-1] == input_layout.dim else input_layout.compact(values)
-        return executor(action_values, weights, mix)
+        return handle.checked(action_values, weights, mix)
 
     def paired_bivector_action(
         self,
@@ -324,23 +913,15 @@ class AlgebraHostMixin:
     ):
         """Execute a planned independent left/right bivector rotor action."""
         input_layout = self._declared_layout(kwargs.get("input_grades"), kwargs.get("input_layout"))
-        output_layout = self._optional_layout(kwargs.get("output_grades"), kwargs.get("output_layout"))
         parameter_layout = kwargs.get("parameter_layout") or self.layout((2,))
-        plan = self.planner.paired_bivector_action_plan(
+        handle = self.plan_paired_bivector_action(
             input_layout=input_layout,
-            output_layout=output_layout,
             parameter_layout=parameter_layout,
-        )
-        executor = PairedBivectorActionExecutor(
-            self,
-            input_layout=plan.input_layout,
-            output_layout=plan.output_layout,
-            parameter_layout=plan.parameter_layout,
-            rotor_layout=plan.rotor_layout,
-            middle_layout=plan.middle_layout,
+            output_grades=kwargs.get("output_grades"),
+            output_layout=kwargs.get("output_layout"),
         )
         action_values = values if values.shape[-1] == input_layout.dim else input_layout.compact(values)
-        return executor(action_values, left_weights, right_weights, channel_to_pair)
+        return handle.checked(action_values, left_weights, right_weights, channel_to_pair)
 
     def grade_norms(self, values: torch.Tensor, *, input_grades=None, layout: GradeLayout = None) -> torch.Tensor:
         """Return per-grade coefficient norms for declared-layout values."""
@@ -372,6 +953,83 @@ class AlgebraHostMixin:
         if grades is not None:
             return self.layout(grades)
         return None
+
+    def _product_output_layout(
+        self,
+        *,
+        op: str,
+        left_layout: GradeLayout,
+        right_layout: GradeLayout,
+        output_grades,
+        output_layout: GradeLayout | None,
+    ) -> GradeLayout:
+        resolved = self._optional_layout(output_grades, output_layout)
+        if resolved is not None:
+            return resolved
+        full_grades = tuple(range(self.n + 1))
+        if left_layout.grades == full_grades and right_layout.grades == full_grades:
+            return self.planner.full_layout()
+        return self.layout(expand_output_grades(left_layout.grades, right_layout.grades, self.n, op=op))
+
+    def _full_sandwich_layout(self, layout: Optional[GradeLayout]) -> GradeLayout:
+        resolved = self.planner.full_layout() if layout is None else layout
+        full_grades = tuple(range(self.n + 1))
+        if resolved.grades != full_grades:
+            raise ValueError(f"full sandwich action requires full layout {full_grades}, got {resolved.grades}")
+        return resolved
+
+    @staticmethod
+    def _promote_action_tensors(*values: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        if not values:
+            return ()
+        device = values[0].device
+        dtype = values[0].dtype
+        for value in values[1:]:
+            if value.device != device:
+                raise ValueError(f"action tensors must share a device, got {device} and {value.device}")
+            dtype = torch.promote_types(dtype, value.dtype)
+        return tuple(value if value.dtype == dtype else value.to(dtype=dtype) for value in values)
+
+    def _bivector_exp_layouts(
+        self,
+        values: torch.Tensor,
+        *,
+        input_grades,
+        output_grades,
+        input_layout: Optional[GradeLayout],
+        output_layout: Optional[GradeLayout],
+    ) -> tuple[GradeLayout, GradeLayout]:
+        if self.n < 2:
+            raise ValueError("bivector exp requires an algebra with at least two basis vectors")
+        full_layout = self.planner.full_layout()
+        bivector_layout = self.layout((2,))
+        explicit_input = input_layout is not None or input_grades is not None
+        explicit_output = output_layout is not None or output_grades is not None
+
+        if explicit_input:
+            resolved_input = self._declared_layout(input_grades, input_layout)
+        elif values.shape[-1] == bivector_layout.dim:
+            resolved_input = bivector_layout
+        elif values.shape[-1] == full_layout.dim:
+            resolved_input = bivector_layout
+        else:
+            resolved_input = self.default_layout()
+
+        if resolved_input.grades != (2,):
+            raise ValueError(f"bivector exp requires grade-2 input layout, got {resolved_input.grades}")
+
+        if explicit_output:
+            resolved_output = self._optional_layout(output_grades, output_layout)
+        elif not explicit_input and values.shape[-1] == full_layout.dim:
+            resolved_output = full_layout
+        else:
+            resolved_output = self.layout(range(0, self.n + 1, 2))
+
+        if resolved_output is None:
+            raise ValueError("bivector exp could not resolve an output layout")
+        if resolved_output.spec != resolved_input.spec:
+            raise ValueError(f"output layout signature {resolved_output.spec} does not match input signature")
+        return resolved_input, resolved_output
 
     @staticmethod
     def _check_declared_layout(layout: GradeLayout, grades, side: str) -> None:

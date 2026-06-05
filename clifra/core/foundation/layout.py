@@ -77,7 +77,7 @@ class GradeLayout:
 
     @property
     def basis_indices(self) -> tuple[int, ...]:
-        """Canonical dense basis indices represented by this compact layout."""
+        """Canonical basis indices represented by this active layout."""
         return self._basis_indices
 
     @property
@@ -86,8 +86,8 @@ class GradeLayout:
         return len(self.basis_indices)
 
     @property
-    def dense_dim(self) -> int:
-        """Full dense multivector dimension."""
+    def full_dim(self) -> int:
+        """Full multivector lane dimension."""
         return self.spec.dim
 
     def contains_grade(self, grade: int) -> bool:
@@ -127,7 +127,7 @@ class GradeLayout:
         Shared basis lanes are copied by canonical basis index. Lanes present in
         this layout but absent from ``source`` are filled with zeros, which makes
         the method usable for both projections and sparse layout unions without
-        materializing a full dense multivector.
+        materializing a full-lane multivector.
         """
         if source.spec != self.spec:
             raise ValueError(f"source layout signature {source.spec} does not match target spec {self.spec}")
@@ -144,17 +144,17 @@ class GradeLayout:
         copied = torch.index_select(values, -1, gather)
         return output.index_copy(-1, scatter, copied)
 
-    def compact(self, dense: torch.Tensor) -> torch.Tensor:
-        """Gather compact lanes from a dense multivector tensor."""
-        if dense.shape[-1] != self.dense_dim:
-            raise ValueError(f"dense last dimension must be {self.dense_dim}, got {dense.shape[-1]}")
-        return torch.index_select(dense, -1, self.indices_tensor(device=dense.device))
+    def compact(self, full: torch.Tensor) -> torch.Tensor:
+        """Gather active lanes from a full-lane multivector tensor."""
+        if full.shape[-1] != self.full_dim:
+            raise ValueError(f"full last dimension must be {self.full_dim}, got {full.shape[-1]}")
+        return torch.index_select(full, -1, self.indices_tensor(device=full.device))
 
-    def dense(self, values: torch.Tensor) -> torch.Tensor:
-        """Materialize compact lane values into a dense multivector tensor."""
+    def full(self, values: torch.Tensor) -> torch.Tensor:
+        """Materialize active lane values into a full-lane multivector tensor."""
         if values.shape[-1] != self.dim:
             raise ValueError(f"values last dimension must be {self.dim}, got {values.shape[-1]}")
-        output = values.new_zeros(*values.shape[:-1], self.dense_dim)
+        output = values.new_zeros(*values.shape[:-1], self.full_dim)
         return output.index_copy(-1, self.indices_tensor(device=values.device), values)
 
     def _conversion_tensors(self, source: "GradeLayout", *, device=None) -> tuple[torch.Tensor, torch.Tensor]:

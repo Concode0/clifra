@@ -18,8 +18,13 @@ from typing import List, Optional, Tuple
 import torch
 
 
+def _full_layout(algebra):
+    """Return the canonical full layout for explicit planned decomposition calls."""
+    return algebra.layout(tuple(range(int(algebra.n) + 1)))
+
+
 class ExpPolicy(enum.Enum):
-    """Policy controlling how ``CliffordAlgebra.exp()`` handles bivectors.
+    """Policy controlling fixed-iteration planned bivector decomposition.
 
     Both policies share the same dispatch (closed-form for n <= 3,
     compiled-safe decomposition for n >= 4) and differ only in the
@@ -62,7 +67,7 @@ _ITER_N_BUMP = {ExpPolicy.BALANCED: 8, ExpPolicy.PRECISE: 16}
 def resolve_fixed_iterations(policy: ExpPolicy, dtype: torch.dtype, n: int) -> int:
     """Return the (policy, dtype, n)-keyed power-iteration count.
 
-    Used by ``CliffordAlgebra`` at init (and on policy change) to pin a
+    Used by ``AlgebraContext`` at init (and on policy change) to pin a
     static iteration budget matched to the algebra's working precision
     and dimension.
     """
@@ -88,7 +93,14 @@ def _seed_vector(algebra, b: torch.Tensor) -> torch.Tensor:
     uniform = torch.full((*batch_shape, n), 1.0 / (n**0.5), device=device, dtype=dtype)
     v_uniform = algebra.embed_vector(uniform)
 
-    probe = algebra.right_contraction(b, v_uniform)
+    full_layout = _full_layout(algebra)
+    probe = algebra.right_contraction(
+        b,
+        v_uniform,
+        left_layout=full_layout,
+        right_layout=full_layout,
+        output_layout=full_layout,
+    )
     probe_norm = probe.norm(dim=-1, keepdim=True)
     return torch.where(probe_norm > algebra.eps, probe, v_uniform)
 
@@ -103,7 +115,7 @@ def ga_power_iteration(
     the simple projection ``b_s = sigma * (u ^ v)``.
 
     Args:
-        algebra (CliffordAlgebra): CliffordAlgebra instance.
+        algebra: Layout-first algebra context.
         b: Bivector to decompose [..., dim].
         v_init: Initial grade-1 vector (random if None).
         threshold: Convergence tolerance on ``||v - v_prev||``.
@@ -117,24 +129,43 @@ def ga_power_iteration(
         v = _seed_vector(algebra, b)
     else:
         v = v_init
+    full_layout = _full_layout(algebra)
 
     v_norm = v.norm(dim=-1, keepdim=True)
     v = v / v_norm.clamp(min=algebra.eps)
 
     for _ in range(max_iterations):
         v_prev = v
-        v = algebra.right_contraction(b, v)
+        v = algebra.right_contraction(
+            b,
+            v,
+            left_layout=full_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
+        )
         v_norm = v.norm(dim=-1, keepdim=True)
         v = v / v_norm.clamp(min=algebra.eps)
 
         if (v - v_prev).norm(dim=-1).max() < threshold:
             break
 
-    u = algebra.right_contraction(b, v)
+    u = algebra.right_contraction(
+        b,
+        v,
+        left_layout=full_layout,
+        right_layout=full_layout,
+        output_layout=full_layout,
+    )
     u_norm = u.norm(dim=-1, keepdim=True)
     u = u / u_norm.clamp(min=algebra.eps)
 
-    b_s = u_norm * algebra.wedge(u, v)
+    b_s = u_norm * algebra.wedge(
+        u,
+        v,
+        left_layout=full_layout,
+        right_layout=full_layout,
+        output_layout=full_layout,
+    )
 
     return b_s, v
 
@@ -149,7 +180,7 @@ def differentiable_invariant_decomposition(
     residual.
 
     Args:
-        algebra (CliffordAlgebra): CliffordAlgebra instance.
+        algebra: Layout-first algebra context.
         b: Bivector [..., dim].
         k: Number of components (auto = n(n-1)/2 if None).
         threshold: Stop when residual norm falls below this.
@@ -177,167 +208,3 @@ def differentiable_invariant_decomposition(
         residual = residual - b_i
 
     return decomp, vectors
-
-
-def exp_simple_bivector(algebra, b: torch.Tensor) -> torch.Tensor:
-    """Closed-form exponential of a simple bivector.
-
-    Delegates to ``algebra._exp_bivector_closed`` which handles all
-    three signature regimes (elliptic, hyperbolic, parabolic).
-
-    Args:
-        algebra (CliffordAlgebra): CliffordAlgebra instance.
-        b: Simple bivector [..., dim].
-
-    Returns:
-        Rotor exp(b) [..., dim].
-    """
-    return algebra._exp_bivector_closed(b)
-
-
-def _power_iteration_compiled_safe(
-    algebra,
-    b: torch.Tensor,
-    fixed_iterations: int = 20,
-) -> torch.Tensor:
-    """Compile-safe power iteration for dominant simple bivector.
-
-    Runs exactly ``fixed_iterations`` steps with no early exit.
-    Converged elements are frozen via ``torch.where`` so redundant
-    iterations are harmless.
-
-    Args:
-        algebra: CliffordAlgebra instance.
-        b: Bivector [..., dim].
-        fixed_iterations: Number of iterations (no early exit).
-
-    Returns:
-        b_s: Dominant simple bivector projection [..., dim].
-    """
-    v = _seed_vector(algebra, b)
-    v = v / v.norm(dim=-1, keepdim=True).clamp(min=algebra.eps)
-
-    for _ in range(fixed_iterations):
-        v_prev = v
-        v_new = algebra.right_contraction(b, v)
-        v_new = v_new / v_new.norm(dim=-1, keepdim=True).clamp(min=algebra.eps)
-
-        # Freeze converged elements (no CPU sync -- purely tensor ops)
-        converged = (v_new - v_prev).norm(dim=-1, keepdim=True) < 1e-6
-        v = torch.where(converged, v_prev, v_new)
-
-    u = algebra.right_contraction(b, v)
-    u_norm = u.norm(dim=-1, keepdim=True)
-    u = u / u_norm.clamp(min=algebra.eps)
-
-    # sigma is the eigenvalue (projection onto this plane), NOT the full norm
-    b_s = u_norm * algebra.wedge(u, v)
-
-    return b_s
-
-
-def _decompose_compiled_safe(
-    algebra,
-    b: torch.Tensor,
-    k: Optional[int] = None,
-    fixed_iterations: int = 20,
-) -> List[torch.Tensor]:
-    """Compile-safe greedy bivector decomposition.
-
-    Runs exactly ``k`` extraction steps (default ``n // 2``).
-    Negligible residuals are masked via ``torch.where`` instead of
-    early-exit.
-
-    Args:
-        algebra: CliffordAlgebra instance.
-        b: Bivector [..., dim].
-        k: Number of simple components (default ``n // 2``).
-        fixed_iterations: Power iteration steps per component.
-
-    Returns:
-        List of k simple bivector tensors [..., dim].
-    """
-    n = algebra.n
-    k = k if k is not None else n // 2
-    k = max(k, 1)
-
-    decomp: List[torch.Tensor] = []
-    residual = b
-
-    for _ in range(k):
-        b_i = _power_iteration_compiled_safe(algebra, residual, fixed_iterations=fixed_iterations)
-        # Mask: zero out extraction when residual is already negligible
-        active = residual.norm(dim=-1, keepdim=True) > algebra.eps
-        b_i = b_i * active.to(b_i.dtype)
-
-        decomp.append(b_i)
-        residual = residual - b_i
-
-    return decomp
-
-
-def compiled_safe_decomposed_exp(
-    algebra,
-    b: torch.Tensor,
-    k: Optional[int] = None,
-    fixed_iterations: int = 20,
-) -> torch.Tensor:
-    """Compile-safe decomposed exponential -- no CPU sync.
-
-    Decomposes ``b`` into simple blades under ``torch.no_grad()``,
-    re-projects the live (gradient-carrying) bivector onto each
-    discovered plane, exponentiates each in closed form, and composes
-    via geometric product.
-
-    Args:
-        algebra: CliffordAlgebra instance.
-        b: Bivector [..., dim].
-        k: Number of simple components (default ``n // 2``).
-        fixed_iterations: Power iteration steps per component.
-
-    Returns:
-        Rotor exp(b) [..., dim].
-    """
-    n = algebra.n
-    k_actual = k if k is not None else n // 2
-    k_actual = max(k_actual, 1)
-
-    # Identity rotor fallback
-    identity = torch.zeros_like(b)
-    identity[..., 0] = 1.0
-
-    # Decompose (no grad -- power iteration not differentiable)
-    with torch.no_grad():
-        decomp = _decompose_compiled_safe(algebra, b.detach(), k=k_actual, fixed_iterations=fixed_iterations)
-
-    bv_indices = _bivector_indices(algebra, b.device)
-
-    # Re-project live bivector and compose rotors
-    result = identity
-    residual = b
-    for b_i_detached in decomp:
-        plane_norm = b_i_detached.norm(dim=-1, keepdim=True).clamp(min=algebra.eps_sq)
-        plane_dir = b_i_detached / plane_norm
-
-        bv_live = torch.index_select(residual, -1, bv_indices)
-        plane_bv = torch.index_select(plane_dir, -1, bv_indices)
-        coeff = (bv_live * plane_bv).sum(dim=-1, keepdim=True)
-
-        b_i_live = coeff * plane_dir
-        residual = residual - b_i_live
-
-        R_i = algebra._exp_bivector_closed(b_i_live)
-        result = algebra.geometric_product(result, R_i)
-
-    return result
-
-
-def _bivector_indices(algebra, device) -> torch.Tensor:
-    if hasattr(algebra, "_bivector_indices_for"):
-        return algebra._bivector_indices_for(device)
-    indices = getattr(algebra, "_bv_indices", None)
-    if indices is not None:
-        if indices.device != torch.device(device):
-            indices = indices.to(device=device)
-        return indices
-    return algebra.grade_indices((2,), device=device)

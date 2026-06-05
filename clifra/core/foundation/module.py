@@ -14,7 +14,7 @@ from clifra.core.foundation.layout import GradeLayout
 
 @runtime_checkable
 class AlgebraLike(Protocol):
-    """Protocol implemented by dense kernels and planned algebra contexts."""
+    """Protocol implemented by planner-capable algebra hosts and references."""
 
     p: int
     q: int
@@ -26,6 +26,7 @@ class AlgebraLike(Protocol):
     eps_sq: float
     planner: object
     planning_limits: object
+    product_execution_policy: object
 
     @property
     def device(self):
@@ -60,7 +61,7 @@ class AlgebraLike(Protocol):
         ...
 
     def grade_indices(self, grades: Iterable[int], *, device=None) -> torch.Tensor:
-        """Return canonical dense basis indices for ``grades``."""
+        """Return canonical basis indices for ``grades``."""
         ...
 
     def hermitian_signs(
@@ -71,11 +72,47 @@ class AlgebraLike(Protocol):
         device=None,
         dtype: Optional[torch.dtype] = None,
     ) -> torch.Tensor:
-        """Return Hermitian signs for a dense or compact layout."""
+        """Return Hermitian signs for a full-lane or active layout."""
         ...
 
     def projected_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply a declared grade-restricted binary product."""
+        ...
+
+    def plan_product(self, **kwargs):
+        """Return a hot-path product handle for active-lane values."""
+        ...
+
+    def plan_unary(self, **kwargs):
+        """Return a hot-path unary handle for active-lane values."""
+        ...
+
+    def plan_norm_sq(self, **kwargs):
+        """Return a diagonal norm executor for active-lane values."""
+        ...
+
+    def plan_dual(self, **kwargs):
+        """Return a dual/pseudoscalar executor for active-lane values."""
+        ...
+
+    def plan_exp(self, **kwargs):
+        """Return a bivector exponential executor for active-lane values."""
+        ...
+
+    def plan_sandwich_action(self, **kwargs):
+        """Return a full-layout sandwich action handle."""
+        ...
+
+    def plan_versor_action(self, **kwargs):
+        """Return a grade-1 or grade-2 versor action handle."""
+        ...
+
+    def plan_multi_versor_action(self, **kwargs):
+        """Return a weighted multi-versor action handle."""
+        ...
+
+    def plan_paired_bivector_action(self, **kwargs):
+        """Return an independent left/right bivector action handle."""
         ...
 
     def geometric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -98,6 +135,14 @@ class AlgebraLike(Protocol):
         """Apply the anti-commutator product."""
         ...
 
+    def left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply left contraction."""
+        ...
+
+    def right_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply right contraction."""
+        ...
+
     def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
         """Project to a single grade."""
         ...
@@ -114,12 +159,72 @@ class AlgebraLike(Protocol):
         """Apply Clifford conjugation."""
         ...
 
+    def norm_sq(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Return the algebraic squared norm."""
+        ...
+
+    def dual(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the Hodge dual / right pseudoscalar product."""
+        ...
+
+    def pseudoscalar_product(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply right multiplication by the pseudoscalar."""
+        ...
+
+    def blade_inverse(self, blade: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Return the inverse of a non-null blade."""
+        ...
+
+    def blade_project(self, values: torch.Tensor, blade: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Project values onto a blade subspace."""
+        ...
+
+    def blade_reject(self, values: torch.Tensor, blade: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Reject values from a blade subspace."""
+        ...
+
+    def reflect(self, values: torch.Tensor, normal: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Reflect values through a vector normal."""
+        ...
+
+    def versor_product(self, versor: torch.Tensor, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply a general versor product."""
+        ...
+
     def exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Exponentiate a declared bivector."""
         ...
 
     def planned_linear_action(self, values: torch.Tensor, matrix: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply a vector-space linear action to dense or compact grade lanes."""
+        """Apply a vector-space linear action to full-lane or active grade lanes."""
+        ...
+
+    def sandwich_action_matrices(self, left: torch.Tensor, right: torch.Tensor = None, **kwargs) -> torch.Tensor:
+        """Return full-layout sandwich action matrices."""
+        ...
+
+    def sandwich_product(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor = None, **kwargs) -> torch.Tensor:
+        """Apply one full-layout sandwich action per leading batch item."""
+        ...
+
+    def per_channel_sandwich(
+        self,
+        left: torch.Tensor,
+        values: torch.Tensor,
+        right: torch.Tensor = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Apply one full-layout sandwich action per channel."""
+        ...
+
+    def multi_rotor_sandwich(
+        self,
+        left: torch.Tensor,
+        values: torch.Tensor,
+        right: torch.Tensor = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Apply every full-layout sandwich action to every input channel."""
         ...
 
     def paired_bivector_action(

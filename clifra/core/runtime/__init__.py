@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Runtime algebra hosts and dense reference operations."""
+"""Runtime algebra host."""
 
-from .algebra import AlgebraContext, CliffordAlgebra
+from .algebra import AlgebraContext
 
 __all__ = [
     "AlgebraContext",
-    "CliffordAlgebra",
 ]

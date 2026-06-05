@@ -12,7 +12,15 @@ from typing import Iterable, Literal, Optional
 
 import torch
 
-GradeProductOp = Literal["gp", "wedge", "inner", "commutator", "anti_commutator"]
+GradeProductOp = Literal[
+    "gp",
+    "wedge",
+    "inner",
+    "commutator",
+    "anti_commutator",
+    "left_contraction",
+    "right_contraction",
+]
 
 # NOTE: Torch-backed executors currently store canonical basis blades as signed
 # int64 bitmasks. That makes n=63 the largest supported dimension: the highest
@@ -104,7 +112,15 @@ def expand_output_grades(
     """Expand input grade sets into output grades required by ``op``."""
     left = normalize_grades(left_grades, n, name="left_grades")
     right = normalize_grades(right_grades, n, name="right_grades")
-    if op not in {"gp", "wedge", "inner", "commutator", "anti_commutator"}:
+    if op not in {
+        "gp",
+        "wedge",
+        "inner",
+        "commutator",
+        "anti_commutator",
+        "left_contraction",
+        "right_contraction",
+    }:
         raise ValueError(f"Unsupported grade product op {op!r}")
 
     outputs: set[int] = set()
@@ -126,6 +142,10 @@ def product_output_grades(left_grade: int, right_grade: int, n: int, *, op: Grad
     """Return possible output grades for one homogeneous product route."""
     left_grade = int(left_grade)
     right_grade = int(right_grade)
+    if op == "left_contraction":
+        return (right_grade - left_grade,) if left_grade <= right_grade else ()
+    if op == "right_contraction":
+        return (left_grade - right_grade,) if left_grade >= right_grade else ()
     if op == "wedge":
         grade = left_grade + right_grade
         return (grade,) if grade <= n else ()
@@ -182,7 +202,7 @@ def operation_coefficient(index_a: int, index_b: int, p: int, q: int, r: int, op
         return 0.0
 
     _, sign_ab = basis_product(index_a, index_b, p, q, r)
-    if op in {"gp", "wedge", "inner"}:
+    if op in {"gp", "wedge", "inner", "left_contraction", "right_contraction"}:
         return sign_ab
 
     if op == "commutator":
@@ -202,6 +222,16 @@ def operation_may_be_nonzero(index_a: int, index_b: int, p: int, q: int, r: int,
         null_mask = ((1 << r) - 1) << (p + q)
         if overlap_mask & null_mask:
             return False
+    if op == "left_contraction":
+        left_grade = int(index_a).bit_count()
+        right_grade = int(index_b).bit_count()
+        output_grade = (int(index_a) ^ int(index_b)).bit_count()
+        return left_grade <= right_grade and output_grade == right_grade - left_grade
+    if op == "right_contraction":
+        left_grade = int(index_a).bit_count()
+        right_grade = int(index_b).bit_count()
+        output_grade = (int(index_a) ^ int(index_b)).bit_count()
+        return left_grade >= right_grade and output_grade == left_grade - right_grade
     if op == "gp":
         return True
 

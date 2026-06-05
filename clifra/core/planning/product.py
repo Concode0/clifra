@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Static grade-path plans for sparse high-dimensional Clifford products.
+"""Static grade-path plans for Clifford product execution.
 
 This module describes the lower-level AoT shape needed by high-dimensional
-sparse execution: input grades are declared or inferred at construction time,
-all basis interactions are expanded once, and forward execution is only gather,
-multiply, and indexed reduction over the required output grade lanes.
+product execution: input grades are declared or inferred at construction time
+and all basis interactions are expanded once. Hot tensor execution lives in
+``clifra.core.execution.product``.
 """
 
 from __future__ import annotations
@@ -15,14 +15,11 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 import torch
-import torch.nn as nn
 
 from clifra.core.foundation.basis import (
     GradeProductOp,
     basis_index_tuple_for_grades,
     basis_indices_tensor,
-    expand_output_grades,
-    normalize_grades,
     operation_coefficient,
 )
 from clifra.core.foundation.layout import AlgebraSpec
@@ -105,7 +102,7 @@ class GradeProductPlan:
 
     @property
     def dim(self) -> int:
-        """Return the dense multivector lane count."""
+        """Return the full multivector lane count."""
         return 1 << self.n
 
     @property
@@ -129,6 +126,77 @@ class GradeProductPlan:
         if self.tree.estimated_pairs == 0:
             return 0.0
         return self.pair_count / self.tree.estimated_pairs
+
+
+class FullTableProductPlan:
+    """Full-layout Cayley-table product plan owned by the planner.
+
+    This executor family is available for requests where both operands and the
+    output are the canonical all-grades layout.
+    """
+
+    def __init__(
+        self,
+        *,
+        spec: AlgebraSpec,
+        op: GradeProductOp,
+        cayley_indices: torch.Tensor,
+        signs: torch.Tensor,
+        pair_count: int,
+    ):
+        self.spec = spec
+        self.op = op
+        self.left_layout = spec.full_layout()
+        self.right_layout = spec.full_layout()
+        self.output_layout = spec.full_layout()
+        self.cayley_indices = cayley_indices
+        self.signs = signs
+        self.pair_count = int(pair_count)
+
+    @property
+    def p(self) -> int:
+        """Return the positive metric dimension."""
+        return self.spec.p
+
+    @property
+    def q(self) -> int:
+        """Return the negative metric dimension."""
+        return self.spec.q
+
+    @property
+    def r(self) -> int:
+        """Return the null metric dimension."""
+        return self.spec.r
+
+    @property
+    def n(self) -> int:
+        """Return the total algebra dimension."""
+        return self.spec.n
+
+    @property
+    def dim(self) -> int:
+        """Return the full multivector lane count."""
+        return self.spec.dim
+
+    @property
+    def output_dim(self) -> int:
+        """Return the output lane count."""
+        return self.output_layout.dim
+
+    @property
+    def left_grades(self) -> tuple[int, ...]:
+        """Return all left operand grades."""
+        return self.left_layout.grades
+
+    @property
+    def right_grades(self) -> tuple[int, ...]:
+        """Return all right operand grades."""
+        return self.right_layout.grades
+
+    @property
+    def output_grades(self) -> tuple[int, ...]:
+        """Return all output grades."""
+        return self.output_layout.grades
 
 
 def build_grade_product_plan(
@@ -252,111 +320,60 @@ def build_grade_product_plan_from_tree(
     )
 
 
-class GradeProductExecutor(nn.Module):
-    """Compile-friendly grade-restricted product using a static interaction plan.
+def build_full_table_product_plan_from_request(
+    request: ProductRequest,
+    *,
+    device=None,
+    dtype: Optional[torch.dtype] = None,
+) -> FullTableProductPlan:
+    """Build a full-table product plan from a normalized request."""
+    if not request_is_full_layout_product(request):
+        raise ValueError("full-table product plans require full left, right, and output layouts")
+    return build_full_table_product_plan(
+        request.spec,
+        op=request.op,
+        device=request.device if device is None else device,
+        dtype=request.dtype if dtype is None else dtype,
+    )
 
-    ``forward`` returns compact output lanes ordered by ``active_output_indices``.
-    ``forward_dense`` is an explicit materialization helper for parity checks and
-    dense callers.
-    """
 
-    def __init__(self, plan: GradeProductPlan):
-        super().__init__()
-        self.p = plan.p
-        self.q = plan.q
-        self.r = plan.r
-        self.n = plan.n
-        self.dim = plan.dim
-        self.op = plan.op
-        self.left_grades = plan.left_grades
-        self.right_grades = plan.right_grades
-        self.output_grades = plan.output_grades
-        self.left_layout = plan.left_layout
-        self.right_layout = plan.right_layout
-        self.output_layout = plan.output_layout
-        self._output_dim = plan.output_dim
-        self._pair_count = plan.pair_count
-        self.register_buffer("left_indices", plan.left_indices, persistent=False)
-        self.register_buffer("right_indices", plan.right_indices, persistent=False)
-        self.register_buffer("output_indices", plan.output_indices, persistent=False)
-        self.register_buffer("output_positions", plan.output_positions, persistent=False)
-        self.register_buffer("coefficients", plan.coefficients, persistent=False)
-        self.register_buffer("active_output_indices", plan.active_output_indices, persistent=False)
-        self.register_buffer("left_active_positions", plan.left_active_positions, persistent=False)
-        self.register_buffer("right_active_positions", plan.right_active_positions, persistent=False)
+def build_full_table_product_plan(
+    spec: AlgebraSpec,
+    *,
+    op: GradeProductOp,
+    device=None,
+    dtype: torch.dtype = torch.float32,
+) -> FullTableProductPlan:
+    """Build Cayley-style buffers for one full-layout product."""
+    dim = spec.dim
+    indices = torch.arange(dim, dtype=torch.long, device=device)
+    cayley_indices = indices.unsqueeze(0) ^ indices.unsqueeze(1)
+    sign_rows: list[list[float]] = []
+    pair_count = 0
+    for left_index in range(dim):
+        row = []
+        for output_index in range(dim):
+            right_index = left_index ^ output_index
+            coefficient = operation_coefficient(left_index, right_index, spec.p, spec.q, spec.r, op)
+            row.append(coefficient)
+            if coefficient != 0.0:
+                pair_count += 1
+        sign_rows.append(row)
+    signs = torch.tensor(sign_rows, dtype=dtype, device=device)
+    return FullTableProductPlan(
+        spec=spec,
+        op=op,
+        cayley_indices=cayley_indices,
+        signs=signs,
+        pair_count=pair_count,
+    )
 
-    @property
-    def output_dim(self) -> int:
-        """Return the compact output lane count."""
-        return self._output_dim
 
-    @property
-    def pair_count(self) -> int:
-        """Return the number of planned basis interactions."""
-        return self._pair_count
-
-    def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Return compact grade-lane output for full dense input tensors."""
-        if left.shape[-1] != self.dim:
-            raise ValueError(f"left last dimension must be {self.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.dim:
-            raise ValueError(f"right last dimension must be {self.dim}, got {right.shape[-1]}")
-
-        left_terms = torch.index_select(left, -1, self.left_indices)
-        right_terms = torch.index_select(right, -1, self.right_indices)
-        left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
-        terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
-
-        output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
-        return output.index_add(-1, self.output_positions, terms)
-
-    def forward_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Return compact output for inputs already stored in this plan's compact layouts."""
-        if left.shape[-1] != self.left_layout.dim:
-            raise ValueError(f"left compact dimension must be {self.left_layout.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.right_layout.dim:
-            raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
-
-        left_terms = torch.index_select(left, -1, self.left_active_positions)
-        right_terms = torch.index_select(right, -1, self.right_active_positions)
-        left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
-        terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
-
-        output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
-        return output.index_add(-1, self.output_positions, terms)
-
-    def forward_pairwise_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Pairwise compact product for sequence-style bilinear scoring.
-
-        ``left`` is ``[..., left_items, left_layout.dim]`` and ``right`` is
-        ``[..., right_items, right_layout.dim]``. The result is
-        ``[..., left_items, right_items, output_layout.dim]``.
-        """
-        if left.shape[-1] != self.left_layout.dim:
-            raise ValueError(f"left compact dimension must be {self.left_layout.dim}, got {left.shape[-1]}")
-        if right.shape[-1] != self.right_layout.dim:
-            raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
-
-        prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
-        left = left.expand(*prefix, *left.shape[-2:])
-        right = right.expand(*prefix, *right.shape[-2:])
-
-        left_terms = torch.index_select(left, -1, self.left_active_positions)
-        right_terms = torch.index_select(right, -1, self.right_active_positions)
-        terms = left_terms.unsqueeze(-2) * right_terms.unsqueeze(-3) * self._coefficients_for(left_terms, right_terms)
-
-        output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
-        return output.index_add(-1, self.output_positions, terms)
-
-    def forward_dense(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Return a full ``[..., 2**n]`` dense tensor for dense-kernel parity checks."""
-        compact = self.forward(left, right)
-        output = compact.new_zeros(*compact.shape[:-1], self.dim)
-        return output.index_copy(-1, self.active_output_indices, compact)
-
-    def _coefficients_for(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        dtype = torch.promote_types(left.dtype, right.dtype)
-        coefficients = self.coefficients
-        if coefficients.dtype == dtype and coefficients.device == left.device:
-            return coefficients
-        return coefficients.to(device=left.device, dtype=dtype)
+def request_is_full_layout_product(request: ProductRequest) -> bool:
+    """Return whether a request is the canonical full-layout product."""
+    full_grades = tuple(range(request.spec.n + 1))
+    return (
+        request.left_grades == full_grades
+        and request.right_grades == full_grades
+        and request.output_grades == full_grades
+    )

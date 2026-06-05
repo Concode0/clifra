@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Core mathematical kernel for Geometric Algebra.
+"""Core mathematical package for Geometric Algebra.
 
 Provides Clifford algebra hosts, layout contracts, planner/executor utilities,
 metric functions, bivector decomposition, and signature search utilities.
@@ -13,11 +13,23 @@ until first access, keeping ``import clifra.core`` lightweight.
 
 from .config import AlgebraConfig, make_algebra, make_algebra_from_config
 from .execution import (
+    BivectorExpExecutor,
+    DualExecutor,
+    FullSandwichActionHandle,
+    FullTableProductExecutor,
     GeometricAttentionScoreExecutor,
     GradedLinearActionExecutor,
+    GradeProductExecutor,
+    GradeUnaryExecutor,
     MultiVersorActionExecutor,
+    MultiVersorActionHandle,
+    NormSquaredExecutor,
     PairedBivectorActionExecutor,
+    PairedBivectorActionHandle,
+    ProductPlanHandle,
+    UnaryPlanHandle,
     VersorActionExecutor,
+    VersorActionHandle,
 )
 from .formatting import Multivector, basis_blade_label, format_multivector
 from .foundation.basis import (
@@ -37,20 +49,25 @@ from .foundation.layout import AlgebraSpec, GradeLayout
 from .foundation.module import AlgebraLike, CliffordModule
 from .foundation.numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
 from .foundation.validation import check_channels, check_multivector
-from .planning.decomposition import BivectorDecompositionPlan
+from .planning.exp import BivectorExpPlan, build_bivector_exp_plan
 from .planning.flow import GradeFlow
 from .planning.layouts import ProductRequest, build_product_request
+from .planning.metric import NormSquaredPlan, build_norm_squared_plan
+from .planning.permutation import DualPlan, build_dual_plan
 from .planning.planner import GradePlanner
 from .planning.policy import DEFAULT_PLANNING_LIMITS, PlanCost, PlanningLimits
-from .planning.product import GradeProductExecutor, GradeProductPlan, build_grade_product_plan
+from .planning.product import (
+    FullTableProductPlan,
+    GradeProductPlan,
+    build_full_table_product_plan,
+    build_grade_product_plan,
+)
 from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
-from .planning.unary import GradeUnaryExecutor, GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
-from .runtime.algebra import AlgebraContext, CliffordAlgebra
+from .planning.unary import GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
+from .runtime.algebra import AlgebraContext
 from .runtime.decomposition import (
     ExpPolicy,
-    compiled_safe_decomposed_exp,
     differentiable_invariant_decomposition,
-    exp_simple_bivector,
     ga_power_iteration,
 )
 from .runtime.metric import (
@@ -91,15 +108,20 @@ from .storage import (
 __all__ = [
     # algebra
     "AlgebraContext",
-    "CliffordAlgebra",
     "AlgebraConfig",
     "AlgebraLike",
     "CliffordModule",
     "GeometricAttentionScoreExecutor",
+    "FullSandwichActionHandle",
     "GradedLinearActionExecutor",
     "VersorActionExecutor",
     "MultiVersorActionExecutor",
     "PairedBivectorActionExecutor",
+    "ProductPlanHandle",
+    "UnaryPlanHandle",
+    "VersorActionHandle",
+    "MultiVersorActionHandle",
+    "PairedBivectorActionHandle",
     "Multivector",
     "AlgebraSpec",
     "GradeLayout",
@@ -109,7 +131,8 @@ __all__ = [
     "ValueLayout",
     "LayerLayout",
     "ExecutionBoundary",
-    "BivectorDecompositionPlan",
+    "BivectorExpExecutor",
+    "BivectorExpPlan",
     "PlanningLimits",
     "PlanCost",
     "DEFAULT_PLANNING_LIMITS",
@@ -159,12 +182,16 @@ __all__ = [
     "ExpPolicy",
     "ga_power_iteration",
     "differentiable_invariant_decomposition",
-    "exp_simple_bivector",
-    "compiled_safe_decomposed_exp",
-    # static sparse grade planning
+    # static executor planning
     "GradeProductOp",
+    "FullTableProductExecutor",
+    "FullTableProductPlan",
     "GradeProductExecutor",
     "GradeProductPlan",
+    "NormSquaredExecutor",
+    "NormSquaredPlan",
+    "DualExecutor",
+    "DualPlan",
     "GradePathNode",
     "GradePlanTree",
     "GradeFlow",
@@ -175,7 +202,11 @@ __all__ = [
     "UnaryRequest",
     "basis_indices_for_grades",
     "basis_product",
+    "build_full_table_product_plan",
     "build_grade_product_plan",
+    "build_norm_squared_plan",
+    "build_dual_plan",
+    "build_bivector_exp_plan",
     "build_grade_plan_tree",
     "build_product_request",
     "build_unary_request",
