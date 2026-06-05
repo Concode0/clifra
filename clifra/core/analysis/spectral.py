@@ -8,7 +8,7 @@ Computes grade-energy spectrum, bivector-field decomposition, and
 (optionally) the eigenvalue spectrum of the geometric-product operator.
 """
 
-from typing import List, Optional
+from typing import Optional
 
 import torch
 
@@ -18,7 +18,13 @@ from clifra.core.runtime.decomposition import differentiable_invariant_decomposi
 from clifra.core.runtime.metric import hermitian_grade_spectrum
 
 from ._types import CONSTANTS, SpectralResult
-from ._utils import declared_full_product_kwargs, full_grades, is_dense_algebra
+from ._utils import (
+    declared_full_product_kwargs,
+    feasibility_record,
+    full_grades,
+    full_matrix_feasibility,
+    full_product_feasibility,
+)
 
 
 class SpectralAnalyzer:
@@ -34,7 +40,7 @@ class SpectralAnalyzer:
        operator :math:`L_x(y) = x \\cdot y` (only for small algebras).
 
     Args:
-        algebra: algebra kernel or planning context.
+        algebra: Layout-first algebra host.
         max_simple_components: Maximum number of simple components to
             extract from the mean bivector.
     """
@@ -64,17 +70,38 @@ class SpectralAnalyzer:
             mv_data = mv_data.unsqueeze(1)  # [N, 1, dim]
 
         grade_energy = self.grade_energy_spectrum(mv_data)
-        bv_spectrum, simple_comps = self.bivector_field_spectrum(mv_data)
+        bv_spectrum, simple_comps, skipped = self._bivector_field_spectrum_with_skips(mv_data)
 
         gp_eigs = None
-        if self.algebra.n <= CONSTANTS.gp_spectrum_max_n:
+        gp_matrix = full_matrix_feasibility(
+            self.algebra,
+            role="gp_operator_spectrum",
+            max_entries=CONSTANTS.gp_spectrum_matrix_entries,
+            matrix_kind="eigensolver",
+        )
+        gp_product = full_product_feasibility(
+            self.algebra,
+            role="gp_operator_spectrum",
+            op="gp",
+            max_pairs=CONSTANTS.gp_spectrum_product_pairs,
+        )
+        if gp_matrix and gp_product:
             gp_eigs = self.gp_operator_spectrum(mv_data)
+        else:
+            skipped["gp_operator_spectrum"] = {
+                "reason": _first_skip_reason(gp_matrix, gp_product),
+                "checks": {
+                    "eigensolver_matrix": feasibility_record(gp_matrix),
+                    "product": feasibility_record(gp_product),
+                },
+            }
 
         return SpectralResult(
             grade_energy=grade_energy,
             bivector_spectrum=bv_spectrum,
             simple_components=simple_comps,
             gp_eigenvalues=gp_eigs,
+            skipped=skipped,
         )
 
     def grade_energy_spectrum(self, mv_data: torch.Tensor) -> torch.Tensor:
@@ -103,32 +130,49 @@ class SpectralAnalyzer:
             *singular_values* is a 1-D tensor of component norms and
             *simple_components* is a list of ``[dim]`` simple bivectors.
         """
+        spectrum, components, _ = self._bivector_field_spectrum_with_skips(mv_data)
+        return spectrum, components
+
+    def _bivector_field_spectrum_with_skips(self, mv_data: torch.Tensor) -> tuple:
+        """Return bivector spectrum plus feasibility skip metadata."""
         flat = mv_data.mean(dim=1)  # [N, dim]
         mean_mv = flat.mean(dim=0)  # [dim]
+        skipped = {}
 
         # Guard: algebra needs at least grade 2 for bivectors
         if self.algebra.n < 2:
+            skipped["bivector_field_decomposition"] = {
+                "reason": "grade_absent",
+                "details": {"n": int(self.algebra.n), "required_grade": 2},
+            }
             return (
                 torch.zeros(1, device=mv_data.device),
                 [torch.zeros_like(mean_mv)],
+                skipped,
             )
 
         # Extract grade-2 (bivector) part
         bv_layout = self.algebra.layout((2,))
         mean_bv_compact = self.algebra.grade_projection(mean_mv, 2, active_output=True)
+        mean_bv = bv_layout.full(mean_bv_compact)
 
         bv_norm = mean_bv_compact.norm()
         if bv_norm < eps_like(mean_bv_compact):
-            zero_component = bv_layout.dense(mean_bv_compact) if is_dense_algebra(self.algebra) else mean_bv_compact
             return (
                 torch.zeros(1, device=mv_data.device),
-                [torch.zeros_like(zero_component)],
+                [torch.zeros_like(mean_bv)],
+                skipped,
             )
 
-        if not is_dense_algebra(self.algebra):
-            return bv_norm.reshape(1), [mean_bv_compact]
-
-        mean_bv = bv_layout.dense(mean_bv_compact)
+        decomp_product = full_product_feasibility(
+            self.algebra,
+            role="bivector_field_decomposition",
+            op="gp",
+            max_pairs=CONSTANTS.analysis_product_pairs,
+        )
+        if not decomp_product:
+            skipped["bivector_field_decomposition"] = feasibility_record(decomp_product)
+            return bv_norm.reshape(1), [mean_bv], skipped
 
         decomp, _ = differentiable_invariant_decomposition(
             self.algebra,
@@ -150,6 +194,7 @@ class SpectralAnalyzer:
             return (
                 torch.zeros(1, device=mv_data.device),
                 [torch.zeros_like(mean_bv)],
+                skipped,
             )
 
         sv = torch.stack(norms)
@@ -158,7 +203,7 @@ class SpectralAnalyzer:
         sv = sv[order]
         components = [components[i] for i in order.tolist()]
 
-        return sv, components
+        return sv, components, skipped
 
     def gp_operator_spectrum(self, mv_data: torch.Tensor, n_samples: Optional[int] = None) -> torch.Tensor:
         """Eigenvalue magnitudes of the left-multiplication operator.
@@ -199,3 +244,10 @@ class SpectralAnalyzer:
         eigvals = torch.linalg.eigvals(L)  # complex
         magnitudes = eigvals.abs()
         return magnitudes.sort(descending=True).values
+
+
+def _first_skip_reason(*checks) -> str:
+    for check in checks:
+        if not check:
+            return check.reason
+    return "ok"

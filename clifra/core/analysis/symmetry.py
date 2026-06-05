@@ -17,14 +17,20 @@ from clifra.core.foundation.module import AlgebraLike
 from clifra.core.foundation.numerics import eps_like
 
 from ._types import CONSTANTS, CommutatorResult, SymmetryResult
-from ._utils import declared_full_product_kwargs, dense_analysis_supported, full_grades, is_dense_algebra
+from ._utils import (
+    feasibility_record,
+    full_grades,
+    full_layout_for_analysis,
+    grade_layout_for_analysis,
+    product_feasibility,
+)
 
 
 class SymmetryDetector:
     """Detect symmetries, null directions, and invariances.
 
     Args:
-        algebra: algebra kernel or planning context.
+        algebra: Layout-first algebra host.
         null_threshold: Energy threshold below which a direction is
             considered effectively null.
     """
@@ -64,8 +70,13 @@ class SymmetryDetector:
 
         null_dirs, null_scores = self.detect_null_directions(flat)
         inv_sym = self.detect_involution_symmetry(flat)
-        refl_syms = self.detect_reflection_symmetries(flat)
-        cont_dim = self.detect_continuous_symmetries(flat, commutator_result=commutator_result)
+        refl_syms, reflection_skipped = self._reflection_symmetries_with_skips(flat)
+        cont_dim, continuous_skipped = self._continuous_symmetries_with_skips(
+            flat, commutator_result=commutator_result
+        )
+        skipped = {}
+        skipped.update(reflection_skipped)
+        skipped.update(continuous_skipped)
 
         return SymmetryResult(
             null_directions=null_dirs,
@@ -73,6 +84,7 @@ class SymmetryDetector:
             involution_symmetry=inv_sym,
             reflection_symmetries=refl_syms,
             continuous_symmetry_dim=cont_dim,
+            skipped=skipped,
         )
 
     def detect_null_directions(self, mv_data: torch.Tensor) -> Tuple[List[int], torch.Tensor]:
@@ -89,7 +101,6 @@ class SymmetryDetector:
             ``(null_indices, scores)`` where *scores* is ``[n]`` and
             *null_indices* lists those with score < threshold.
         """
-        n = self.algebra.n
         g1_idx = self.algebra.grade_indices((1,), device=mv_data.device)
 
         # Energy on each grade-1 component
@@ -139,24 +150,46 @@ class SymmetryDetector:
             List of dicts ``{"direction": i, "score": float}`` sorted
             by score ascending (lower = more symmetric).
         """
+        results, _ = self._reflection_symmetries_with_skips(mv_data)
+        return results
+
+    def _reflection_symmetries_with_skips(self, mv_data: torch.Tensor) -> tuple[List[Dict], dict[str, dict]]:
+        """Return reflection symmetries plus feasibility skip metadata."""
         n = self.algebra.n
         dim = self.algebra.dim
         N = mv_data.shape[0]
-        if not dense_analysis_supported(self.algebra, max_n=CONSTANTS.reflection_analysis_max_n):
-            return []
+        skipped = {}
+        vector_layout = grade_layout_for_analysis(self.algebra, (1,))
+        full_layout = full_layout_for_analysis(self.algebra)
+        left_feasible = product_feasibility(
+            self.algebra,
+            role="basis_reflection",
+            op="gp",
+            left_layout=vector_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
+            max_pairs=CONSTANTS.reflection_product_pairs,
+        )
+        right_feasible = product_feasibility(
+            self.algebra,
+            role="basis_reflection",
+            op="gp",
+            left_layout=full_layout,
+            right_layout=vector_layout,
+            output_layout=full_layout,
+            max_pairs=CONSTANTS.reflection_product_pairs,
+        )
+        if not left_feasible or not right_feasible:
+            skipped["reflection_symmetries"] = {
+                "reason": _first_skip_reason(left_feasible, right_feasible),
+                "checks": {
+                    "left_vector_full_product": feasibility_record(left_feasible),
+                    "right_full_vector_product": feasibility_record(right_feasible),
+                },
+            }
+            return [], skipped
 
-        # Build all n basis vectors: [n, dim]
-        basis_vecs = torch.zeros(n, dim, device=mv_data.device, dtype=mv_data.dtype)
-        blade_indices = self.algebra.grade_indices((1,), device=mv_data.device)
-        basis_vecs[torch.arange(n, device=mv_data.device), blade_indices] = 1.0
-
-        if is_dense_algebra(self.algebra):
-            mv_exp = mv_data.unsqueeze(0).expand(n, N, dim)
-            basis_exp = basis_vecs.unsqueeze(1).expand(n, N, dim)
-            reflected = self.algebra.reflect(mv_exp, basis_exp)  # [n, N, dim]
-            valid = torch.ones(n, device=mv_data.device, dtype=torch.bool)
-        else:
-            reflected, valid = self._planned_basis_reflections(mv_data, basis_vecs, blade_indices)
+        reflected, valid = self._planned_basis_reflections(mv_data)
 
         # Distributional distance for all directions at once
         orig_sorted = mv_data.sort(dim=0).values.unsqueeze(0).expand(n, N, dim)
@@ -168,18 +201,20 @@ class SymmetryDetector:
 
         results = [{"direction": i, "score": scores[i].item()} for i in range(n)]
         results.sort(key=lambda r: r["score"])
-        return results
+        return results, skipped
 
     def _planned_basis_reflections(
         self,
         mv_data: torch.Tensor,
-        basis_vecs: torch.Tensor,
-        blade_indices: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Reflect by basis vectors through planned products for context hosts."""
+        """Reflect by compact basis vectors through planned products."""
         n = self.algebra.n
         dim = self.algebra.dim
         N = mv_data.shape[0]
+        vector_layout = self.algebra.layout((1,))
+        full_layout = self.algebra.layout(full_grades(self.algebra))
+        basis_vecs = torch.eye(n, device=mv_data.device, dtype=mv_data.dtype)
+        blade_indices = vector_layout.indices_tensor(device=mv_data.device)
         signs = torch.tensor(
             [
                 operation_coefficient(int(index), int(index), self.algebra.p, self.algebra.q, self.algebra.r, "gp")
@@ -191,26 +226,22 @@ class SymmetryDetector:
         valid = signs.abs() > eps_like(signs)
         inv_basis = basis_vecs * signs.view(-1, 1)
 
-        full = full_grades(self.algebra)
-        left = basis_vecs.unsqueeze(1).expand(n, N, dim).reshape(n * N, dim)
+        left = basis_vecs.unsqueeze(1).expand(n, N, vector_layout.dim).reshape(n * N, vector_layout.dim)
         values = mv_data.unsqueeze(0).expand(n, N, dim).reshape(n * N, dim)
-        right = inv_basis.unsqueeze(1).expand(n, N, dim).reshape(n * N, dim)
+        right = inv_basis.unsqueeze(1).expand(n, N, vector_layout.dim).reshape(n * N, vector_layout.dim)
         first = self.algebra.geometric_product(
             left,
             values,
-            left_grades=(1,),
-            right_grades=full,
-            output_grades=full,
-            active_output=True,
+            left_layout=vector_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
         )
         reflected = -self.algebra.geometric_product(
             first,
             right,
-            left_grades=full,
-            right_grades=(1,),
-            output_grades=full,
-            left_active_lanes=True,
-            active_output=True,
+            left_layout=full_layout,
+            right_layout=vector_layout,
+            output_layout=full_layout,
         ).reshape(n, N, dim)
         return reflected, valid
 
@@ -238,45 +269,76 @@ class SymmetryDetector:
         Returns:
             Estimated dimension of the continuous symmetry group.
         """
+        dim, _ = self._continuous_symmetries_with_skips(
+            mv_data,
+            commutator_result=commutator_result,
+            threshold=threshold,
+        )
+        return dim
+
+    def _continuous_symmetries_with_skips(
+        self,
+        mv_data: torch.Tensor,
+        commutator_result: Optional[CommutatorResult] = None,
+        threshold: Optional[float] = None,
+    ) -> tuple[int, dict[str, dict]]:
+        """Return continuous-symmetry dimension plus feasibility skip metadata."""
         if threshold is None:
             threshold = CONSTANTS.continuous_symmetry_threshold
+        skipped = {}
 
         if commutator_result is not None:
             spec = commutator_result.exchange_spectrum
             if spec.numel() > 0:
                 max_val = spec.abs().max().clamp_min(eps_like(spec))
-                return int((spec.abs() / max_val < threshold).sum().item())
+                return int((spec.abs() / max_val < threshold).sum().item()), skipped
 
         # Compute from scratch: test each basis bivector
-        n = self.algebra.n
-        dim = self.algebra.dim
         N = mv_data.shape[0]
-        if not dense_analysis_supported(self.algebra, max_n=CONSTANTS.adjoint_max_n):
-            return 0
+        bivector_layout = grade_layout_for_analysis(self.algebra, (2,))
+        full_layout = full_layout_for_analysis(self.algebra)
+        commutator_feasible = product_feasibility(
+            self.algebra,
+            role="continuous_symmetry_basis_bivectors",
+            op="commutator",
+            left_layout=bivector_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
+            max_pairs=CONSTANTS.continuous_symmetry_product_pairs,
+        )
+        if not commutator_feasible:
+            skipped["continuous_symmetries"] = feasibility_record(commutator_feasible)
+            return 0, skipped
 
-        bv_idx_tensor = self.algebra.grade_indices((2,), device=mv_data.device)
+        if bivector_layout.dim == 0:
+            skipped["continuous_symmetries"] = {
+                "reason": "grade_absent",
+                "details": {"n": int(self.algebra.n), "required_grade": 2},
+            }
+            return 0, skipped
 
-        if bv_idx_tensor.numel() == 0:
-            return 0
-
-        n_bv = int(bv_idx_tensor.numel())
-        # Build all bivector bases: [n_bv, dim]
-        bv_bases = torch.zeros(n_bv, dim, device=mv_data.device, dtype=mv_data.dtype)
-        bv_bases[torch.arange(n_bv, device=mv_data.device), bv_idx_tensor] = 1.0
+        n_bv = bivector_layout.dim
+        bv_bases = torch.eye(n_bv, device=mv_data.device, dtype=mv_data.dtype)
 
         # Batch commutator: [n_bv, N, dim]
-        bv_exp = bv_bases.unsqueeze(1).expand(n_bv, N, dim)
-        mv_exp = mv_data.unsqueeze(0).expand(n_bv, N, dim)
+        bv_exp = bv_bases.unsqueeze(1).expand(n_bv, N, bivector_layout.dim)
+        mv_exp = mv_data.unsqueeze(0).expand(n_bv, N, full_layout.dim)
         comm = self.algebra.commutator(
             bv_exp,
             mv_exp,
-            left_grades=(2,),
-            right_grades=full_grades(self.algebra),
-            output_grades=full_grades(self.algebra),
-            active_output=True,
+            left_layout=bivector_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
         )
 
         comm_norms = comm.norm(dim=-1).mean(dim=-1)  # [n_bv]
         data_norm = mv_data.norm(dim=-1).mean().clamp_min(eps_like(mv_data))
 
-        return int((comm_norms / data_norm < threshold).sum().item())
+        return int((comm_norms / data_norm < threshold).sum().item()), skipped
+
+
+def _first_skip_reason(*checks) -> str:
+    for check in checks:
+        if not check:
+            return check.reason
+    return "ok"

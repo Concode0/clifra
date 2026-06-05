@@ -124,9 +124,7 @@ class GeometricAnalyzer:
         if p + q + r < CONSTANTS.pipeline_min_ga_n:
             p = max(p, CONSTANTS.pipeline_min_ga_n - q - r)
 
-        n = p + q + r
-        kernel = "dense" if n <= CONSTANTS.dense_analysis_max_n else "context"
-        algebra = make_algebra(p, q, r, kernel=kernel, device=cfg.device, dtype=cfg.dtype, default_grades=(1,))
+        algebra = make_algebra(p, q, r, device=cfg.device, dtype=cfg.dtype, default_grades=(1,))
         mv_data = self._embed_raw(sampled, algebra)
 
         # GA analyses
@@ -168,9 +166,13 @@ class GeometricAnalyzer:
             else:
                 flat = mv_data
             detector = SymmetryDetector(algebra, null_threshold=cfg.energy_threshold)
-            report.symmetry.continuous_symmetry_dim = detector.detect_continuous_symmetries(
-                flat, commutator_result=report.commutator
+            continuous_dim, continuous_skipped = detector._continuous_symmetries_with_skips(
+                flat,
+                commutator_result=report.commutator,
             )
+            report.symmetry.continuous_symmetry_dim = continuous_dim
+            report.symmetry.skipped.pop("continuous_symmetries", None)
+            report.symmetry.skipped.update(continuous_skipped)
 
         return report
 

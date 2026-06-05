@@ -12,8 +12,8 @@ import math
 import pytest
 import torch
 
-from clifra.core.analysis import DimensionLifter, GeodesicFlow, MetricSearch
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.analysis import DimensionLifter, GeodesicFlow
+from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit
 
@@ -173,8 +173,7 @@ class TestGeodesicFlow:
         gf = GeodesicFlow(alg3, k=4)
         data = torch.randn(10, 3)
         mv = gf._embed(data)
-        # Grade-1 blades in Cl(3,0): indices 1,2,4 (one bit set)
-        grade1_mask = [i for i in range(alg3.dim) if bin(i).count("1") == 1]
+        # Non-grade-1 blades must remain zero.
         other_mask = [i for i in range(alg3.dim) if bin(i).count("1") != 1]
         assert mv[:, other_mask].abs().max().item() < 1e-6
 
@@ -254,7 +253,7 @@ class TestDimensionLifter:
         """Lifted multivectors must have shape [N, target_dim]."""
         lifter = DimensionLifter(device="cpu")
         data = torch.randn(20, 2)
-        alg = CliffordAlgebra(3, 0, device="cpu")  # 2D data -> 3D algebra
+        alg = AlgebraContext(3, 0, device="cpu")  # 2D data -> 3D algebra
         mv = lifter.lift(data, alg, fill=1.0)
         assert mv.shape == (20, alg.dim)
 
@@ -262,7 +261,7 @@ class TestDimensionLifter:
         """Lifted multivectors must have energy only in grade-1 blades."""
         lifter = DimensionLifter(device="cpu")
         data = torch.randn(10, 2)
-        alg = CliffordAlgebra(3, 0, device="cpu")
+        alg = AlgebraContext(3, 0, device="cpu")
         mv = lifter.lift(data, alg, fill=1.0)
         other = [i for i in range(alg.dim) if bin(i).count("1") != 1]
         assert mv[:, other].abs().max().item() < 1e-6
@@ -271,7 +270,7 @@ class TestDimensionLifter:
         """Lifting to the same dimension (no padding) should still work."""
         lifter = DimensionLifter(device="cpu")
         data = torch.randn(10, 3)
-        alg = CliffordAlgebra(3, 0, device="cpu")
+        alg = AlgebraContext(3, 0, device="cpu")
         mv = lifter.lift(data, alg, fill=1.0)
         assert mv.shape == (10, alg.dim)
 
@@ -279,7 +278,7 @@ class TestDimensionLifter:
         """The extra coordinate should equal `fill` in the extra blade."""
         lifter = DimensionLifter(device="cpu")
         data = torch.zeros(5, 2)  # all-zero 2D data
-        alg = CliffordAlgebra(3, 0, device="cpu")
+        alg = AlgebraContext(3, 0, device="cpu")
         # The third grade-1 blade is index 4 (= 1 << 2)
         mv = lifter.lift(data, alg, fill=0.7)
         assert torch.allclose(mv[:, 4], torch.full((5,), 0.7), atol=1e-5)
@@ -288,7 +287,7 @@ class TestDimensionLifter:
         """Lifting to a smaller algebra must raise ValueError."""
         lifter = DimensionLifter(device="cpu")
         data = torch.randn(10, 4)
-        alg = CliffordAlgebra(2, 0, device="cpu")  # only 2D
+        alg = AlgebraContext(2, 0, device="cpu")  # only 2D
         with pytest.raises(ValueError):
             lifter.lift(data, alg)
 
@@ -344,7 +343,7 @@ class TestDimensionLifter:
         """Positive lift must produce [N, 2^(n+1)] multivectors."""
         lifter = DimensionLifter(device="cpu")
         data = _circle_data(16)
-        alg_pos = CliffordAlgebra(3, 0, device="cpu")
+        alg_pos = AlgebraContext(3, 0, device="cpu")
         mv = lifter.lift(data, alg_pos, fill=1.0)
         assert mv.shape == (16, alg_pos.dim)  # 2^3 = 8
 

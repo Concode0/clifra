@@ -17,7 +17,7 @@ from clifra.core.foundation.module import AlgebraLike
 from clifra.core.foundation.numerics import eps_like
 
 from ._types import CONSTANTS, CommutatorResult
-from ._utils import declared_full_product_kwargs, dense_analysis_supported, full_grades, is_dense_algebra
+from ._utils import declared_full_product_kwargs, feasibility_record, full_matrix_feasibility, full_product_feasibility
 
 
 class CommutatorAnalyzer:
@@ -28,7 +28,7 @@ class CommutatorAnalyzer:
     elements (bivectors), directly related to rotation planes.
 
     Args:
-        algebra: algebra kernel or planning context.
+        algebra: Layout-first algebra host.
         max_bivectors: Maximum number of bivectors for Lie-bracket
             closure analysis (guards combinatorial cost).
     """
@@ -60,7 +60,7 @@ class CommutatorAnalyzer:
             flat = mv_data  # [N, dim]
 
         comm_matrix = self.commutativity_matrix(flat)
-        ex_spectrum = self.exchange_spectrum(flat)
+        ex_spectrum, skipped = self._exchange_spectrum_with_skips(flat)
         mcn = self.mean_commutator_norm(flat)
         lie_struct = self.lie_bracket_closure(flat)
 
@@ -69,6 +69,7 @@ class CommutatorAnalyzer:
             exchange_spectrum=ex_spectrum,
             mean_commutator_norm=mcn,
             lie_bracket_structure=lie_struct,
+            skipped=skipped,
         )
 
     def commutativity_matrix(self, mv_data: torch.Tensor) -> torch.Tensor:
@@ -134,13 +135,37 @@ class CommutatorAnalyzer:
             Eigenvalue magnitudes sorted descending.  Returns an
             empty tensor if the algebra is too large.
         """
-        n = self.algebra.n
+        spectrum, _ = self._exchange_spectrum_with_skips(mv_data)
+        return spectrum
+
+    def _exchange_spectrum_with_skips(self, mv_data: torch.Tensor) -> tuple[torch.Tensor, dict[str, dict]]:
+        """Return exchange spectrum plus feasibility skip metadata."""
         dim = self.algebra.dim
         device = mv_data.device
         dtype = mv_data.dtype
+        skipped = {}
 
-        if n > CONSTANTS.adjoint_max_n:
-            return torch.tensor([], device=device, dtype=dtype)
+        matrix_feasible = full_matrix_feasibility(
+            self.algebra,
+            role="adjoint_exchange_spectrum",
+            max_entries=CONSTANTS.adjoint_matrix_entries,
+            matrix_kind="eigensolver",
+        )
+        product_feasible = full_product_feasibility(
+            self.algebra,
+            role="adjoint_exchange_spectrum",
+            op="commutator",
+            max_pairs=CONSTANTS.analysis_product_pairs,
+        )
+        if not matrix_feasible or not product_feasible:
+            skipped["exchange_spectrum"] = {
+                "reason": _first_skip_reason(matrix_feasible, product_feasible),
+                "checks": {
+                    "eigensolver_matrix": feasibility_record(matrix_feasible),
+                    "product": feasibility_record(product_feasible),
+                },
+            }
+            return torch.tensor([], device=device, dtype=dtype), skipped
 
         mu = mv_data.mean(dim=0)  # [dim]
         basis = torch.eye(dim, device=device, dtype=dtype)
@@ -154,7 +179,7 @@ class CommutatorAnalyzer:
 
         eigvals = torch.linalg.eigvals(ad_mu)  # complex
         magnitudes = eigvals.abs()
-        return magnitudes.sort(descending=True).values
+        return magnitudes.sort(descending=True).values, skipped
 
     def mean_commutator_norm(self, mv_data: torch.Tensor) -> float:
         """``E[||[x_i, mu]||_2]`` -- scalar non-commutativity summary.
@@ -168,9 +193,13 @@ class CommutatorAnalyzer:
         Returns:
             Mean commutator norm (float).
         """
-        if not is_dense_algebra(self.algebra) and not dense_analysis_supported(
-            self.algebra, max_n=CONSTANTS.adjoint_max_n
-        ):
+        full_product = full_product_feasibility(
+            self.algebra,
+            role="mean_commutator_norm",
+            op="commutator",
+            max_pairs=CONSTANTS.analysis_product_pairs,
+        )
+        if not full_product:
             layout = self.algebra.layout((1,))
             values = layout.compact(mv_data)
             mu = values.mean(dim=0, keepdim=True)
@@ -284,7 +313,7 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
     """Compute Geometric Uncertainty Index (U) and Procrustes Alignment (V).
 
     Args:
-        algebra: algebra kernel or planning context.
+        algebra: Layout-first algebra host.
         data_tensor: ``[N, D]`` tensor of raw features.
 
     Returns:
@@ -325,3 +354,10 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
         V = torch.eye(D, device=data_tensor.device, dtype=data_tensor.dtype)
 
     return U, V
+
+
+def _first_skip_reason(*checks) -> str:
+    for check in checks:
+        if not check:
+            return check.reason
+    return "ok"

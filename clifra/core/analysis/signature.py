@@ -19,10 +19,12 @@ import torch
 import torch.nn as nn
 
 from clifra.core.config import make_algebra
+from clifra.core.execution.action import FullSandwichActionExecutor, full_versor_factors
+from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 
 from ._types import CONSTANTS, DimensionResult, SamplingConfig, SignatureResult
-from ._utils import analysis_dtype, as_analysis_tensor, require_dense_algebra
+from ._utils import action_matrix_feasibility_for_spec, analysis_dtype, as_analysis_tensor
 from .geodesic import GeodesicFlow
 
 
@@ -44,13 +46,19 @@ class _ProbeLinear(CliffordModule):
 
 
 class _ProbeRotor(CliffordModule):
-    """Core-local dense rotor used only for signature search analysis."""
+    """Core-local full-lane rotor used only for signature search analysis."""
 
     def __init__(self, algebra: AlgebraLike, channels: int):
         super().__init__(algebra)
         self.channels = channels
-        self.register_buffer("bivector_indices", algebra.grade_indices((2,), device=algebra.device))
-        self.bivector_weights = nn.Parameter(torch.empty(channels, self.bivector_indices.numel()))
+        self.parameter_layout = algebra.layout((2,))
+        self.full_layout = algebra.layout()
+        self.action = FullSandwichActionExecutor.from_layout(
+            self.full_layout,
+            device=algebra.device,
+            dtype=algebra.dtype,
+        )
+        self.bivector_weights = nn.Parameter(torch.empty(channels, self.parameter_layout.dim))
         self.bivector_weights._manifold = "spin"
         self.reset_parameters()
 
@@ -58,12 +66,13 @@ class _ProbeRotor(CliffordModule):
         nn.init.normal_(self.bivector_weights, std=CONSTANTS.metric_search_rotor_init_std)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        require_dense_algebra(self.algebra, "Signature probes")
-        bivectors = x.new_zeros(self.channels, self.algebra.dim)
-        indices = self.bivector_indices.unsqueeze(0).expand(self.channels, -1)
-        bivectors.scatter_(1, indices, self.bivector_weights.to(dtype=x.dtype))
-        rotor = self.algebra.exp(-0.5 * bivectors)
-        return self.algebra.per_channel_sandwich(rotor, x, self.algebra.reverse(rotor))
+        left, right = full_versor_factors(
+            self.algebra,
+            self.bivector_weights.to(device=x.device, dtype=x.dtype),
+            grade=2,
+            parameter_layout=self.parameter_layout,
+        )
+        return self.action.per_channel(left, x, right)
 
     def sparsity_loss(self) -> torch.Tensor:
         return torch.norm(self.bivector_weights, p=1)
@@ -155,11 +164,10 @@ def _apply_biased_init(
 
 
 class MetricSearch:
-    """Learns optimal (p, q, r) signature via GBN probe training and bivector
-    energy analysis.
+    """Learn an optimal ``(p, q, r)`` signature via rotor probes and bivector energy analysis.
 
-    Trains small single-rotor GBN probes on conformally-lifted data using
-    coherence + curvature as the loss.  After training, reads the learned
+    Trains small single-rotor probes on conformally-lifted data using
+    coherence + curvature as the loss. After training, reads the learned
     bivector energy distribution to infer the optimal signature.
 
     Multiple probes with biased initialization combat local minima.
@@ -200,24 +208,33 @@ class MetricSearch:
         data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
         N, X = data.shape
 
-        max_input_dim = CONSTANTS.metric_search_dense_max_n - CONSTANTS.metric_search_cga_extra_dims
-        if X + CONSTANTS.metric_search_cga_extra_dims > CONSTANTS.metric_search_dense_max_n:
+        spec = AlgebraSpec(X + 1, 1, 0)
+        action_feasible = action_matrix_feasibility_for_spec(
+            spec,
+            role="metric_search_probe",
+            max_entries=CONSTANTS.metric_search_action_matrix_entries,
+        )
+        max_probe_n = CONSTANTS.metric_search_action_matrix_lanes.bit_length() - 1
+        max_input_dim = max_probe_n - CONSTANTS.metric_search_cga_extra_dims
+        if not action_feasible:
+            entries = action_feasible.details["matrix_entries"]
+            max_entries = action_feasible.details["max_entries"]
             warnings.warn(
-                f"Data dimension {X} yields algebra dim 2^{X + CONSTANTS.metric_search_cga_extra_dims}="
-                f"{2 ** (X + CONSTANTS.metric_search_cga_extra_dims)}. "
-                "MetricSearch probes require dense rotor execution; use SignatureSearchAnalyzer PCA "
+                f"Data dimension {X} yields conformal probe full lanes {action_feasible.details['full_lanes']} "
+                f"and action-matrix entries {entries}, exceeding max_entries={max_entries}. "
+                "MetricSearch probes require full-lane rotor actions; use SignatureSearchAnalyzer PCA "
                 f"pre-reduction to X <= {max_input_dim}."
             )
             raise ValueError(
-                f"MetricSearch requires X <= {max_input_dim} so the conformal probe algebra stays within "
-                f"Cl{CONSTANTS.metric_search_dense_max_n}."
+                f"MetricSearch requires X <= {max_input_dim} so the conformal probe action matrix stays within "
+                f"{max_entries} entries."
             )
 
         norm_sq = 0.5 * (data**2).sum(dim=-1, keepdim=True)
         ones = torch.ones(N, 1, device=self.device, dtype=data.dtype)
         lifted = torch.cat([data, norm_sq, ones], dim=-1)
 
-        algebra = make_algebra(X + 1, 1, 0, kernel="dense", device=self.device, dtype=data.dtype)
+        algebra = make_algebra(X + 1, 1, 0, device=self.device, dtype=data.dtype)
         mv = algebra.embed_vector(lifted)
         mv = mv.unsqueeze(1)
         return mv, algebra
@@ -384,7 +401,7 @@ class MetricSearch:
             "active_positive": active_positive,
             "active_negative": active_negative,
             "active_null": active_null,
-            "bv_sq_scalar": bv_sq.tolist(),
+            "bivector_squared_signs": bv_sq.tolist(),
         }
 
         return (p, q, r), energy_breakdown

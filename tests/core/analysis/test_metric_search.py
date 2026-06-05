@@ -10,7 +10,7 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.slow
 from clifra.core.analysis import GeodesicFlow, MetricSearch
@@ -32,7 +32,7 @@ def small_searcher():
 @pytest.fixture(scope="module")
 def alg_conformal():
     """Create a Cl(3,1) algebra -- conformal lift of 2D data."""
-    return CliffordAlgebra(3, 1, 0, device="cpu")
+    return AlgebraContext(3, 1, 0, device="cpu")
 
 
 class TestMetricSearchAPI:
@@ -135,7 +135,7 @@ class TestBiasedInit:
         """Verify Euclidean bias prioritizes elliptic bivectors."""
         probe = _SignatureProbe(alg_conformal, channels=2)
         _apply_biased_init(probe, alg_conformal, "euclidean")
-        bv_sq = alg_conformal.bv_sq_scalar
+        bv_sq = alg_conformal.bivector_squared_signs(device=alg_conformal.device, dtype=alg_conformal.dtype)
         for rotor in probe.get_rotor_layers():
             weights = rotor.bivector_weights.detach()
             # Elliptic bivectors (bv_sq < -0.5) should have larger weights
@@ -160,7 +160,7 @@ class TestDifferentiableMethods:
 
     def test_coherence_tensor_differentiable(self):
         """Verify coherence calculation is differentiable."""
-        alg = CliffordAlgebra(3, 0, device="cpu")
+        alg = AlgebraContext(3, 0, device="cpu")
         data = torch.randn(16, 3, requires_grad=True)
         mv = alg.embed_vector(data)
         gf = GeodesicFlow(alg, k=4)
@@ -172,7 +172,7 @@ class TestDifferentiableMethods:
 
     def test_curvature_tensor_differentiable(self):
         """Verify curvature calculation is differentiable."""
-        alg = CliffordAlgebra(3, 0, device="cpu")
+        alg = AlgebraContext(3, 0, device="cpu")
         data = torch.randn(16, 3, requires_grad=True)
         mv = alg.embed_vector(data)
         gf = GeodesicFlow(alg, k=4)
@@ -183,7 +183,7 @@ class TestDifferentiableMethods:
 
     def test_coherence_tensor_matches_coherence(self):
         """Verify _coherence_tensor matches coherence float value."""
-        alg = CliffordAlgebra(3, 0, device="cpu")
+        alg = AlgebraContext(3, 0, device="cpu")
         torch.manual_seed(10)
         data = torch.randn(16, 3)
         mv = alg.embed_vector(data)
@@ -198,7 +198,7 @@ class TestBivectorEnergyAnalysis:
 
     def test_returns_valid_signature(self):
         """Verify energy analysis returns valid (p, q, r) and breakdown dict."""
-        alg = CliffordAlgebra(3, 1, 0, device="cpu")
+        alg = AlgebraContext(3, 1, 0, device="cpu")
         probe = _SignatureProbe(alg, channels=2)
         searcher = MetricSearch(device="cpu")
         (p, q, r), breakdown = searcher._analyze_bivector_energy(probe, alg, 2)
@@ -207,4 +207,4 @@ class TestBivectorEnergyAnalysis:
         assert isinstance(r, int)
         assert p + q + r <= 2
         assert "per_bivector_energy" in breakdown
-        assert "bv_sq_scalar" in breakdown
+        assert "bivector_squared_signs" in breakdown

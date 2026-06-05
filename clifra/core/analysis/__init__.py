@@ -30,6 +30,12 @@ from .commutator import CommutatorAnalyzer, compute_uncertainty_and_alignment
 from .dimension import DimensionLifter, EffectiveDimensionAnalyzer
 from .geodesic import GeodesicFlow
 from .pipeline import GeometricAnalyzer
+from .policy import (
+    AnalysisCostPolicy,
+    AnalysisFeasibility,
+    MatrixAnalysisCost,
+    ProductAnalysisCost,
+)
 from .sampler import StatisticalSampler
 from .signature import MetricSearch, SignatureSearchAnalyzer
 from .spectral import SpectralAnalyzer
@@ -48,6 +54,10 @@ __all__ = [
     "SymmetryResult",
     "CommutatorResult",
     "AnalysisReport",
+    "AnalysisCostPolicy",
+    "AnalysisFeasibility",
+    "MatrixAnalysisCost",
+    "ProductAnalysisCost",
     # Analyzers
     "StatisticalSampler",
     "EffectiveDimensionAnalyzer",

@@ -17,7 +17,7 @@ from clifra.core.foundation.module import AlgebraLike
 from clifra.core.foundation.numerics import eps_like
 
 from ._types import CONSTANTS
-from ._utils import require_dense_algebra
+from ._utils import full_grades
 
 
 class GeodesicFlow:
@@ -47,7 +47,7 @@ class GeodesicFlow:
         """Initialize Geodesic Flow.
 
         Args:
-            algebra (CliffordAlgebra): The algebra instance.
+            algebra: Layout-first algebra context.
             k (int): Number of nearest neighbours for the flow field.
         """
         self.algebra = algebra
@@ -134,7 +134,7 @@ class GeodesicFlow:
         compact = (bv_raw / bv_norm).reshape(N, k, layout.dim)
         if active_output:
             return compact
-        return layout.dense(compact)  # [N, k, dim]
+        return layout.full(compact)  # [N, k, dim]
 
     def flow_bivectors(self, mv: torch.Tensor) -> torch.Tensor:
         """Computes the mean flow bivector at each data point.
@@ -282,30 +282,52 @@ class GeodesicFlow:
         Returns:
             torch.Tensor: ``[steps, dim]`` sequence of multivectors.
         """
-        require_dense_algebra(self.algebra, "GeodesicFlow.interpolate")
         if steps <= 0:
             raise ValueError(f"steps must be positive, got {steps}")
 
+        full_layout = self.algebra.layout(full_grades(self.algebra))
+        bivector_layout = self.algebra.layout((2,))
         a = a.unsqueeze(0)  # [1, dim]
         b = b.unsqueeze(0)  # [1, dim]
 
-        a_inv = self.algebra.blade_inverse(a)  # [1, dim]
+        a_inv = self.algebra.blade_inverse(a, input_layout=full_layout)  # [1, dim]
 
         # Transition element T = a_inv . b
-        T = self.algebra.geometric_product(a_inv, b)  # [1, dim]
+        T = self.algebra.geometric_product(
+            a_inv,
+            b,
+            left_layout=full_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
+        )  # [1, dim]
 
         # Log approximation: grade-2 part of (T - 1)
         T_shift = T.clone()
         T_shift[..., 0] -= 1.0
-        log_T = self.algebra.grade_projection(T_shift, 2)  # [1, dim]
+        log_T = self.algebra.grade_projection(
+            T_shift,
+            2,
+            input_layout=full_layout,
+            output_layout=bivector_layout,
+        )  # [1, grade2_dim]
 
         # Sample t in [0, 1]
         ts = torch.linspace(0.0, 1.0, steps, device=a.device, dtype=a.dtype)
 
         # Batched: scale log_T by all t values, exp, then GP
-        scaled = ts.unsqueeze(-1) * log_T  # [steps, dim]
-        exp_all = self.algebra.exp(scaled)  # [steps, dim]
-        return self.algebra.geometric_product(a, exp_all)  # [steps, dim]
+        scaled = ts.unsqueeze(-1) * log_T  # [steps, grade2_dim]
+        exp_all = self.algebra.exp(
+            scaled,
+            input_layout=bivector_layout,
+            output_layout=full_layout,
+        )  # [steps, dim]
+        return self.algebra.geometric_product(
+            a,
+            exp_all,
+            left_layout=full_layout,
+            right_layout=full_layout,
+            output_layout=full_layout,
+        )  # [steps, dim]
 
     def _random_baseline_coherence(self) -> float:
         """Expected coherence for random unit vectors in the bivector subspace.

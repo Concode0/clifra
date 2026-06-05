@@ -32,7 +32,7 @@ from clifra.core.analysis import (
     SymmetryResult,
     compute_uncertainty_and_alignment,
 )
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 
 DEVICE = "cpu"
 
@@ -44,17 +44,17 @@ DEVICE = "cpu"
 
 @pytest.fixture(scope="module")
 def alg3():
-    return CliffordAlgebra(3, 0, device=DEVICE)
+    return AlgebraContext(3, 0, device=DEVICE)
 
 
 @pytest.fixture(scope="module")
 def alg21():
-    return CliffordAlgebra(2, 1, device=DEVICE)
+    return AlgebraContext(2, 1, device=DEVICE)
 
 
 @pytest.fixture(scope="module")
 def alg2():
-    return CliffordAlgebra(2, 0, device=DEVICE)
+    return AlgebraContext(2, 0, device=DEVICE)
 
 
 @pytest.fixture(scope="module")
@@ -503,7 +503,7 @@ class TestComputeUncertaintyAndAlignment:
         assert U >= 0
 
     def test_padding_when_D_lt_n(self):
-        alg = CliffordAlgebra(4, 0, device=DEVICE)
+        alg = AlgebraContext(4, 0, device=DEVICE)
         data = torch.randn(50, 2)  # D=2 < n=4
         U, V = compute_uncertainty_and_alignment(alg, data)
         assert V.shape == (2, 2)

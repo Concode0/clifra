@@ -9,7 +9,13 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from clifra.core.planning.policy import DENSE_AUTO_MAX_N, DENSE_EXPLICIT_MAX_N
+from clifra.core.planning.policy import FULL_TABLE_AUTO_MAX_N, FULL_TABLE_EXPLICIT_MAX_N
+
+GP_SPECTRUM_MATRIX_ENTRIES = 1 << (2 * 10)
+ADJOINT_MATRIX_ENTRIES = 1 << (2 * 8)
+AUTO_FULL_PRODUCT_PAIRS = 1 << (2 * FULL_TABLE_AUTO_MAX_N)
+EXPLICIT_ACTION_MATRIX_LANES = 1 << FULL_TABLE_EXPLICIT_MAX_N
+EXPLICIT_ACTION_MATRIX_ENTRIES = EXPLICIT_ACTION_MATRIX_LANES * EXPLICIT_ACTION_MATRIX_LANES
 
 
 @dataclass
@@ -37,11 +43,12 @@ class AnalysisConstants:
         reflection_score_threshold: Maximum reflection score for a
             direction to be counted as a reflection symmetry in the
             report summary.
-        gp_spectrum_max_n: Maximum algebra dimension *n* for which the
-            full geometric-product operator spectrum is computed
-            (``dim = 2^n``).
-        adjoint_max_n: Maximum algebra dimension *n* for which the
-            adjoint-operator matrix is materialised.
+        gp_spectrum_matrix_entries: Maximum square-matrix entries for
+            the full geometric-product operator spectrum.
+        adjoint_matrix_entries: Maximum square-matrix entries for the
+            adjoint-operator eigensolver.
+        analysis_product_pairs: Maximum planned product interactions for
+            optional full-layout analysis subroutines.
         gp_spectrum_n_samples: Number of data samples used when building
             the GP left-multiplication matrix.
     """
@@ -51,11 +58,15 @@ class AnalysisConstants:
     bv_sq_hyperbolic_bound: float = 0.5
     continuous_symmetry_threshold: float = 0.05
     reflection_score_threshold: float = 0.1
-    gp_spectrum_max_n: int = 10
-    adjoint_max_n: int = 8
+    gp_spectrum_matrix_entries: int = GP_SPECTRUM_MATRIX_ENTRIES
+    gp_spectrum_product_pairs: int = GP_SPECTRUM_MATRIX_ENTRIES
+    adjoint_matrix_entries: int = ADJOINT_MATRIX_ENTRIES
+    analysis_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
+    reflection_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
+    continuous_symmetry_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
+    metric_search_action_matrix_entries: int = EXPLICIT_ACTION_MATRIX_ENTRIES
+    metric_search_action_matrix_lanes: int = EXPLICIT_ACTION_MATRIX_LANES
     gp_spectrum_n_samples: int = 50
-    dense_analysis_max_n: int = DENSE_AUTO_MAX_N
-    reflection_analysis_max_n: int = DENSE_AUTO_MAX_N
     default_k_neighbors: int = 8
     default_energy_threshold: float = 0.05
     default_dtype: torch.dtype = torch.float32
@@ -81,14 +92,13 @@ class AnalysisConstants:
     metric_search_curvature_weight: float = 0.3
     metric_search_sparsity_weight: float = 0.01
     metric_search_parallel_worker_cap: int = 4
-    metric_search_dense_max_n: int = DENSE_EXPLICIT_MAX_N
     metric_search_cga_extra_dims: int = 2
     metric_search_rotor_init_std: float = 0.01
     metric_search_bias_minor_weight: float = 0.1
     metric_search_bias_noise_std: float = 0.05
     metric_search_projective_init_bound: float = 0.5
     metric_search_random_init_std: float = 0.3
-    signature_search_max_dim: int = DENSE_EXPLICIT_MAX_N - 2
+    signature_search_max_dim: int = FULL_TABLE_EXPLICIT_MAX_N - 2
     signature_bootstrap_resamples: int = 10
     signature_bootstrap_max_samples: int = 500
     spectral_max_simple_components: int = 5
@@ -212,12 +222,14 @@ class SpectralResult:
             decomposition.
         gp_eigenvalues: Eigenvalues of the geometric-product left-action
             operator (``None`` if the algebra was too large).
+        skipped: Optional analysis subreports skipped by feasibility policy.
     """
 
     grade_energy: torch.Tensor
     bivector_spectrum: torch.Tensor
     simple_components: List[torch.Tensor]
     gp_eigenvalues: Optional[torch.Tensor] = None
+    skipped: Dict[str, Dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -234,6 +246,7 @@ class SymmetryResult:
             and ``score`` (lower = more symmetric).
         continuous_symmetry_dim: Dimension of the detected continuous
             symmetry group.
+        skipped: Optional symmetry subreports skipped by feasibility policy.
     """
 
     null_directions: List[int]
@@ -241,6 +254,7 @@ class SymmetryResult:
     involution_symmetry: float
     reflection_symmetries: List[Dict]
     continuous_symmetry_dim: int
+    skipped: Dict[str, Dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -253,12 +267,14 @@ class CommutatorResult:
         mean_commutator_norm: Scalar summary ``E[||[x_i, mu]||_2]``.
         lie_bracket_structure: Dict with ``structure_constants`` ``[k, k, k]``
             tensor, ``closure_error`` scalar, and ``basis_indices`` list.
+        skipped: Optional commutator subreports skipped by feasibility policy.
     """
 
     commutativity_matrix: torch.Tensor
     exchange_spectrum: torch.Tensor
     mean_commutator_norm: float
     lie_bracket_structure: Dict
+    skipped: Dict[str, Dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -314,6 +330,8 @@ class AnalysisReport:
                 top = min(5, len(sp.gp_eigenvalues))
                 gpe = ", ".join(f"{v:.4f}" for v in sp.gp_eigenvalues[:top].tolist())
                 lines.append(f"  GP eigenvalues (top {top}): [{gpe}]")
+            if sp.skipped:
+                lines.append(f"  Skipped: {', '.join(sorted(sp.skipped))}")
 
         if self.symmetry is not None:
             sy = self.symmetry
@@ -323,6 +341,8 @@ class AnalysisReport:
             lines.append(f"  Continuous symmetry dim: {sy.continuous_symmetry_dim}")
             n_refl = sum(1 for r in sy.reflection_symmetries if r["score"] < CONSTANTS.reflection_score_threshold)
             lines.append(f"  Reflection symmetries: {n_refl} detected")
+            if sy.skipped:
+                lines.append(f"  Skipped: {', '.join(sorted(sy.skipped))}")
 
         if self.commutator is not None:
             c = self.commutator
@@ -334,6 +354,8 @@ class AnalysisReport:
             ce = c.lie_bracket_structure.get("closure_error", None)
             if ce is not None:
                 lines.append(f"  Lie bracket closure error: {ce:.4f}")
+            if c.skipped:
+                lines.append(f"  Skipped: {', '.join(sorted(c.skipped))}")
 
         if self.metadata:
             lines.append(f"\n[Metadata]")

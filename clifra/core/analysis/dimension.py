@@ -10,7 +10,7 @@ dimensions the data actually occupies and whether lifting reveals
 latent structure.
 """
 
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
 
