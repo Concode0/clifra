@@ -13,10 +13,19 @@ import pytest
 import torch
 
 from clifra.core.config import make_algebra
-from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers import CliffordLinear, RotorGadget
 
 pytestmark = pytest.mark.unit
+
+
+def _planned_paired_full_factors(layer: RotorGadget):
+    algebra = layer.algebra
+    exp = algebra.plan_exp(input_layout=layer.parameter_layout, output_layout=layer.rotor_layout)
+    reverse = algebra.plan_unary(op="reverse", input_layout=layer.rotor_layout, output_layout=layer.rotor_layout)
+    left = exp(-0.5 * layer.bivector_left)
+    right = reverse(exp(-0.5 * layer.bivector_right))
+    return layer.rotor_layout.full(left), layer.rotor_layout.full(right)
 
 
 class TestRotorGadgetShapes:
@@ -49,8 +58,8 @@ class TestRotorGadgetShapes:
         )
         x = torch.randn(2, 7, algebra_3d.dim)
 
-        R_left, R_right_rev = layer._compute_rotors(x.device, x.dtype)
-        ch2pair = layer._ch2pair.to(device=x.device)
+        R_left, R_right_rev = _planned_paired_full_factors(layer)
+        ch2pair = layer._ch2pair
         expected_channels = algebra_3d.per_channel_sandwich(R_left[ch2pair], x, R_right_rev[ch2pair])
         actual_channels = torch.einsum(
             "...cj,ckj->...ck",
@@ -61,8 +70,8 @@ class TestRotorGadgetShapes:
         assert torch.allclose(actual_channels, expected_channels, atol=1e-6, rtol=1e-6)
         assert torch.allclose(layer(x), layer._aggregate_to_output_channels(expected_channels), atol=1e-6, rtol=1e-6)
 
-    def test_compact_pair_action_matches_dense_reference(self, algebra_3d):
-        """Compact RotorGadget uses planned pair products without changing dense semantics."""
+    def test_compact_pair_action_matches_full_lane_reference(self, algebra_3d):
+        """Compact RotorGadget uses planned pair products without changing full-lane semantics."""
         input_layout = algebra_3d.layout((1,))
         layer = RotorGadget(
             algebra=algebra_3d,
@@ -72,14 +81,14 @@ class TestRotorGadgetShapes:
             aggregation="sum",
             input_layout=input_layout,
         )
-        x_dense = torch.randn(2, 5, algebra_3d.dim)
-        x = input_layout.compact(x_dense)
-        x_reference = input_layout.dense(x)
+        x_full = torch.randn(2, 5, algebra_3d.dim)
+        x = input_layout.compact(x_full)
+        x_reference = input_layout.full(x)
 
-        R_left, R_right_rev = layer._compute_rotors(x.device, x.dtype)
-        ch2pair = layer._ch2pair.to(device=x.device)
-        expected_channels_dense = algebra_3d.per_channel_sandwich(R_left[ch2pair], x_reference, R_right_rev[ch2pair])
-        expected_channels = layer.output_layout.compact(expected_channels_dense)
+        R_left, R_right_rev = _planned_paired_full_factors(layer)
+        ch2pair = layer._ch2pair
+        expected_channels_full = algebra_3d.per_channel_sandwich(R_left[ch2pair], x_reference, R_right_rev[ch2pair])
+        expected_channels = layer.output_layout.compact(expected_channels_full)
 
         assert layer.output_layout.grades == (1, 3)
         assert torch.allclose(
@@ -97,7 +106,7 @@ class TestRotorGadgetShapes:
 
     def test_context_rotor_gadget_uses_planned_compact_products(self):
         """RotorGadget is available on planning contexts when layouts are compact."""
-        context = make_algebra(4, 0, kernel="context", device="cpu", dtype=torch.float32, default_grades=(1,))
+        context = make_algebra(4, 0, device="cpu", dtype=torch.float32, default_grades=(1,))
         input_layout = context.layout((1,))
         layer = RotorGadget(context, in_channels=3, out_channels=2, num_rotor_pairs=2)
         x = torch.randn(2, 3, input_layout.dim)
@@ -111,7 +120,7 @@ class TestRotorGadgetShapes:
 
     @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
     def test_fullgraph_compile(self, algebra_3d):
-        """RotorGadget remains graph-capturable on its dense execution path."""
+        """RotorGadget remains graph-capturable on its full-lane execution path."""
         layer = RotorGadget(algebra=algebra_3d, in_channels=4, out_channels=4, num_rotor_pairs=2)
         compiled = torch.compile(layer, backend="aot_eager", fullgraph=True)
         x = torch.randn(2, 4, algebra_3d.dim)
@@ -189,7 +198,7 @@ class TestRotorProperties:
         )
 
         # Compute rotors
-        R_left, R_right_rev = layer._compute_rotors()
+        R_left, R_right_rev = _planned_paired_full_factors(layer)
 
         # Check unit norm by computing R * ~R = 1 (scalar component)
         # For a unit rotor, the scalar part of R * ~R should be 1
@@ -223,7 +232,7 @@ class TestRotorProperties:
         )
 
         # Compute rotors
-        R_left, R_right_rev = layer._compute_rotors()
+        R_left, R_right_rev = _planned_paired_full_factors(layer)
 
         # For left rotors: R * ~R should be scalar 1
         for i in range(layer.num_rotor_pairs):
@@ -600,7 +609,7 @@ class TestEdgeCases:
     def test_algebra_with_no_bivectors_raises(self):
         """Test that algebra with no bivectors raises an error."""
         # Cl(1,0) has 1 basis vector, so it has 0 bivectors
-        algebra_1d = CliffordAlgebra(p=1, q=0, device="cpu")
+        algebra_1d = AlgebraContext(p=1, q=0, device="cpu")
 
         with pytest.raises(ValueError, match="no bivectors"):
             RotorGadget(
@@ -678,8 +687,6 @@ class TestShuffleOptions:
             out = layer(x)
             outputs.append(out)
 
-        # At least some outputs should be different (statistical test)
-        all_same = all(torch.allclose(outputs[0], out) for out in outputs[1:])
         # With random shuffle, this should almost never be all the same
         # But to avoid flaky test, we just check the functionality works
         assert all(out.shape == (2, 8, algebra_3d.dim) for out in outputs)

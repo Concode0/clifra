@@ -13,8 +13,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
-from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.storage import resolve_layer_layout_contract
 
 from ._utils import require_choice, require_positive_int
@@ -42,7 +41,7 @@ class CliffordLinear(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         in_channels: int,
         out_channels: int,
         backend: Literal["traditional", "rotor"] = "traditional",
@@ -55,7 +54,7 @@ class CliffordLinear(CliffordModule):
         """Initialize Clifford Linear.
 
         Args:
-            algebra (CliffordAlgebra): The algebra instance.
+            algebra: Planner-capable algebra host.
             in_channels (int): Input size.
             out_channels (int): Output size.
             backend (str): 'traditional' for standard linear layer,

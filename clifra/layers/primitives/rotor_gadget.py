@@ -17,7 +17,6 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-from clifra.core.execution.action import PairedBivectorActionExecutor, dense_paired_bivector_factors
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
@@ -49,7 +48,7 @@ class RotorGadget(CliffordModule):
     The transformation is: psi(x) = r.x.s.H where r, s are rotors (bivector exponentials).
 
     Attributes:
-        algebra: CliffordAlgebra instance
+        algebra: Planner-capable algebra host
         in_channels: Number of input channels
         out_channels: Number of output channels
         num_rotor_pairs: Number of rotor pairs to use
@@ -76,7 +75,7 @@ class RotorGadget(CliffordModule):
         """Initialize rotor gadget layer.
 
         Args:
-            algebra: CliffordAlgebra instance
+            algebra: Planner-capable algebra host
             in_channels: Number of input channels
             out_channels: Number of output channels
             num_rotor_pairs: Number of rotor pairs (higher = more expressive)
@@ -121,13 +120,10 @@ class RotorGadget(CliffordModule):
         self.input_lane_dim = self.input_contract.lane_dim
         self.output_lane_dim = self.output_contract.lane_dim
         self.num_bivectors = self.parameter_layout.dim
-        self.action = PairedBivectorActionExecutor(
-            algebra,
+        self.action = algebra.plan_paired_bivector_action(
             input_layout=self.input_layout,
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
-            rotor_layout=self.rotor_layout,
-            middle_layout=self.middle_layout,
         )
 
         # Rotor parameters: bivector coefficients for exponential map
@@ -195,7 +191,7 @@ class RotorGadget(CliffordModule):
         self.in_indices = in_indices
         self.out_indices = out_indices
 
-        ch2pair = in_assignment.to(dtype=torch.long)
+        ch2pair = in_assignment.long()
         self.register_buffer("_ch2pair", ch2pair)
         self.register_buffer("_channel_mix_mean", channel_mix(self.in_channels, self.out_channels, normalize=True))
         self.register_buffer("_channel_mix_sum", channel_mix(self.in_channels, self.out_channels, normalize=False))
@@ -212,27 +208,6 @@ class RotorGadget(CliffordModule):
         else:  # 'none'
             # No shuffle - identity permutation
             self.register_buffer("channel_permutation", None)
-
-    def _compute_rotors(self, device=None, dtype=None):
-        """Compute rotor multivectors from bivector parameters.
-
-        Returns:
-            Tuple of (left_rotors, right_rotors_reversed) where each is
-            a tensor of shape [num_rotor_pairs, algebra.dim]
-        """
-        left = self.bivector_left
-        right = self.bivector_right
-        if device is not None or dtype is not None:
-            left = left.to(device=device, dtype=dtype)
-            right = right.to(device=device, dtype=dtype)
-        if not hasattr(self.algebra, "sandwich_action_matrices"):
-            raise ValueError("dense rotor materialization requires dense sandwich action matrices")
-        return dense_paired_bivector_factors(
-            self.algebra,
-            left,
-            right,
-            parameter_layout=self.parameter_layout,
-        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply rotor-based transformation.
@@ -289,11 +264,11 @@ class RotorGadget(CliffordModule):
             Aggregated output [B, out_channels, dim]
         """
         if self.aggregation == "learned":
-            pair_values = torch.einsum("ki,...id->...kd", self._pair_mean.to(device=x.device, dtype=x.dtype), x)
-            return torch.einsum("ko,...kd->...od", self.agg_weights.to(device=x.device, dtype=x.dtype), pair_values)
+            pair_values = torch.einsum("ki,...id->...kd", self._pair_mean, x)
+            return torch.einsum("ko,...kd->...od", self.agg_weights, pair_values)
 
         mix = self._channel_mix_sum if self.aggregation == "sum" else self._channel_mix_mean
-        return torch.einsum("oi,...id->...od", mix.to(device=x.device, dtype=x.dtype), x)
+        return torch.einsum("oi,...id->...od", mix, x)
 
     def extra_repr(self) -> str:
         """String representation for debugging."""

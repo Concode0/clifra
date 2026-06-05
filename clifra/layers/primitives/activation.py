@@ -81,7 +81,7 @@ class GradeSwish(CliffordModule):
         self._validate_input(x, "GradeSwish input")
         return grade_swish(
             x,
-            grade_index=self._grade_index.to(device=x.device),
+            grade_index=self._grade_index,
             grade_weights=self.grade_weights,
             grade_biases=self.grade_biases,
             n_grades=self.n_grades,

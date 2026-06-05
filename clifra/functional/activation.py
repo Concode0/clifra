@@ -4,8 +4,8 @@
 
 """Pure activation formulas for multivector tensors.
 
-The final axis is the Clifford lane axis. Dense multivectors are ``[..., D]``
-and compact layout values are ``[..., L]``. Per-channel activations use
+The final axis is the Clifford lane axis. Full-lane multivectors are ``[..., D]``
+and active layout values are ``[..., L]``. Per-channel activations use
 ``[..., C, D]`` or ``[..., C, L]`` with parameter vectors shaped ``[C]``.
 """
 
@@ -46,7 +46,7 @@ def geometric_square(algebra, values: torch.Tensor, gate: torch.Tensor | None = 
 
     Args:
         algebra: Algebra host.
-        values: Dense multivectors with shape ``[..., D]`` or compact layout
+        values: Full-lane multivectors with shape ``[..., D]`` or active layout
             values with shape ``[..., L]`` when ``layout`` is provided.
         gate: Optional per-channel gate with shape ``[C]``.
         layout: Compact layout describing the ``L`` final lanes.
@@ -95,7 +95,7 @@ def grade_swish(
 
     lane_dim = values.shape[-1]
     batch_shape = values.shape[:-1]
-    grade_idx = grade_index.to(device=values.device).expand(*batch_shape, lane_dim)
+    grade_idx = grade_index.expand(*batch_shape, lane_dim)
 
     norm_sq = values.new_zeros(*batch_shape, n_grades)
     norm_sq.scatter_add_(-1, grade_idx, values * values)

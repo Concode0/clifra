@@ -4,8 +4,8 @@
 
 """Pure loss and regularization formulas.
 
-Multivector losses use the final axis as the Clifford lane axis. Dense
-multivectors are ``[..., D]`` and compact layout values are ``[..., L]``. Lane
+Multivector losses use the final axis as the Clifford lane axis. Full-lane
+multivectors are ``[..., D]`` and active layout values are ``[..., L]``. Lane
 masks and metric vectors are shaped ``[D]`` or ``[L]``. Non-Clifford task
 tensors document their ordinary axes locally.
 """
@@ -50,7 +50,7 @@ def isometry_loss(pred: torch.Tensor, target: torch.Tensor, metric_diag: torch.T
 
 
 def bivector_regularization(algebra, values: torch.Tensor, *, grade: int = 2) -> torch.Tensor:
-    """Penalize energy outside one target grade in dense ``[..., D]`` multivectors."""
+    """Penalize energy outside one target grade in full-lane ``[..., D]`` multivectors."""
     target_part = algebra.grade_projection(values, grade)
     residual = values - target_part
     return (residual**2).sum(dim=-1).mean()
@@ -59,7 +59,7 @@ def bivector_regularization(algebra, values: torch.Tensor, *, grade: int = 2) ->
 def hermitian_grade_regularization(algebra, features: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Return MSE between actual and target Hermitian grade distributions.
 
-    ``features`` are dense multivectors with shape ``[..., D]`` and ``target``
+    ``features`` are full-lane multivectors with shape ``[..., D]`` and ``target``
     is a grade distribution with shape ``[G]``.
     """
     flat = features.reshape(-1, features.shape[-1])
@@ -131,5 +131,5 @@ def asymmetry_penalty(logits_fwd: torch.Tensor, logits_rev: torch.Tensor, *, mar
 
 
 def involution_consistency_loss(features: torch.Tensor, features_neg: torch.Tensor, algebra) -> torch.Tensor:
-    """Return MSE between dense ``[..., D]`` features and their grade-involuted counterpart."""
+    """Return MSE between full-lane ``[..., D]`` features and their grade-involuted counterpart."""
     return F.mse_loss(algebra.grade_involution(features), features_neg)

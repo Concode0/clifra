@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from clifra.core.foundation.numerics import covariance_regularizer, eps_for, signed_clamp_min
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers.primitives.projection import GeometricNeutralizer
 
 pytestmark = pytest.mark.unit
@@ -34,7 +34,7 @@ def test_covariance_regularizer_is_dtype_aware_and_scale_aware():
 
 
 def test_geometric_neutralizer_zero_covariance_stays_finite():
-    algebra = CliffordAlgebra(3, 0, 0, device="cpu", dtype=torch.float32)
+    algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float32)
     neutralizer = GeometricNeutralizer(algebra, channels=2)
     x = torch.zeros(4, 2, algebra.dim)
 

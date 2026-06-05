@@ -14,10 +14,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers import MultiRotorLayer, RotorGadget, RotorLayer
 from clifra.optimizers.riemannian import (
-    MANIFOLD_EUCLIDEAN,
     MANIFOLD_SPHERE,
     MANIFOLD_SPIN,
     ExponentialSGD,
@@ -521,7 +520,7 @@ def test_zero_learning_rate(algebra_3d, rotor_layer):
 
 def test_invalid_parameters():
     """Verify optimizers validate input parameters."""
-    algebra_3d = CliffordAlgebra(p=3, q=0, device="cpu")
+    algebra_3d = AlgebraContext(p=3, q=0, device="cpu")
     layer = RotorLayer(algebra_3d, channels=2)
 
     # Invalid learning rate

@@ -8,7 +8,8 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
+from clifra.core.execution.handles import MultiVersorActionHandle, PairedBivectorActionHandle, VersorActionHandle
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers import (
     BladeSelector,
     CliffordLayerNorm,
@@ -20,6 +21,14 @@ from clifra.layers import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def _planned_grade2_full_factors(algebra, weights: torch.Tensor, parameter_layout):
+    rotor_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    exp = algebra.plan_exp(input_layout=parameter_layout, output_layout=rotor_layout)
+    reverse = algebra.plan_unary(op="reverse", input_layout=rotor_layout, output_layout=rotor_layout)
+    rotor = exp(-0.5 * weights)
+    return rotor_layout.full(rotor), rotor_layout.full(reverse(rotor))
 
 
 class TestLayers:
@@ -106,46 +115,57 @@ class TestLayers:
 
         assert y.shape == x.shape
 
-    def test_compact_rotor_matches_dense_reference(self):
+    def test_versor_layers_store_planned_action_handles(self, algebra_3d):
+        rotor = RotorLayer(algebra_3d, 4)
+        reflection = ReflectionLayer(algebra_3d, 4)
+        multi = MultiRotorLayer(algebra_3d, 4, num_rotors=2)
+        gadget = RotorGadget(algebra_3d, in_channels=4, out_channels=3, num_rotor_pairs=2)
+
+        assert isinstance(rotor.action, VersorActionHandle)
+        assert isinstance(reflection.action, VersorActionHandle)
+        assert isinstance(multi.action, MultiVersorActionHandle)
+        assert isinstance(gadget.action, PairedBivectorActionHandle)
+
+    def test_compact_rotor_matches_full_lane_reference(self):
         context = AlgebraContext(3, 0, device="cpu", default_grades=(1,))
-        dense = CliffordAlgebra(3, 0, device="cpu")
+        full_context = AlgebraContext(3, 0, device="cpu")
         layout = context.layout((1,))
         x = torch.randn(2, 4, layout.dim)
 
         compact_layer = RotorLayer(context, 4, input_layout=layout)
-        dense_layer = RotorLayer(dense, 4)
-        dense_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
+        full_layer = RotorLayer(full_context, 4)
+        full_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
 
         actual = compact_layer(x)
-        expected = layout.compact(dense_layer(layout.dense(x)))
+        expected = layout.compact(full_layer(layout.full(x)))
 
         assert actual.shape == x.shape
         assert torch.allclose(actual, expected, atol=1e-4)
 
-    def test_compact_rotor_multigrade_matches_dense_reference(self):
+    def test_compact_rotor_multigrade_matches_full_lane_reference(self):
         context = AlgebraContext(3, 0, device="cpu")
-        dense = CliffordAlgebra(3, 0, device="cpu")
+        full_context = AlgebraContext(3, 0, device="cpu")
         layout = context.layout((0, 1, 2))
-        dense_x = torch.randn(2, 3, dense.dim)
-        x = layout.compact(dense_x)
+        full_x = torch.randn(2, 3, full_context.dim)
+        x = layout.compact(full_x)
 
         compact_layer = RotorLayer(context, 3, input_layout=layout)
-        dense_layer = RotorLayer(dense, 3)
-        dense_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
+        full_layer = RotorLayer(full_context, 3)
+        full_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
 
         actual = compact_layer(x)
-        expected = layout.compact(dense_layer(dense_x))
+        expected = layout.compact(full_layer(full_x))
 
         assert actual.shape == x.shape
         assert torch.allclose(actual, expected, atol=1e-4)
 
-    def test_declared_rotor_layout_accepts_dense_input_and_returns_compact(self):
-        dense = CliffordAlgebra(3, 0, device="cpu")
-        layout = dense.layout((1,))
-        x = dense.embed_vector(torch.randn(2, 4, dense.n))
+    def test_declared_rotor_layout_accepts_full_lane_input_and_returns_compact(self):
+        full_context = AlgebraContext(3, 0, device="cpu")
+        layout = full_context.layout((1,))
+        x = full_context.embed_vector(torch.randn(2, 4, full_context.n))
 
-        declared_layer = RotorLayer(dense, 4, input_layout=layout)
-        reference_layer = RotorLayer(dense, 4)
+        declared_layer = RotorLayer(full_context, 4, input_layout=layout)
+        reference_layer = RotorLayer(full_context, 4)
         reference_layer.grade_weights.data.copy_(declared_layer.grade_weights.data)
 
         actual = declared_layer(x)
@@ -170,19 +190,19 @@ class TestLayers:
         assert y.shape == x.shape
         assert inv.shape == (2, 3, 4, algebra_3d.num_grades)
 
-    def test_compact_multi_rotor_matches_dense_reference(self):
+    def test_compact_multi_rotor_matches_full_lane_reference(self):
         context = AlgebraContext(3, 0, device="cpu", default_grades=(1,))
-        dense = CliffordAlgebra(3, 0, device="cpu")
+        full_context = AlgebraContext(3, 0, device="cpu")
         layout = context.layout((1,))
         x = torch.randn(2, 3, layout.dim)
 
         compact_layer = MultiRotorLayer(context, 3, num_rotors=2, input_layout=layout)
-        dense_layer = MultiRotorLayer(dense, 3, num_rotors=2)
-        dense_layer.rotor_grade_weights.data.copy_(compact_layer.rotor_grade_weights.data)
-        dense_layer.weights.data.copy_(compact_layer.weights.data)
+        full_layer = MultiRotorLayer(full_context, 3, num_rotors=2)
+        full_layer.rotor_grade_weights.data.copy_(compact_layer.rotor_grade_weights.data)
+        full_layer.weights.data.copy_(compact_layer.weights.data)
 
         actual = compact_layer(x)
-        expected = layout.compact(dense_layer(layout.dense(x)))
+        expected = layout.compact(full_layer(layout.full(x)))
 
         assert actual.shape == x.shape
         assert torch.allclose(actual, expected, atol=1e-4)
@@ -331,29 +351,29 @@ class TestLayers:
 
         assert y.shape == x.shape
 
-    def test_compact_reflection_matches_dense_reference(self):
+    def test_compact_reflection_matches_full_lane_reference(self):
         context = AlgebraContext(3, 0, device="cpu", default_grades=(1,))
-        dense = CliffordAlgebra(3, 0, device="cpu")
+        full_context = AlgebraContext(3, 0, device="cpu")
         layout = context.layout((1,))
         x = torch.randn(2, 4, layout.dim)
 
         compact_layer = ReflectionLayer(context, channels=4, input_layout=layout)
-        dense_layer = ReflectionLayer(dense, channels=4)
-        dense_layer.vector_weights.data.copy_(compact_layer.vector_weights.data)
+        full_layer = ReflectionLayer(full_context, channels=4)
+        full_layer.vector_weights.data.copy_(compact_layer.vector_weights.data)
 
         actual = compact_layer(x)
-        expected = layout.compact(dense_layer(layout.dense(x)))
+        expected = layout.compact(full_layer(layout.full(x)))
 
         assert actual.shape == x.shape
         assert torch.allclose(actual, expected, atol=1e-4)
 
-    def test_declared_reflection_layout_accepts_dense_input_and_returns_compact(self):
-        dense = CliffordAlgebra(3, 0, device="cpu")
-        layout = dense.layout((1,))
-        x = dense.embed_vector(torch.randn(2, 4, dense.n))
+    def test_declared_reflection_layout_accepts_full_lane_input_and_returns_compact(self):
+        full_context = AlgebraContext(3, 0, device="cpu")
+        layout = full_context.layout((1,))
+        x = full_context.embed_vector(torch.randn(2, 4, full_context.n))
 
-        declared_layer = ReflectionLayer(dense, channels=4, input_layout=layout)
-        reference_layer = ReflectionLayer(dense, channels=4)
+        declared_layer = ReflectionLayer(full_context, channels=4, input_layout=layout)
+        reference_layer = ReflectionLayer(full_context, channels=4)
         reference_layer.vector_weights.data.copy_(declared_layer.vector_weights.data)
 
         actual = declared_layer(x)
@@ -381,7 +401,7 @@ class TestLayers:
         assert layer.vector_weights.grad is not None
         assert not torch.all(layer.vector_weights.grad == 0)
 
-    def test_reflection_eval_has_no_dense_cache(self, algebra_3d):
+    def test_reflection_eval_has_no_full_lane_cache(self, algebra_3d):
         C = 3
         layer = ReflectionLayer(algebra_3d, channels=C)
         layer.eval()
@@ -394,7 +414,7 @@ class TestLayers:
 
     def test_reflection_different_signatures(self):
         for p, q in [(2, 0), (3, 0), (2, 1), (3, 1)]:
-            alg = CliffordAlgebra(p, q, device="cpu")
+            alg = AlgebraContext(p, q, device="cpu")
             C = 2
             layer = ReflectionLayer(alg, channels=C)
             x = torch.randn(3, C, alg.dim)
@@ -415,7 +435,7 @@ class TestLayers:
         layer = MultiRotorLayer(algebra_3d, C, num_rotors=K)
         x = torch.randn(B, C, algebra_3d.dim)
 
-        V_left, V_right = layer._compute_versors(x.device, x.dtype)
+        V_left, V_right = _planned_grade2_full_factors(algebra_3d, layer.rotor_grade_weights, layer.parameter_layout)
 
         # Action-matrix path (current implementation)
         y_action = algebra_3d.multi_rotor_sandwich(V_left, x, V_right)
@@ -504,7 +524,7 @@ class TestCompile:
     )
     def test_mps_compile_smoke(self):
         """RotorLayer compiles and runs on MPS."""
-        alg = CliffordAlgebra(3, 0, device="mps")
+        alg = AlgebraContext(3, 0, device="mps")
         layer = RotorLayer(alg, channels=4).to("mps")
         compiled = torch.compile(layer, backend="aot_eager")
         x = torch.randn(2, 4, 8, device="mps")

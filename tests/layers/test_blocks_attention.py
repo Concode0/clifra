@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers.blocks.attention import GeometricProductAttention
 from clifra.layers.blocks.transformer import GeometricTransformerBlock
 
@@ -16,7 +16,7 @@ def _reference_attention_score(algebra, q_head, k_head, bivector_weight, *, scal
     product = algebra.geometric_product(q_head.unsqueeze(3), algebra.reverse(k_head).unsqueeze(2))
     score_g0 = product[..., 0].sum(-1)
 
-    g2_idx = algebra.grade_masks[2].nonzero(as_tuple=False).squeeze(-1)
+    g2_idx = algebra.layout((2,)).indices_tensor(device=product.device)
     if g2_idx.numel() > 0:
         g2 = torch.index_select(product, -1, g2_idx)
         score_g2 = g2.pow(2).sum(dim=(-1, -2)).sqrt()
@@ -27,8 +27,8 @@ def _reference_attention_score(algebra, q_head, k_head, bivector_weight, *, scal
     return (score_g0 + bivector_weight * score_g2) / scale
 
 
-def test_attention_dense_score_matches_direct_product():
-    algebra = CliffordAlgebra(3, 0, 0, device=DEVICE, dtype=torch.float64)
+def test_attention_full_lane_score_matches_direct_product():
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float64)
     attn = GeometricProductAttention(
         algebra,
         channels=4,
@@ -47,7 +47,7 @@ def test_attention_dense_score_matches_direct_product():
 
 
 def test_attention_forward_shape_after_score_refactor():
-    algebra = CliffordAlgebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
     attn = GeometricProductAttention(algebra, channels=4, num_heads=2, causal=False)
     x = torch.randn(2, 5, 4, algebra.dim)
 
@@ -56,9 +56,9 @@ def test_attention_forward_shape_after_score_refactor():
     assert y.shape == x.shape
 
 
-def test_attention_compact_context_score_matches_dense_reference():
+def test_attention_compact_context_score_matches_full_lane_reference():
     context = AlgebraContext(4, 0, device=DEVICE, default_grades=(1,), dtype=torch.float64)
-    dense = CliffordAlgebra(4, 0, 0, device=DEVICE, dtype=torch.float64)
+    full_context = AlgebraContext(4, 0, 0, device=DEVICE, dtype=torch.float64)
     layout = context.layout((1,))
     attn = GeometricProductAttention(
         context,
@@ -72,9 +72,9 @@ def test_attention_compact_context_score_matches_dense_reference():
 
     actual = attn._compute_score(q_head, k_head)
     expected = _reference_attention_score(
-        dense,
-        layout.dense(q_head),
-        layout.dense(k_head),
+        full_context,
+        layout.full(q_head),
+        layout.full(k_head),
         attn.bivector_weight,
         scale_dim=layout.dim,
     )
@@ -135,8 +135,8 @@ def test_transformer_block_accepts_compact_context_entropy_gating():
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_attention_dense_score_compiles_fullgraph():
-    algebra = CliffordAlgebra(4, 0, 0, device=DEVICE, dtype=torch.float32)
+def test_attention_full_lane_score_compiles_fullgraph():
+    algebra = AlgebraContext(4, 0, 0, device=DEVICE, dtype=torch.float32)
     attn = GeometricProductAttention(algebra, channels=4, num_heads=2, causal=False)
     q_head = torch.randn(1, 2, 3, 2, algebra.dim)
     k_head = torch.randn(1, 2, 4, 2, algebra.dim)

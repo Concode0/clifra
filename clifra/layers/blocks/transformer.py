@@ -4,7 +4,6 @@
 """Transformer-style blocks composed from geometric attention and rotor FFNs."""
 
 import torch
-import torch.nn as nn
 
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 
@@ -54,9 +53,6 @@ class GeometricTransformerBlock(CliffordModule):
             self.attn = GeometricProductAttention(algebra, channels, num_heads, causal=False, dropout=dropout)
 
         self.norm2 = CliffordLayerNorm(algebra, channels)
-
-        # Check MultiRotorFFN class name in multi_rotor_ffn.py
-        from .multi_rotor_ffn import MultiRotorFFN
 
         self.ffn = MultiRotorFFN(algebra, channels, num_rotors=num_rotors)
 

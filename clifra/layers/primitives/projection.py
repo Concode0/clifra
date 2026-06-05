@@ -7,11 +7,10 @@ import torch
 import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
-from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import covariance_regularizer
-from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.storage import resolve_layer_layout_contract
-from clifra.utils.compat import safe_linalg_solve
+from clifra.utils.mps import safe_linalg_solve
 
 from ._utils import require_positive_int
 
@@ -25,11 +24,11 @@ class BladeSelector(CliffordModule):
         weights (nn.Parameter): Gate logits [Channels, Dim].
     """
 
-    def __init__(self, algebra: CliffordAlgebra, channels: int, *, grades=None, layout: GradeLayout = None):
+    def __init__(self, algebra: AlgebraLike, channels: int, *, grades=None, layout: GradeLayout = None):
         """Sets up the selector.
 
         Args:
-            algebra (CliffordAlgebra): The algebra instance.
+            algebra: Planner-capable algebra host.
             channels (int): Input features.
         """
         super().__init__(algebra)
@@ -77,13 +76,13 @@ class GeometricNeutralizer(CliffordModule):
     across batches, ensuring batch-independent behavior during inference.
 
     Attributes:
-        algebra (CliffordAlgebra): The algebra instance.
+        algebra: Planner-capable algebra host.
         momentum (float): EMA momentum.
     """
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         channels: int,
         momentum: float = 0.1,
         *,
@@ -93,7 +92,7 @@ class GeometricNeutralizer(CliffordModule):
         """Initialize the neutralizer.
 
         Args:
-            algebra (CliffordAlgebra): The algebra instance.
+            algebra: Planner-capable algebra host.
             channels (int): Number of multivector channels.
             momentum (float): EMA momentum for covariance tracking.
         """

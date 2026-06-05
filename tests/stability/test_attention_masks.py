@@ -1,14 +1,14 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers.blocks.attention import GeometricProductAttention
 
 pytestmark = pytest.mark.unit
 
 
 def test_attention_fully_masked_rows_are_finite_zero_outputs():
-    algebra = CliffordAlgebra(3, 0, 0, device="cpu", dtype=torch.float32)
+    algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float32)
     attention = GeometricProductAttention(algebra, channels=4, num_heads=2, causal=False)
     x = torch.randn(2, 4, 4, algebra.dim)
     key_padding_mask = torch.ones(2, 4, dtype=torch.bool)

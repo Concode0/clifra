@@ -62,8 +62,8 @@ class ProjectiveEmbedding(CliffordModule):
         self.layout = resolve_layer_layout(algebra, layout=layout, grades=grades)
         self.lane_dim = self.layout.dim
 
-        g1_dense = [1 << bit for bit in range(d)]
-        self.register_buffer("_g1_idx", basis_positions(self.layout, g1_dense, name="ProjectiveEmbedding"))
+        g1_basis = [1 << bit for bit in range(d)]
+        self.register_buffer("_g1_idx", basis_positions(self.layout, g1_basis, name="ProjectiveEmbedding"))
 
         idx_e0 = 1 << (algebra.p + algebra.q)
         e0_pos = basis_positions(self.layout, (idx_e0,), name="ProjectiveEmbedding")[0]
@@ -85,8 +85,8 @@ class ProjectiveEmbedding(CliffordModule):
         if x.shape[-1] != self.euclidean_dim:
             raise ValueError(f"input last dimension must be {self.euclidean_dim}, got {x.shape[-1]}")
         x_mv = torch.zeros(*x.shape[:-1], self.lane_dim, device=x.device, dtype=x.dtype)
-        x_mv.scatter_(-1, self._g1_idx.to(x.device).expand_as(x), x)
-        return x_mv + self._e0.to(device=x.device, dtype=x.dtype)
+        x_mv.scatter_(-1, self._g1_idx.expand_as(x), x)
+        return x_mv + self._e0
 
     def embed_direction(self, v: torch.Tensor) -> torch.Tensor:
         """Embed Euclidean directions (ideal points) into PGA.
@@ -102,7 +102,7 @@ class ProjectiveEmbedding(CliffordModule):
         if v.shape[-1] != self.euclidean_dim:
             raise ValueError(f"direction last dimension must be {self.euclidean_dim}, got {v.shape[-1]}")
         x_mv = torch.zeros(*v.shape[:-1], self.lane_dim, device=v.device, dtype=v.dtype)
-        x_mv.scatter_(-1, self._g1_idx.to(v.device).expand_as(v), v)
+        x_mv.scatter_(-1, self._g1_idx.expand_as(v), v)
         return x_mv
 
     def extract(self, P: torch.Tensor) -> torch.Tensor:
@@ -124,7 +124,7 @@ class ProjectiveEmbedding(CliffordModule):
         e0_pos = int(self._idx_e0.item())
         e0_coeff = signed_clamp_min(P[..., e0_pos : e0_pos + 1], self.algebra.eps)
         P_norm = P / e0_coeff
-        return torch.gather(P_norm, -1, self._g1_idx.to(P.device).expand(*P.shape[:-1], d))
+        return torch.gather(P_norm, -1, self._g1_idx.expand(*P.shape[:-1], d))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Default forward: embed Euclidean points.

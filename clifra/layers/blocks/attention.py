@@ -238,9 +238,8 @@ class EntropyGatedAttention(CliffordModule):
             channels=self.channels,
             name="EntropyGatedAttention input",
         )
-        g2_idx = self.g2_idx.to(device=x.device)
-        if g2_idx.numel() > 0:
-            g2_values = torch.index_select(x, -1, g2_idx)
+        if self.g2_idx.numel() > 0:
+            g2_values = torch.index_select(x, -1, self.g2_idx)
             g2_energy = g2_values.square().sum(dim=(-1, -2))
         else:
             g2_energy = x.new_zeros(x.shape[0], x.shape[1])
@@ -255,8 +254,7 @@ class EntropyGatedAttention(CliffordModule):
 
         gate = self.eta * torch.sigmoid(entropy - self.H_base)
         gate_view = gate.view(-1, 1, 1, 1)
-        g2_mask = self._g2_float_mask.to(device=x.device, dtype=x.dtype)
-        scale = 1.0 + (gate_view - 1.0) * g2_mask
+        scale = 1.0 + (gate_view - 1.0) * self._g2_float_mask
         output = self.base_attention(x * scale, key_padding_mask=key_padding_mask)
 
         if return_gating:

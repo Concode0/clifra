@@ -7,8 +7,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
-from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.storage import resolve_layer_layout_contract
 
 from ._utils import require_positive_int
@@ -31,7 +30,7 @@ class CliffordLayerNorm(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         channels: int,
         eps: float = 1e-6,
         recover: bool = True,
@@ -42,7 +41,7 @@ class CliffordLayerNorm(CliffordModule):
         """Sets up normalization.
 
         Args:
-            algebra (CliffordAlgebra): The algebra instance.
+            algebra: Planner-capable algebra host.
             channels (int): Features.
             eps (float): Stability term.
             recover (bool): Whether to inject original scale into the scalar part.
@@ -86,8 +85,6 @@ class CliffordLayerNorm(CliffordModule):
         out = x_normalized * self.weight.view(channel_shape)
 
         g0 = self.scalar_mask
-        if g0.device != x.device or g0.dtype != x.dtype:
-            g0 = g0.to(device=x.device, dtype=x.dtype)
         out = out + self.bias.view(channel_shape) * g0
 
         if self.recover:

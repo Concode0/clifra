@@ -15,7 +15,7 @@ from clifra.functional import (
 pytestmark = pytest.mark.unit
 
 
-def test_functional_products_match_algebra_dense(algebra_3d):
+def test_functional_products_match_algebra_full_lanes(algebra_3d):
     left = torch.randn(3, algebra_3d.dim)
     right = torch.randn(3, algebra_3d.dim)
 

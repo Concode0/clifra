@@ -61,8 +61,8 @@ class ConformalEmbedding(CliffordModule):
 
         idx_ep = 1 << d
         idx_em = 1 << (d + 1)
-        g1_dense = [1 << bit for bit in range(d)]
-        self.register_buffer("_g1_idx", basis_positions(self.layout, g1_dense, name="ConformalEmbedding"))
+        g1_basis = [1 << bit for bit in range(d)]
+        self.register_buffer("_g1_idx", basis_positions(self.layout, g1_basis, name="ConformalEmbedding"))
 
         ep_pos, em_pos = basis_positions(self.layout, (idx_ep, idx_em), name="ConformalEmbedding").tolist()
         e_inf = torch.zeros(self.lane_dim, dtype=algebra.dtype)
@@ -88,13 +88,10 @@ class ConformalEmbedding(CliffordModule):
         if x.shape[-1] != d:
             raise ValueError(f"input last dimension must be {d}, got {x.shape[-1]}")
         x_mv = torch.zeros(*x.shape[:-1], self.lane_dim, device=x.device, dtype=x.dtype)
-        g1_idx = self._g1_idx.to(device=x.device)
-        x_mv.scatter_(-1, g1_idx.expand_as(x), x)
+        x_mv.scatter_(-1, self._g1_idx.expand_as(x), x)
 
         x_sq = (x * x).sum(dim=-1, keepdim=True)  # [..., 1]
-        e_inf = self._e_inf.to(device=x.device, dtype=x.dtype)
-        e_o = self._e_o.to(device=x.device, dtype=x.dtype)
-        return x_mv + 0.5 * x_sq * e_inf + e_o
+        return x_mv + 0.5 * x_sq * self._e_inf + self._e_o
 
     def extract(self, P: torch.Tensor) -> torch.Tensor:
         """Project conformal points back to Euclidean space.
@@ -111,10 +108,9 @@ class ConformalEmbedding(CliffordModule):
         if P.shape[-1] != self.lane_dim:
             raise ValueError(f"point last dimension must be {self.lane_dim}, got {P.shape[-1]}")
 
-        e_inf = self._e_inf.to(device=P.device, dtype=P.dtype)
         P_einf = self.algebra.geometric_product(
             P,
-            e_inf.expand_as(P),
+            self._e_inf.expand_as(P),
             left_layout=self.layout,
             right_layout=self.layout,
             output_layout=self.scalar_layout,
@@ -122,7 +118,7 @@ class ConformalEmbedding(CliffordModule):
         scale = signed_clamp_min(-P_einf[..., 0:1], self.algebra.eps)
         P_norm = P / scale
 
-        return torch.gather(P_norm, -1, self._g1_idx.to(P.device).expand(*P.shape[:-1], d))
+        return torch.gather(P_norm, -1, self._g1_idx.expand(*P.shape[:-1], d))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Default forward: embed Euclidean points.

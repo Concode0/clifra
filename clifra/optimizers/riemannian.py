@@ -117,12 +117,12 @@ class ExponentialSGD(Optimizer):
         params (Iterable): Iterable of parameters to optimize
         lr: Learning rate
         momentum: Momentum factor (default: 0)
-        algebra (CliffordAlgebra): CliffordAlgebra instance for exponential map
+        algebra: Layout-first algebra context for exponential map
         max_bivector_norm: Maximum allowed bivector norm for numerical stability.
             If not None, clips bivector norms after each update. (default: 10.0)
 
     Example:
-        >>> algebra = CliffordAlgebra(p=3, q=0, device='cpu')
+        >>> algebra = AlgebraContext(p=3, q=0, device='cpu')
         >>> model = RotorLayer(algebra, channels=4)
         >>> optimizer = ExponentialSGD(
         ...     model.parameters(), lr=0.01, algebra=algebra
@@ -144,7 +144,7 @@ class ExponentialSGD(Optimizer):
         if momentum < 0.0:
             raise ValueError(f"Invalid momentum value: {momentum}")
         if algebra is None:
-            raise ValueError("Must provide CliffordAlgebra instance")
+            raise ValueError("Must provide Layout-first algebra context")
         if max_bivector_norm is not None and max_bivector_norm <= 0.0:
             raise ValueError(f"Invalid max_bivector_norm: {max_bivector_norm}")
 
@@ -172,7 +172,7 @@ class ExponentialSGD(Optimizer):
             model: The model to optimize.
             lr: Learning rate.
             momentum: Momentum factor.
-            algebra: CliffordAlgebra instance (required).
+            algebra: Layout-first algebra context (required).
             max_bivector_norm: Clip threshold for spin params.
 
         Returns:
@@ -251,7 +251,7 @@ class RiemannianAdam(Optimizer):
         lr: Learning rate (default: 1e-3)
         betas: Coefficients for computing running averages (default: (0.9, 0.999))
         eps: Term added for numerical stability (default: 1e-8)
-        algebra (CliffordAlgebra): CliffordAlgebra instance for exponential map
+        algebra: Layout-first algebra context for exponential map
         max_bivector_norm: Maximum allowed bivector norm for numerical stability.
             If not None, clips bivector norms after each update. (default: 10.0)
     """
@@ -274,7 +274,7 @@ class RiemannianAdam(Optimizer):
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
         if algebra is None:
-            raise ValueError("Must provide CliffordAlgebra instance")
+            raise ValueError("Must provide Layout-first algebra context")
         if max_bivector_norm is not None and max_bivector_norm <= 0.0:
             raise ValueError(f"Invalid max_bivector_norm: {max_bivector_norm}")
 
@@ -304,7 +304,7 @@ class RiemannianAdam(Optimizer):
             lr: Learning rate.
             betas: Coefficients for running averages.
             eps: Numerical stability term.
-            algebra: CliffordAlgebra instance (required).
+            algebra: Layout-first algebra context (required).
             max_bivector_norm: Clip threshold for spin params.
 
         Returns:
@@ -398,7 +398,7 @@ def project_to_tangent_space(point, vector, algebra):
     Args:
         point: Current point on manifold (rotor) [..., dim]
         vector: Vector to project [..., dim]
-        algebra: CliffordAlgebra instance
+        algebra: Layout-first algebra context
 
     Returns:
         Projected vector in tangent space [..., dim]
@@ -426,7 +426,7 @@ def exponential_retraction(point, tangent_vector, algebra):
     Args:
         point: Current point on manifold (rotor) [..., dim]
         tangent_vector: Tangent vector (direction to move) [..., dim]
-        algebra: CliffordAlgebra instance
+        algebra: Layout-first algebra context
 
     Returns:
         New point on manifold [..., dim]

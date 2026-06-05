@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.planning import PlanningLimits
-from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers import ProductLayer, WedgeLayer
 from clifra.layers.blocks.multi_rotor_ffn import MultiRotorFFN
 from clifra.optimizers import make_riemannian_optimizer
@@ -11,7 +11,7 @@ from clifra.optimizers import make_riemannian_optimizer
 pytestmark = pytest.mark.unit
 
 
-def test_product_layer_dense_matches_algebra(algebra_3d):
+def test_product_layer_full_lane_matches_algebra(algebra_3d):
     left = torch.randn(4, 5, algebra_3d.dim)
     right = torch.randn(4, 5, algebra_3d.dim)
     layer = ProductLayer(algebra_3d)
@@ -40,9 +40,9 @@ def test_wedge_layer_declared_grades_return_output_layout_lanes(algebra_3d):
     assert torch.allclose(actual, expected)
 
 
-def test_product_layer_pairwise_compact_widths_match_dense_reference():
+def test_product_layer_pairwise_compact_widths_match_full_lane_reference():
     context = AlgebraContext(p=5, q=0, device="cpu")
-    dense = CliffordAlgebra(p=5, q=0, device="cpu")
+    full_context = AlgebraContext(p=5, q=0, device="cpu")
     left_layout = context.layout((2,))
     right_layout = context.layout((1,))
     output_layout = context.layout((3,))
@@ -60,14 +60,14 @@ def test_product_layer_pairwise_compact_widths_match_dense_reference():
     actual = layer(left, right)
     cache_size = len(context.planner._product_executors)
     repeated = layer(left, right)
-    expected_dense = dense.wedge(
-        left_layout.dense(left).unsqueeze(2),
-        right_layout.dense(right).unsqueeze(1),
+    expected_full = full_context.wedge(
+        left_layout.full(left).unsqueeze(2),
+        right_layout.full(right).unsqueeze(1),
         left_grades=(2,),
         right_grades=(1,),
         output_grades=(3,),
     )
-    expected = expected_dense
+    expected = expected_full
 
     assert actual.shape == (2, 3, 4, output_layout.dim)
     assert torch.allclose(actual, expected)
@@ -110,13 +110,13 @@ def test_compact_layer_pipeline_trains_with_riemannian_optimizer_factory():
             bivector = self.wedge_vectors(left_vector, right_vector)
             return self.scale * self.wedge_trivector(bivector, third_vector)
 
-    dense_left = context.embed_vector(torch.randn(8, context.n))
-    dense_right = context.embed_vector(torch.randn(8, context.n))
+    full_left = context.embed_vector(torch.randn(8, context.n))
+    full_right = context.embed_vector(torch.randn(8, context.n))
     compact_third = vector_layout.compact(context.embed_vector(torch.randn(8, context.n)))
     model = CompactPipeline()
     optimizer = make_riemannian_optimizer(model, context, optimizer="adam", lr=0.01)
 
-    output = model(dense_left, dense_right, compact_third)
+    output = model(full_left, full_right, compact_third)
     assert output.shape == (8, trivector_layout.dim)
     assert len(context.planner._product_executors) == 2
 
@@ -129,7 +129,7 @@ def test_compact_layer_pipeline_trains_with_riemannian_optimizer_factory():
 
 
 def test_rotor_backend_block_trains_with_riemannian_optimizer_factory():
-    algebra = CliffordAlgebra(p=3, q=0, device="cpu")
+    algebra = AlgebraContext(p=3, q=0, device="cpu")
     model = MultiRotorFFN(
         algebra,
         channels=2,

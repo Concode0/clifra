@@ -8,7 +8,7 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers import RotorLayer
 
 pytestmark = pytest.mark.unit
@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 class TestOptimization:
     def test_rotor_pruning(self):
         """Test that RotorLayer correctly prunes small bivector weights."""
-        algebra = CliffordAlgebra(p=3, q=0, device="cpu")
+        algebra = AlgebraContext(p=3, q=0, device="cpu")
         layer = RotorLayer(algebra, channels=1)
 
         # Manually set weights: one large, one small
@@ -38,7 +38,7 @@ class TestOptimization:
 
     def test_sparsity_loss(self):
         """Test that sparsity loss returns L1 norm."""
-        algebra = CliffordAlgebra(p=2, q=0, device="cpu")
+        algebra = AlgebraContext(p=2, q=0, device="cpu")
         layer = RotorLayer(algebra, channels=1)
 
         with torch.no_grad():

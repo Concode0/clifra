@@ -28,7 +28,7 @@ def require_choice(value: str, name: str, choices: Iterable[str]) -> str:
 
 
 def grade_indices(algebra, grade: int, *, name: str = "grade") -> torch.Tensor:
-    """Return dense basis indices for a grade with consistent errors."""
+    """Return canonical basis indices for a grade with consistent errors."""
     grade = int(grade)
     if grade < 0 or grade >= algebra.num_grades:
         raise ValueError(f"{name} must be in [0, {algebra.num_grades - 1}], got {grade}")
@@ -36,13 +36,6 @@ def grade_indices(algebra, grade: int, *, name: str = "grade") -> torch.Tensor:
     if indices.numel() == 0:
         raise ValueError(f"{name}={grade} has no basis elements in this algebra")
     return indices
-
-
-def dense_from_indices(coefficients: torch.Tensor, indices: torch.Tensor, dense_dim: int) -> torch.Tensor:
-    """Scatter active coefficients into full-basis multivector lanes."""
-    dense = coefficients.new_zeros(*coefficients.shape[:-1], dense_dim)
-    index = indices.to(device=coefficients.device).expand(*coefficients.shape[:-1], -1)
-    return dense.scatter(-1, index, coefficients)
 
 
 def channel_mix(in_channels: int, out_channels: int, *, normalize: bool) -> torch.Tensor:

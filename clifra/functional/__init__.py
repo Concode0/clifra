@@ -36,10 +36,12 @@ from .products import (
     grade_involution,
     grade_projection,
     inner_product,
+    left_contraction,
     norm_sq,
     product,
     projected_product,
     reverse,
+    right_contraction,
     wedge,
 )
 
@@ -54,6 +56,8 @@ __all__ = [
     "inner_product",
     "commutator",
     "anti_commutator",
+    "left_contraction",
+    "right_contraction",
     "grade_projection",
     "reverse",
     "grade_involution",

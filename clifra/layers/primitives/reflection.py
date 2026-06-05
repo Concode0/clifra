@@ -8,9 +8,8 @@ import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPHERE, tag_manifold
-from clifra.core.foundation.module import CliffordModule
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import eps_like
-from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.core.storage import resolve_layer_layout_contract
 
 from ._utils import (
@@ -38,7 +37,7 @@ class ReflectionLayer(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         channels: int,
         *,
         input_grades=None,
@@ -49,7 +48,7 @@ class ReflectionLayer(CliffordModule):
         """Initialize the reflection layer.
 
         Args:
-            algebra (CliffordAlgebra): The algebra instance.
+            algebra: Planner-capable algebra host.
             channels (int): Number of features.
         """
         super().__init__(algebra)
@@ -66,6 +65,12 @@ class ReflectionLayer(CliffordModule):
         self.register_buffer("vector_indices", grade_indices(algebra, 1, name="vector grade"))
         self.num_vectors = self.vector_indices.numel()
         self.vector_layout = algebra.layout((1,))
+        self.action = algebra.plan_versor_action(
+            grade=1,
+            input_layout=self.input_layout,
+            output_layout=self.output_layout,
+            parameter_layout=self.vector_layout,
+        )
 
         self.vector_weights = nn.Parameter(torch.Tensor(self.channels, self.num_vectors))
         tag_manifold(self.vector_weights, MANIFOLD_SPHERE)
@@ -80,23 +85,6 @@ class ReflectionLayer(CliffordModule):
             norms = self.vector_weights.norm(dim=-1, keepdim=True).clamp_min(eps_like(self.vector_weights))
             self.vector_weights.div_(norms)
 
-    def _build_vectors(self, device, dtype):
-        """Build full multivectors from vector weights and normalize.
-
-        Returns:
-            Tuple of (n, n_inv) each [C, dim].
-        """
-        weights = self.vector_weights.to(device=device, dtype=dtype)
-        n = self.vector_layout.dense(weights)
-
-        # Normalize: n_hat = n / sqrt(|<n ~n>_0|)
-        n_sq = self.algebra.norm_sq(n)  # [C, 1]
-        scale = n_sq.abs().clamp_min(eps_like(n_sq)).sqrt()
-        n = n / scale
-
-        n_inv = self.algebra.blade_inverse(n)
-        return n, n_inv
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply per-channel reflections: x'_c = -n_c x_c n_c^{-1}.
 
@@ -106,16 +94,8 @@ class ReflectionLayer(CliffordModule):
         Returns:
             torch.Tensor: Reflected input [Batch, Channels, Dim].
         """
-        return self.algebra.versor_action(
-            x,
-            self.vector_weights,
-            grade=1,
-            input_layout=self.input_layout,
-            output_layout=self.output_layout,
-            parameter_layout=self.vector_layout,
-            channels=self.channels,
-            name="ReflectionLayer input",
-        )
+        values = x if x.shape[-1] == self.input_layout.dim else self.input_layout.compact(x)
+        return self.action(values, self.vector_weights)
 
     def sparsity_loss(self) -> torch.Tensor:
         """Compute L1 sparsity regularization on vector weights."""

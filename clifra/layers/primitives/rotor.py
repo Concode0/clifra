@@ -6,11 +6,9 @@
 import torch
 import torch.nn as nn
 
-from clifra.core.execution.action import dense_versor_factors
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
-from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.storage import resolve_layer_layout_contract
 
 from ._utils import (
@@ -39,7 +37,7 @@ class RotorLayer(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         channels: int,
         grade: int = 2,
         *,
@@ -51,7 +49,7 @@ class RotorLayer(CliffordModule):
         """Initialize the versor layer.
 
         Args:
-            algebra (CliffordAlgebra): The algebra instance.
+            algebra: Planner-capable algebra host.
             channels (int): Number of features.
             grade (int): Grade of the learnable parameter.
                 grade=2 (default): bivectors → rotors via exp(-B/2), Spin group.
@@ -73,6 +71,12 @@ class RotorLayer(CliffordModule):
         self.register_buffer("grade_indices", grade_indices(algebra, self.grade))
         self.num_grade_elements = self.grade_indices.numel()
         self.parameter_layout = algebra.layout((self.grade,))
+        self.action = algebra.plan_versor_action(
+            grade=self.grade,
+            input_layout=self.input_layout,
+            output_layout=self.output_layout,
+            parameter_layout=self.parameter_layout,
+        )
 
         self.grade_weights = nn.Parameter(torch.Tensor(self.channels, self.num_grade_elements))
         if self.grade == 2:
@@ -84,30 +88,6 @@ class RotorLayer(CliffordModule):
         """Initialize with near-identity transform (small weights)."""
         nn.init.normal_(self.grade_weights, std=0.01)
 
-    def _build_grade_element(self, device, dtype):
-        """Scatter grade_weights into full multivector dimension [channels, dim]."""
-        weights = self.grade_weights.to(device=device, dtype=dtype)
-        return self.parameter_layout.dense(weights)
-
-    def _compute_versors(self, device, dtype):
-        """Compute left and right factors for per_channel_sandwich.
-
-        For grade=2: left = R = exp(-B/2), right = R~ (reverse).
-        For grade=k: left = hat(V) (grade involution), right = V^{-1} (blade inverse).
-          V is L2-normalized per channel before inversion so that blade_inverse
-          remains exact (norm_sq is purely scalar for unit-norm grade-k elements).
-
-        Returns:
-            Tuple[Tensor, Tensor]: (V_left [C, dim], V_right [C, dim])
-        """
-        weights = self.grade_weights.to(device=device, dtype=dtype)
-        return dense_versor_factors(
-            self.algebra,
-            weights,
-            grade=self.grade,
-            parameter_layout=self.parameter_layout,
-        )
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply versor product x' = hat(V) x V^{-1} (= RxR~ for grade=2).
 
@@ -117,16 +97,8 @@ class RotorLayer(CliffordModule):
         Returns:
             torch.Tensor: Transformed input [Batch, Channels, Dim].
         """
-        return self.algebra.versor_action(
-            x,
-            self.grade_weights,
-            grade=self.grade,
-            input_layout=self.input_layout,
-            output_layout=self.output_layout,
-            parameter_layout=self.parameter_layout,
-            channels=self.channels,
-            name="RotorLayer input",
-        )
+        values = x if x.shape[-1] == self.input_layout.dim else self.input_layout.compact(x)
+        return self.action(values, self.grade_weights)
 
     def prune_bivectors(self, threshold: float = 1e-4) -> int:
         """Zero out grade weights below threshold.
@@ -140,7 +112,7 @@ class RotorLayer(CliffordModule):
         with torch.no_grad():
             mask = torch.abs(self.grade_weights) >= threshold
             num_pruned = (~mask).sum().item()
-            self.grade_weights.data.mul_(mask.to(dtype=self.grade_weights.dtype))
+            self.grade_weights.data.mul_(mask.type_as(self.grade_weights))
         return num_pruned
 
     def sparsity_loss(self) -> torch.Tensor:

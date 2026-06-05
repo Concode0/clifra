@@ -10,11 +10,9 @@ Implements versor-based transformations using weighted sums of sandwich products
 import torch
 import torch.nn as nn
 
-from clifra.core.execution.action import dense_versor_factors
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
-from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.storage import resolve_layer_layout_contract
 
 from ._utils import (
@@ -42,7 +40,7 @@ class MultiRotorLayer(CliffordModule):
 
     def __init__(
         self,
-        algebra: CliffordAlgebra,
+        algebra: AlgebraLike,
         channels: int,
         num_rotors: int = 8,
         grade: int = 2,
@@ -55,7 +53,7 @@ class MultiRotorLayer(CliffordModule):
         """Initialize a multi-rotor layer.
 
         Args:
-            algebra (CliffordAlgebra): The algebra instance.
+            algebra: Planner-capable algebra host.
             channels (int): Input features.
             num_rotors (int): Number of parallel versor heads.
             grade (int): Grade of the learnable parameter.
@@ -78,6 +76,12 @@ class MultiRotorLayer(CliffordModule):
         self.register_buffer("grade_indices", grade_indices(algebra, self.grade))
         self.num_grade_elements = self.grade_indices.numel()
         self.parameter_layout = algebra.layout((self.grade,))
+        self.action = algebra.plan_multi_versor_action(
+            grade=self.grade,
+            input_layout=self.input_layout,
+            output_layout=self.output_layout,
+            parameter_layout=self.parameter_layout,
+        )
 
         self.rotor_grade_weights = nn.Parameter(torch.Tensor(self.num_rotors, self.num_grade_elements))
         if self.grade == 2:
@@ -93,23 +97,6 @@ class MultiRotorLayer(CliffordModule):
         nn.init.normal_(self.rotor_grade_weights, std=0.01)
         nn.init.xavier_uniform_(self.weights)
 
-    def _compute_versors(self, device, dtype):
-        """Compute left and right factors for all K versors.
-
-        For grade=2: left = R_k = exp(-B_k/2), right = R~_k.
-        For grade=k: left = hat(V_k), right = V_k^{-1}.
-
-        Returns:
-            Tuple[Tensor, Tensor]: (V_left [K, dim], V_right [K, dim])
-        """
-        weights = self.rotor_grade_weights.to(device=device, dtype=dtype)
-        return dense_versor_factors(
-            self.algebra,
-            weights,
-            grade=self.grade,
-            parameter_layout=self.parameter_layout,
-        )
-
     def forward(self, x: torch.Tensor, return_invariants: bool = False) -> torch.Tensor:
         """Apply weighted multi-versor superposition.
 
@@ -120,17 +107,8 @@ class MultiRotorLayer(CliffordModule):
         Returns:
             torch.Tensor: Transformed output [Batch, Channels, Dim].
         """
-        out = self.algebra.multi_versor_action(
-            x,
-            self.rotor_grade_weights,
-            self.weights,
-            grade=self.grade,
-            input_layout=self.input_layout,
-            output_layout=self.output_layout,
-            parameter_layout=self.parameter_layout,
-            channels=self.channels,
-            name="MultiRotorLayer input",
-        )
+        values = x if x.shape[-1] == self.input_layout.dim else self.input_layout.compact(x)
+        out = self.action(values, self.rotor_grade_weights, self.weights)
 
         if return_invariants:
             return self.algebra.grade_norms(out, layout=self.output_layout)

@@ -4,8 +4,8 @@
 
 """Pure orthogonality formulas for multivector grade lanes.
 
-The final axis is the Clifford lane axis. Dense values are ``[..., D]`` and
-compact layout values are ``[..., L]``. Grade masks are ``[G, D]`` or
+The final axis is the Clifford lane axis. Full-lane values are ``[..., D]`` and
+active layout values are ``[..., L]``. Grade masks are ``[G, D]`` or
 ``[G, L]``; boolean lane masks are ``[D]`` or ``[L]``.
 """
 
