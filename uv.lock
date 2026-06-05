@@ -160,8 +160,6 @@ name = "clifra"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "setuptools" },
     { name = "torch" },
 ]
@@ -196,7 +194,6 @@ docs = [
 requires-dist = [
     { name = "clifra", extras = ["viz", "dev"], marker = "extra == 'all'" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8.0" },
-    { name = "numpy", specifier = ">=1.26.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },

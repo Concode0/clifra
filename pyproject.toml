@@ -30,7 +30,6 @@ classifiers = [
 ]
 dependencies = [
     "torch>=2.0.0",
-    "numpy>=1.26.0",
     "setuptools>=80.10.2",
 ]
 
@@ -76,18 +75,8 @@ extend-exclude = [
     "benchmarks",
     "data",
     "dist",
-    "embed_compress",
-    "gdo_plots",
-    "lattice_morph_plots",
-    "linear_basis_mixing_plots",
-    "lorentz_plots",
-    "maxwell_plots",
-    "ns_plots",
     "outputs",
-    "pendulum_plots",
     "site",
-    "sta_plots",
-    "ym_plots",
 ]
 
 [tool.ruff.format]

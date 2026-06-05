@@ -17,10 +17,6 @@ Core dependencies
   Copyright (c) 2016-present, Meta Platforms, Inc. and affiliates.
   Licensed under the BSD-3-Clause License.
 
-* NumPy (https://numpy.org/)
-  Copyright (c) 2005-present, NumPy Developers.
-  Licensed under the BSD-3-Clause License.
-
 * setuptools (https://setuptools.pypa.io/)
   Licensed under the MIT License.
 

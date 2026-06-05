@@ -19,19 +19,4 @@ train_log_*.txt
 /*.png
 /*.gif
 
-node_modules/
 site/
-
-# Experiments Plots & Benchmarks Logs
-signature.log
-embed_compress/
-gdo_plots/
-ym_plots/
-ns_plots/
-maxwell_plots/
-linear_basis_mixing_plots
-lorentz_plots
-sta_plots/
-pendulum_plots/
-lattice_morph_plots/
-experiments/*
