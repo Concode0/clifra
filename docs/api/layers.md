@@ -1,5 +1,9 @@
 # Layers API
 
+::: clifra.layers
+
+::: clifra.layers.primitives
+
 ::: clifra.layers.primitives.rotor
 
 ::: clifra.layers.primitives.multi_rotor
@@ -17,6 +21,8 @@
 ::: clifra.layers.primitives.reflection
 
 ::: clifra.layers.primitives.rotor_gadget
+
+::: clifra.layers.blocks
 
 ::: clifra.layers.blocks.attention
 

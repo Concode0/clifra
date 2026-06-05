@@ -1,5 +1,7 @@
 # Functional API
 
+::: clifra.functional
+
 ::: clifra.functional.products
 
 ::: clifra.functional.activation

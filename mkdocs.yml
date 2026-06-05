@@ -26,24 +26,20 @@ plugins:
             show_symbol_type_heading: true
             show_symbol_type_toc: true
             members_order: source
-            filters:
-              - "!^_"
-              - "^__init__"
 
 nav:
   - Home: index.md
-  - Quickstart: quickstart.md
-  - Guides:
-      - Algebra and Layouts: guides/algebra-layouts.md
-      - Layers and Criteria: guides/layers-criteria.md
-      - Training Loop: guides/training-loop.md
-  - Examples: examples.md
+  - Core Design: core-design.md
   - API:
+      - Package: api/index.md
       - Core: api/core.md
+      - Analysis: api/analysis.md
       - Functional: api/functional.md
       - Layers: api/layers.md
       - Criteria: api/criteria.md
       - Optimizers: api/optimizers.md
+  - Examples: examples/index.md
+  - Decisions: decisions/index.md
 
 markdown_extensions:
   - admonition
