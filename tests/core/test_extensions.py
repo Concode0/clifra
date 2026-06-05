@@ -8,7 +8,7 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers.adapters.conformal import ConformalEmbedding
 from clifra.layers.adapters.projective import ProjectiveEmbedding
 
@@ -20,7 +20,7 @@ class TestExtensions:
         """
         Test that points embedded in CGA are null vectors (P * P = 0).
         """
-        algebra = CliffordAlgebra(p=4, q=1, device="cpu")
+        algebra = AlgebraContext(p=4, q=1, device="cpu")
         embed = ConformalEmbedding(algebra, euclidean_dim=3)
 
         # Random Euclidean points
@@ -54,14 +54,15 @@ class TestExtensions:
 
     def test_pga_embed_extract_roundtrip(self):
         """Points embedded in PGA can be extracted back."""
-        algebra = CliffordAlgebra(p=3, q=0, r=1, device="cpu")
+        algebra = AlgebraContext(p=3, q=0, r=1, device="cpu")
         embed = ProjectiveEmbedding(algebra, euclidean_dim=3)
 
         x = torch.randn(5, 3, device="cpu")
         P = embed.embed(x)
 
         # Should be grade-1 only
-        g1_mask = algebra.grade_masks[1]
+        g1_mask = torch.zeros(algebra.dim, dtype=torch.bool)
+        g1_mask[algebra.layout((1,)).indices_tensor()] = True
         assert torch.allclose(P[:, ~g1_mask], torch.zeros_like(P[:, ~g1_mask]))
 
         # e_0 coefficient should be 1.0
@@ -86,7 +87,7 @@ class TestExtensions:
 
     def test_pga_direction_has_no_e0(self):
         """Directions (ideal points) have e_0 = 0."""
-        algebra = CliffordAlgebra(p=3, q=0, r=1, device="cpu")
+        algebra = AlgebraContext(p=3, q=0, r=1, device="cpu")
         embed = ProjectiveEmbedding(algebra, euclidean_dim=3)
 
         v = torch.tensor([[1.0, 0.0, 0.0]])
@@ -97,7 +98,7 @@ class TestExtensions:
         """Rotors in PGA correctly rotate embedded points."""
         import math
 
-        algebra = CliffordAlgebra(p=3, q=0, r=1, device="cpu")
+        algebra = AlgebraContext(p=3, q=0, r=1, device="cpu")
         embed = ProjectiveEmbedding(algebra, euclidean_dim=3)
 
         # Embed (1, 0, 0)

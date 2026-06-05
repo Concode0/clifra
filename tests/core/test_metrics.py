@@ -4,13 +4,12 @@ import pytest
 import torch
 
 from clifra.core.config import make_algebra
-from clifra.core.runtime.algebra import CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit
 from clifra.core.runtime.metric import (
     _hermitian_signs,
     clifford_conjugate,
-    geometric_distance,
     grade_hermitian_norm,
     hermitian_angle,
     hermitian_distance,
@@ -34,11 +33,12 @@ class TestHermitianSigns:
         signs = _hermitian_signs(algebra_minkowski)
         assert signs.shape == (algebra_minkowski.dim,)
 
-    def test_buffer_registered(self, algebra_minkowski):
-        """Hermitian signs are precomputed as a buffer on the algebra."""
+    def test_layout_signs_are_generated(self, algebra_minkowski):
+        """Hermitian signs are generated from the declared layout."""
         s1 = _hermitian_signs(algebra_minkowski)
-        assert hasattr(algebra_minkowski, "_hermitian_signs")
-        assert torch.allclose(s1, algebra_minkowski._hermitian_signs)
+        s2 = algebra_minkowski.hermitian_signs(algebra_minkowski.default_layout())
+        assert not hasattr(algebra_minkowski, "_hermitian_signs")
+        assert torch.allclose(s1, s2)
 
     def test_values_are_pm1(self, algebra_conformal):
         signs = _hermitian_signs(algebra_conformal)
@@ -144,16 +144,16 @@ class TestHermitianInnerProduct:
         has_negative = (signs < 0).any()
         assert has_negative, "Cl(2,1) should have negative signs"
 
-    def test_compact_context_matches_dense_active_lanes(self):
-        dense = CliffordAlgebra(3, 1, 0, device="cpu", dtype=torch.float64)
-        context = make_algebra(3, 1, 0, kernel="context", device="cpu", dtype=torch.float64)
+    def test_compact_context_matches_full_lane_active_lanes(self):
+        full_context = AlgebraContext(3, 1, 0, device="cpu", dtype=torch.float64)
+        context = make_algebra(3, 1, 0, device="cpu", dtype=torch.float64)
         layout = context.layout((1, 2))
         generator = torch.Generator(device="cpu").manual_seed(719)
         A = torch.randn(5, layout.dim, dtype=torch.float64, generator=generator)
         B = torch.randn(5, layout.dim, dtype=torch.float64, generator=generator)
 
         actual = hermitian_inner_product(context, A, B, layout=layout)
-        expected = hermitian_inner_product(dense, layout.dense(A), layout.dense(B))
+        expected = hermitian_inner_product(full_context, layout.full(A), layout.full(B))
 
         assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
@@ -254,8 +254,9 @@ class TestGradeHermitianNorm:
         mv = torch.randn(algebra_3d.dim)
         spec = hermitian_grade_spectrum(algebra_3d, mv)
         for k in range(algebra_3d.n + 1):
+            layout = algebra_3d.layout((k,))
             mk = algebra_3d.grade_projection(mv, k)
-            expected = torch.abs(hermitian_inner_product(algebra_3d, mk, mk).squeeze())
+            expected = torch.abs(hermitian_inner_product(algebra_3d, mk, mk, layout=layout).squeeze())
             assert torch.allclose(spec[k], expected, atol=1e-5)
 
 
@@ -283,8 +284,9 @@ class TestHermitianGradeSpectrum:
         spec = hermitian_grade_spectrum(algebra_3d, mv)
         # Each entry is abs of per-grade signed IP
         for k in range(algebra_3d.n + 1):
+            layout = algebra_3d.layout((k,))
             mk = algebra_3d.grade_projection(mv, k)
-            ip_k = hermitian_inner_product(algebra_3d, mk, mk)
+            ip_k = hermitian_inner_product(algebra_3d, mk, mk, layout=layout)
             assert torch.allclose(spec[k], torch.abs(ip_k).squeeze(), atol=1e-5)
 
     def test_conformal_spectrum(self, algebra_conformal):
@@ -294,7 +296,7 @@ class TestHermitianGradeSpectrum:
         assert (spec >= -1e-6).all()
 
     def test_compact_spectrum_fills_inactive_grades(self):
-        context = make_algebra(5, 0, 0, kernel="context", device="cpu", dtype=torch.float32)
+        context = make_algebra(5, 0, 0, device="cpu", dtype=torch.float32)
         layout = context.layout((1,))
         values = torch.ones(2, layout.dim)
 
@@ -306,7 +308,7 @@ class TestHermitianGradeSpectrum:
         assert torch.allclose(spec[:, 2:], torch.zeros(2, context.n - 1))
 
     def test_active_multivector_norm_uses_layout_without_full_materialization(self):
-        context = make_algebra(9, 0, 0, kernel="context", device="cpu", dtype=torch.float32)
+        context = make_algebra(9, 0, 0, device="cpu", dtype=torch.float32)
         layout = context.layout((1,))
         values = torch.ones(3, layout.dim)
 

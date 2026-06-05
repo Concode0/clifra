@@ -8,7 +8,6 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import CliffordAlgebra
 from clifra.layers import CliffordLayerNorm
 
 pytestmark = pytest.mark.unit
@@ -62,7 +61,7 @@ class TestGeometricProperties:
     def test_scaling_squaring_stability(self, algebra_3d):
         """
         Test exponential of a very large bivector.
-        Naive Taylor would fail or be inaccurate.
+        The planned exp path should stay stable for large rotor angles.
         """
         # Large angle rotation
         B = torch.zeros(1, algebra_3d.dim)

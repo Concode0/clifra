@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from clifra.core import Multivector, basis_blade_label, format_multivector
-from clifra.core.runtime.algebra import AlgebraContext, CliffordAlgebra
+from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit
 
@@ -15,7 +15,7 @@ def test_basis_blade_label_uses_canonical_bitmask_order():
 
 
 def test_format_full_multivector_terms_without_layout_noise():
-    algebra = CliffordAlgebra(3, 0, 0, device="cpu", dtype=torch.float64)
+    algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float64)
     values = torch.zeros(algebra.dim, dtype=torch.float64)
     values[0] = 1.0
     values[1] = 2.0
@@ -39,7 +39,7 @@ def test_format_compact_multivector_requires_declared_grades():
 
 
 def test_multivector_proxy_formats_batched_sample_only():
-    algebra = CliffordAlgebra(2, 0, 0, device="cpu")
+    algebra = AlgebraContext(2, 0, 0, device="cpu")
     values = torch.zeros(2, 3, algebra.dim)
     values[1, 2, 0] = 1.0
     values[1, 2, 1] = -1.0
