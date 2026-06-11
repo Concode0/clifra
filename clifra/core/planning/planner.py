@@ -480,6 +480,9 @@ class GradePlanner:
         executor = self._bivector_exp_executors.get(key) if cache else None
         if executor is None:
             left_product = None
+            bivector_wedge = None
+            grade4_square = None
+            bivector_grade4_product = None
             vector_contraction = None
             vector_wedge = None
             rotor_product = None
@@ -489,6 +492,37 @@ class GradePlanner:
                     left_layout=plan.input_layout,
                     right_layout=plan.operator_layout,
                     output_layout=plan.operator_layout,
+                    dtype=dtype,
+                    device=resolved_device,
+                    cache=cache,
+                )
+            elif plan.executor_family == "closed_biquadratic":
+                if plan.grade4_layout is None:
+                    raise RuntimeError("closed_biquadratic bivector exp requires a grade-4 layout")
+                scalar_layout = self.spec.layout((0,))
+                bivector_wedge = self.product_executor_for_layouts(
+                    op="wedge",
+                    left_layout=plan.input_layout,
+                    right_layout=plan.input_layout,
+                    output_layout=plan.grade4_layout,
+                    dtype=dtype,
+                    device=resolved_device,
+                    cache=cache,
+                )
+                grade4_square = self.product_executor_for_layouts(
+                    op="gp",
+                    left_layout=plan.grade4_layout,
+                    right_layout=plan.grade4_layout,
+                    output_layout=scalar_layout,
+                    dtype=dtype,
+                    device=resolved_device,
+                    cache=cache,
+                )
+                bivector_grade4_product = self.product_executor_for_layouts(
+                    op="gp",
+                    left_layout=plan.input_layout,
+                    right_layout=plan.grade4_layout,
+                    output_layout=plan.output_layout,
                     dtype=dtype,
                     device=resolved_device,
                     cache=cache,
@@ -524,6 +558,9 @@ class GradePlanner:
             executor = BivectorExpExecutor(
                 plan,
                 left_product,
+                bivector_wedge=bivector_wedge,
+                grade4_square=grade4_square,
+                bivector_grade4_product=bivector_grade4_product,
                 vector_contraction=vector_contraction,
                 vector_wedge=vector_wedge,
                 rotor_product=rotor_product,
