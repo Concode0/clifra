@@ -38,6 +38,4 @@
 
 ::: clifra.core.runtime.metric
 
-::: clifra.core.runtime.decomposition
-
 ::: clifra.core.storage
