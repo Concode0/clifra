@@ -12,7 +12,14 @@ from .action import (
     build_paired_bivector_action_plan,
     build_versor_action_plan,
 )
-from .exp import BivectorExpPlan, build_bivector_exp_plan
+from .exp import (
+    DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY,
+    BivectorExpExecutionPolicy,
+    BivectorExpPlan,
+    SpectralExpPreselection,
+    build_bivector_exp_plan,
+    spectral_exp_preselection,
+)
 from .flow import GradeFlow
 from .layouts import ProductRequest, build_product_request
 from .metric import NormSquaredPlan, build_norm_squared_plan
@@ -54,6 +61,9 @@ __all__ = [
     "ProductExecutionPolicy",
     "ProductExecutorCost",
     "BivectorExpPlan",
+    "BivectorExpExecutionPolicy",
+    "DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY",
+    "SpectralExpPreselection",
     "FULL_TABLE_AUTO_MAX_N",
     "FULL_TABLE_EXPLICIT_MAX_N",
     "LinearActionPlan",
@@ -70,6 +80,7 @@ __all__ = [
     "build_full_table_product_plan",
     "build_grade_plan_tree",
     "build_bivector_exp_plan",
+    "spectral_exp_preselection",
     "build_norm_squared_plan",
     "build_dual_plan",
     "build_product_request",

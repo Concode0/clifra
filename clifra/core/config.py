@@ -13,6 +13,7 @@ import torch
 
 from clifra.core.foundation.device import resolve_device, resolve_dtype
 from clifra.core.foundation.module import AlgebraLike
+from clifra.core.planning.exp import BivectorExpExecutionPolicy
 from clifra.core.planning.policy import PlanningLimits, ProductExecutionPolicy
 from clifra.core.runtime.algebra import AlgebraContext
 
@@ -26,11 +27,10 @@ class AlgebraConfig:
     r: int = 0
     device: str = "cuda"
     dtype: torch.dtype = torch.float32
-    exp_policy: str = "balanced"
-    fixed_iterations: Optional[int] = None
     default_grades: Optional[tuple[int, ...]] = None
     planning_limits: Optional[PlanningLimits] = None
     product_execution_policy: Optional[ProductExecutionPolicy] = None
+    bivector_exp_execution_policy: Optional[BivectorExpExecutionPolicy] = None
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any], **overrides) -> "AlgebraConfig":
@@ -41,9 +41,8 @@ class AlgebraConfig:
             "r": int(_mapping_get(config, "r", 0)),
             "device": _mapping_get(config, "device", "cuda"),
             "dtype": resolve_dtype(_mapping_get(config, "dtype", torch.float32)),
-            "exp_policy": _mapping_get(config, "exp_policy", "balanced"),
-            "fixed_iterations": _optional_int(_mapping_get(config, "fixed_iterations", None)),
             "default_grades": _optional_grades(_mapping_get(config, "default_grades", None)),
+            "bivector_exp_execution_policy": _mapping_get(config, "bivector_exp_execution_policy", None),
         }
         values.update({key: value for key, value in overrides.items() if value is not None})
         values["dtype"] = resolve_dtype(values["dtype"])
@@ -57,11 +56,10 @@ def make_algebra(
     *,
     device="cuda",
     dtype: torch.dtype = torch.float32,
-    exp_policy: str = "balanced",
-    fixed_iterations: Optional[int] = None,
     default_grades: Optional[Iterable[int]] = None,
     planning_limits: Optional[PlanningLimits] = None,
     product_execution_policy: Optional[ProductExecutionPolicy] = None,
+    bivector_exp_execution_policy: Optional[BivectorExpExecutionPolicy] = None,
 ) -> AlgebraLike:
     """Construct the planner-owned algebra host."""
     resolved_device = resolve_device(device) if str(device) == "auto" else device
@@ -74,10 +72,9 @@ def make_algebra(
         device=resolved_device,
         dtype=resolved_dtype,
         default_grades=default_grades,
-        exp_policy=exp_policy,
-        fixed_iterations=fixed_iterations,
         planning_limits=planning_limits,
         product_execution_policy=product_execution_policy,
+        bivector_exp_execution_policy=bivector_exp_execution_policy,
     )
 
 
@@ -90,11 +87,10 @@ def make_algebra_from_config(config: Mapping[str, Any], **overrides) -> AlgebraL
         algebra_config.r,
         device=algebra_config.device,
         dtype=algebra_config.dtype,
-        exp_policy=algebra_config.exp_policy,
-        fixed_iterations=algebra_config.fixed_iterations,
         default_grades=algebra_config.default_grades,
         planning_limits=algebra_config.planning_limits,
         product_execution_policy=algebra_config.product_execution_policy,
+        bivector_exp_execution_policy=algebra_config.bivector_exp_execution_policy,
     )
 
 
@@ -103,12 +99,6 @@ def _mapping_get(config: Mapping[str, Any], key: str, default):
     if config is None:
         return default
     return config.get(key, default)
-
-
-def _optional_int(value) -> Optional[int]:
-    if value is None:
-        return None
-    return int(value)
 
 
 def _optional_grades(value) -> Optional[tuple[int, ...]]:

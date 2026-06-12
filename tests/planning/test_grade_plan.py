@@ -3,11 +3,12 @@ import torch
 
 from clifra.core.config import make_algebra
 from clifra.core.execution.action import (
+    BivectorVectorGeneratorExecutor,
     FullSandwichActionExecutor,
     apply_graded_linear_action,
     apply_multi_graded_linear_action,
 )
-from clifra.core.execution.exp import BivectorExpExecutor
+from clifra.core.execution.exp import BivectorExpExecutor, _filtered_symmetric_eigh_op
 from clifra.core.execution.handles import (
     FullSandwichActionHandle,
     MultiVersorActionHandle,
@@ -29,7 +30,11 @@ from clifra.core.foundation.basis import (
     product_output_grades,
 )
 from clifra.core.foundation.layout import AlgebraSpec
-from clifra.core.planning.exp import select_bivector_exp_executor_family
+from clifra.core.planning.exp import (
+    BivectorExpExecutionPolicy,
+    select_bivector_exp_executor_family,
+    spectral_exp_preselection,
+)
 from clifra.core.planning.flow import GradeFlow
 from clifra.core.planning.layouts import build_product_request
 from clifra.core.planning.planner import GradePlanner
@@ -720,7 +725,7 @@ def test_compact_versor_action_handles_preplan_vector_matrix_and_lift_maps():
 
 @pytest.mark.skipif(not _mps_available(), reason="MPS not available")
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_mps_compact_versor_action_uses_decomposed_rotor_products_fullgraph():
+def test_mps_compact_versor_action_uses_closed_rotor_products_fullgraph():
     context = AlgebraContext(5, 0, 0, device="mps", dtype=torch.float32)
     vector_layout = context.layout((1,))
     bivector_layout = context.layout((2,))
@@ -754,7 +759,7 @@ def test_mps_compact_versor_action_uses_decomposed_rotor_products_fullgraph():
 
     assert handle.executor.use_rotor_product_action
     assert handle.executor.vector_matrix is None
-    assert handle.executor.bivector_exp.executor_family == "decomposed"
+    assert handle.executor.bivector_exp.executor_family == "closed_biquadratic"
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
@@ -1157,6 +1162,150 @@ def test_bivector_exp_closed_simple_matches_known_basis_formula():
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
+@pytest.mark.parametrize("signature", [(4, 0, 0), (3, 1, 2), (0, 3, 2), (0, 0, 3)])
+def test_bivector_exp_plan_partitions_bivector_lanes_by_metric_signature(signature):
+    algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    executor = algebra.planner.bivector_exp_executor_for_layouts(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+    )
+    split = algebra.p + algebra.q
+    expected_nondegenerate = []
+    expected_mixed = []
+    expected_nilpotent = []
+
+    for position, index in enumerate(bivector_layout.basis_indices):
+        bits = [bit for bit in range(algebra.n) if index & (1 << bit)]
+        if bits[0] >= split and bits[1] >= split:
+            expected_nilpotent.append(position)
+        elif bits[0] >= split or bits[1] >= split:
+            expected_mixed.append(position)
+        else:
+            expected_nondegenerate.append(position)
+
+    metric_signs = [1.0] * algebra.p + [-1.0] * algebra.q + [0.0] * algebra.r
+    assert executor.metric_signs.tolist() == metric_signs
+    assert executor.nondegenerate_bivector_positions.tolist() == expected_nondegenerate
+    assert executor.mixed_degenerate_bivector_positions.tolist() == expected_mixed
+    assert executor.nilpotent_bivector_positions.tolist() == expected_nilpotent
+
+
+def test_bivector_exp_plan_generator_maps_match_vector_generator_blocks():
+    algebra = AlgebraContext(3, 1, 2, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    executor = algebra.planner.bivector_exp_executor_for_layouts(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+    )
+    generator = BivectorVectorGeneratorExecutor(
+        bivector_layout=bivector_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+    )
+    values = torch.randn(
+        7,
+        bivector_layout.dim,
+        dtype=torch.float64,
+        generator=torch.Generator(device=DEVICE).manual_seed(293),
+    )
+    full_generator = generator.execute(values)
+    nondegenerate_dim = algebra.p + algebra.q
+
+    nondegenerate = torch.matmul(
+        values,
+        executor.bivector_to_nondegenerate_generator.reshape(bivector_layout.dim, -1),
+    ).reshape(values.shape[0], nondegenerate_dim, nondegenerate_dim)
+    mixed = torch.matmul(
+        values,
+        executor.bivector_to_mixed_generator.reshape(bivector_layout.dim, -1),
+    ).reshape(values.shape[0], algebra.r, nondegenerate_dim)
+
+    assert torch.allclose(nondegenerate, full_generator[:, :nondegenerate_dim, :nondegenerate_dim])
+    assert torch.allclose(mixed, full_generator[:, nondegenerate_dim:, :nondegenerate_dim])
+
+
+def _bivector_exp_cpu_reference(
+    algebra: AlgebraContext,
+    values: torch.Tensor,
+    *,
+    input_layout,
+    output_layout,
+) -> torch.Tensor:
+    oracle = SmallCliffordOracle(algebra.p, algebra.q, algebra.r)
+    operator_indices = basis_index_tuple_for_grades(algebra.n, range(0, algebra.n + 1, 2))
+    operator_positions = {index: position for position, index in enumerate(operator_indices)}
+    cpu_values = values.to(device="cpu")
+    cpu_basis = torch.eye(len(operator_indices), dtype=cpu_values.dtype, device="cpu")
+    columns = oracle.product(
+        cpu_values.unsqueeze(-2),
+        cpu_basis,
+        op="gp",
+        left_indices=input_layout.basis_indices,
+        right_indices=operator_indices,
+        output_indices=operator_indices,
+    )
+    operator = columns.transpose(-1, -2)
+    even_output = torch.matrix_exp(operator)[..., :, operator_positions[0]]
+    output = even_output.new_zeros(*even_output.shape[:-1], output_layout.dim)
+    for output_position, output_index in enumerate(output_layout.basis_indices):
+        operator_position = operator_positions.get(output_index)
+        if operator_position is not None:
+            output[..., output_position] = even_output[..., operator_position]
+    return output.to(device=values.device)
+
+
+@pytest.mark.parametrize("signature", [(4, 0, 0), (5, 0, 0), (2, 2, 0), (3, 0, 1)])
+def test_bivector_exp_closed_biquadratic_matches_cpu_reference(signature):
+    algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    generator = torch.Generator(device=DEVICE).manual_seed(283)
+    values = torch.randn(5, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.25
+    executor = algebra.planner.bivector_exp_executor_for_layouts(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+    )
+
+    actual = executor(values)
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.executor_family == "closed_biquadratic"
+    assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
+
+
+def test_bivector_exp_closed_paths_have_finite_zero_gradients():
+    for signature in [(3, 0, 0), (5, 0, 0)]:
+        algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
+        bivector_layout = algebra.layout((2,))
+        even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+        executor = algebra.planner.bivector_exp_executor_for_layouts(
+            input_layout=bivector_layout,
+            output_layout=even_layout,
+            dtype=torch.float64,
+            device=DEVICE,
+        )
+        values = torch.zeros(3, bivector_layout.dim, dtype=torch.float64, requires_grad=True)
+
+        executor(values).sum().backward()
+
+        assert values.grad is not None
+        assert torch.isfinite(values.grad).all()
+
+
 def test_planner_bivector_exp_executor_matches_between_compact_and_full_output():
     algebra = AlgebraContext(4, 0, 0, device=DEVICE, dtype=torch.float64)
     bivector_layout = algebra.layout((2,))
@@ -1184,23 +1333,740 @@ def test_planner_bivector_exp_executor_matches_between_compact_and_full_output()
 
     assert isinstance(compact_executor, BivectorExpExecutor)
     assert isinstance(full_executor, BivectorExpExecutor)
-    assert compact_executor.executor_family == "left_matrix_exp"
+    assert compact_executor.executor_family == "closed_biquadratic"
     assert full_executor.output_layout == full_layout
     assert torch.allclose(actual_compact, even_layout.compact(actual_full), atol=1e-10, rtol=1e-10)
 
 
-def test_bivector_exp_executor_policy_selects_decomposition_for_mps():
+def test_bivector_exp_executor_policy_selects_remaining_families():
     low_dim = AlgebraSpec(3, 0, 0)
-    high_dim = AlgebraSpec(5, 0, 0)
+    closed_dim = AlgebraSpec(5, 0, 0)
+    spectral_dim = AlgebraSpec(6, 0, 0)
+    matrix_dim = AlgebraSpec(3, 3, 0)
 
     assert select_bivector_exp_executor_family(low_dim, torch.device("mps")) == "closed_simple"
-    assert select_bivector_exp_executor_family(high_dim, torch.device("mps")) == "decomposed"
-    assert select_bivector_exp_executor_family(high_dim, torch.device("cpu")) == "left_matrix_exp"
+    assert select_bivector_exp_executor_family(closed_dim, torch.device("mps")) == "closed_biquadratic"
+    assert select_bivector_exp_executor_family(closed_dim, torch.device("cpu")) == "closed_biquadratic"
+    assert select_bivector_exp_executor_family(spectral_dim, torch.device("cpu")) == "spectral_local"
+    assert select_bivector_exp_executor_family(spectral_dim, torch.device("mps")) == "left_matrix_exp"
+    assert select_bivector_exp_executor_family(matrix_dim, torch.device("cpu")) == "left_matrix_exp"
+
+
+def test_bivector_exp_spectral_preselection_selects_default_and_cap():
+    spec = AlgebraSpec(6, 0, 0)
+
+    enabled = spectral_exp_preselection(spec, torch.device("cpu"), dtype=torch.float32)
+    capped = spectral_exp_preselection(spec, torch.device("cpu"), dtype=torch.float32, max_planes=2)
+    dominant = spectral_exp_preselection(spec, torch.device("cpu"), dtype=torch.float32, dominant_rel=0.05)
+
+    assert enabled.eligible
+    assert enabled.reason == "eligible"
+    assert enabled.max_planes == 3
+    assert capped.max_planes == 2
+    assert dominant.dominant_rel == 0.05
+    assert enabled.dominant_rel == max(torch.finfo(torch.float32).eps**0.5, torch.finfo(torch.float32).eps * 32.0)
+    assert enabled.solver_family == "symmetric"
+    assert spectral_exp_preselection(spec, torch.device("cpu"), dtype=torch.float32, max_planes=8).max_planes == 3
+    assert (
+        select_bivector_exp_executor_family(
+            spec,
+            torch.device("cpu"),
+            dtype=torch.float32,
+            spectral_max_planes=4,
+        )
+        == "spectral_local"
+    )
+
+
+@pytest.mark.parametrize(
+    ("spec", "dtype", "device", "reason"),
+    [
+        (AlgebraSpec(5, 0, 0), torch.float32, torch.device("cpu"), "closed_formula_preferred"),
+        (AlgebraSpec(4, 0, 5), torch.float32, torch.device("cpu"), "ideal_dim_exceeds_block_cap"),
+        (AlgebraSpec(3, 3, 0), torch.float32, torch.device("cpu"), "pseudo_euclidean_deferred"),
+        (AlgebraSpec(6, 0, 0), torch.bfloat16, torch.device("cpu"), "dtype_error_floor_too_high"),
+        (AlgebraSpec(6, 0, 0), torch.float32, torch.device("mps"), "mps_solver_deferred"),
+    ],
+)
+def test_bivector_exp_spectral_preselection_rejection_reasons(spec, dtype, device, reason):
+    decision = spectral_exp_preselection(spec, device, dtype=dtype)
+
+    assert not decision.eligible
+    assert decision.reason == reason
+
+
+def test_bivector_exp_spectral_preselection_truncates_degenerate_kernels_by_default():
+    odd = spectral_exp_preselection(AlgebraSpec(5, 0, 1), torch.device("cpu"), dtype=torch.float32)
+    uncovered = spectral_exp_preselection(AlgebraSpec(10, 0, 2), torch.device("cpu"), dtype=torch.float32)
+    conservative_odd = spectral_exp_preselection(
+        AlgebraSpec(5, 0, 1),
+        torch.device("cpu"),
+        dtype=torch.float32,
+        allow_truncated_degenerate=False,
+    )
+    conservative_uncovered = spectral_exp_preselection(
+        AlgebraSpec(10, 0, 2),
+        torch.device("cpu"),
+        dtype=torch.float32,
+        allow_truncated_degenerate=False,
+    )
+
+    assert odd.eligible
+    assert odd.max_planes == 2
+    assert uncovered.eligible
+    assert uncovered.max_planes == 4
+    assert conservative_odd.reason == "odd_nondegenerate_kernel_deferred"
+    assert conservative_uncovered.reason == "degenerate_block_requires_full_plane_cap"
+
+
+def test_filtered_symmetric_eigh_backward_matches_torch_for_distinct_spectrum():
+    base = torch.tensor(
+        [
+            [2.0, 0.10, -0.20, 0.05],
+            [0.10, 3.0, 0.15, -0.10],
+            [-0.20, 0.15, 5.0, 0.20],
+            [0.05, -0.10, 0.20, 8.0],
+        ],
+        dtype=torch.float64,
+    )
+    matrix = base.clone().requires_grad_(True)
+    reference_matrix = base.clone().requires_grad_(True)
+    tolerances = torch.tensor([0.0, 0.0, torch.finfo(torch.float64).eps**0.5], dtype=torch.float64)
+    grad_eigenvalues = torch.randn(4, dtype=torch.float64, generator=torch.Generator(device=DEVICE).manual_seed(383))
+    grad_eigenvectors = torch.randn(4, 4, dtype=torch.float64, generator=torch.Generator(device=DEVICE).manual_seed(389))
+
+    eigenvalues, eigenvectors = _filtered_symmetric_eigh_op(matrix, tolerances)
+    reference_values, reference_vectors = torch.linalg.eigh(
+        0.5 * (reference_matrix + reference_matrix.transpose(-1, -2))
+    )
+    (eigenvalues * grad_eigenvalues).sum().backward(retain_graph=True)
+    (eigenvectors * grad_eigenvectors).sum().backward()
+    (reference_values * grad_eigenvalues).sum().backward(retain_graph=True)
+    (reference_vectors * grad_eigenvectors).sum().backward()
+
+    assert torch.allclose(matrix.grad, reference_matrix.grad, atol=1e-10, rtol=1e-10)
+
+
+def test_filtered_symmetric_eigh_backward_filters_repeated_roots():
+    matrix = torch.diag(torch.tensor([1.0, 1.0, 2.0, 2.0], dtype=torch.float64)).requires_grad_(True)
+    tolerances = torch.tensor([0.0, 0.0, torch.finfo(torch.float64).eps**0.5], dtype=torch.float64)
+
+    eigenvalues, eigenvectors = _filtered_symmetric_eigh_op(matrix, tolerances)
+    (eigenvalues.sum() + eigenvectors.sum()).backward()
+
+    assert matrix.grad is not None
+    assert torch.isfinite(matrix.grad).all()
+
+
+@pytest.mark.parametrize("signature", [(6, 0, 0), (0, 6, 0), (7, 0, 0)])
+def test_bivector_exp_spectral_local_matches_cpu_reference_by_default(signature):
+    algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.randn(
+        4,
+        bivector_layout.dim,
+        dtype=torch.float64,
+        generator=torch.Generator(device=DEVICE).manual_seed(307),
+    ) * 0.2
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+
+    actual = executor(values)
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert executor.spectral_max_planes == (algebra.p + algebra.q) // 2
+    assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
+
+
+@pytest.mark.parametrize("signature", [(4, 0, 2), (0, 4, 2), (6, 0, 2), (2, 0, 4)])
+def test_bivector_exp_spectral_local_degenerate_block_matches_cpu_reference(signature):
+    algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.randn(
+        3,
+        bivector_layout.dim,
+        dtype=torch.float64,
+        generator=torch.Generator(device=DEVICE).manual_seed(359),
+    ) * 0.08
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+
+    actual = executor(values)
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert executor.ideal_dim == algebra.r
+    assert executor.spectral_local_axis_count == algebra.n
+    assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
+
+
+def test_bivector_exp_spectral_local_degenerate_block_handles_pure_mixed_kernel():
+    algebra = AlgebraContext(4, 0, 2, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.zeros(2, bivector_layout.dim, dtype=torch.float64)
+    for axes, coefficient in [((0, 4), 0.30), ((1, 5), -0.20), ((3, 4), 0.10)]:
+        values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
+    values[1] = -0.5 * values[0]
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert torch.allclose(executor(values), expected, atol=1e-12, rtol=1e-12)
+
+
+def test_bivector_exp_spectral_local_degenerate_block_keeps_r4_ideal_square_term():
+    algebra = AlgebraContext(2, 0, 4, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    for axes, coefficient in [((2, 3), 0.40), ((4, 5), 0.60)]:
+        values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert torch.allclose(executor(values), expected, atol=1e-12, rtol=1e-12)
+
+
+def test_bivector_exp_spectral_local_truncates_odd_degenerate_kernel():
+    algebra = AlgebraContext(5, 0, 1, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    output_layout = algebra.layout((0, 2, 4))
+    values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    truncated = torch.zeros_like(values)
+    kept_terms = [
+        ((0, 1), 0.20),
+        ((2, 3), 0.13),
+        ((0, 5), 0.05),
+        ((3, 5), -0.04),
+    ]
+    omitted_terms = [
+        ((4, 5), 0.30),
+    ]
+    for axes, coefficient in kept_terms + omitted_terms:
+        values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
+    for axes, coefficient in kept_terms:
+        truncated[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=output_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert executor.spectral_max_planes == 2
+    assert executor.spectral_local_axis_count == 5
+    assert torch.allclose(executor(values), executor(truncated), atol=1e-12, rtol=1e-12)
+
+
+def test_bivector_exp_spectral_local_truncates_uncovered_degenerate_rank():
+    algebra = AlgebraContext(10, 0, 1, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    output_layout = algebra.layout((0, 2, 4))
+    values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    truncated = torch.zeros_like(values)
+    kept_terms = [
+        ((0, 1), 0.20),
+        ((2, 3), 0.13),
+        ((4, 5), 0.07),
+        ((6, 7), 0.03),
+        ((0, 10), 0.02),
+        ((7, 10), -0.04),
+    ]
+    omitted_terms = [
+        ((8, 9), 0.005),
+        ((8, 10), 0.25),
+    ]
+    for axes, coefficient in kept_terms + omitted_terms:
+        values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
+    for axes, coefficient in kept_terms:
+        truncated[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=output_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_max_planes=8,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert executor.spectral_max_planes == 4
+    assert executor.spectral_local_axis_count == 9
+    assert torch.allclose(executor(values), executor(truncated), atol=1e-12, rtol=1e-12)
+
+
+def test_bivector_exp_policy_knobs_connect_through_algebra_context():
+    policy = BivectorExpExecutionPolicy(
+        spectral_max_planes=2,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+        spectral_dominant_rel=0.05,
+        spectral_allow_truncated_degenerate=False,
+    )
+    algebra = make_algebra(10, 0, 2, device=DEVICE, dtype=torch.float64, bivector_exp_execution_policy=policy)
+    bivector_layout = algebra.layout((2,))
+    output_layout = algebra.layout((0, 2))
+    conservative = algebra.plan_exp(input_layout=bivector_layout, output_layout=output_layout)
+    override = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=output_layout,
+        spectral_allow_truncated_degenerate=True,
+        spectral_max_planes=8,
+        cache=False,
+    )
+
+    assert conservative.executor_family == "left_matrix_exp"
+    assert override.executor_family == "spectral_local"
+    assert override.spectral_max_planes == 4
+    assert override.spectral_dominant_rel == 0.05
+
+
+def test_bivector_exp_spectral_local_uses_cl8_kernel_for_four_planes():
+    algebra = AlgebraContext(8, 0, 0, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.randn(
+        2,
+        bivector_layout.dim,
+        dtype=torch.float64,
+        generator=torch.Generator(device=DEVICE).manual_seed(313),
+    ) * 0.12
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+
+    actual = executor(values)
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert executor.spectral_max_planes == 4
+    assert executor.spectral_local_product_table.shape == (128, 128, 128)
+    assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
+
+
+def test_bivector_exp_spectral_local_uses_compute_cap_beyond_cl8():
+    spec = AlgebraSpec(10, 0, 0)
+    default = spectral_exp_preselection(spec, torch.device("cpu"), dtype=torch.float64)
+    capped = spectral_exp_preselection(spec, torch.device("cpu"), dtype=torch.float64, max_planes=4)
+
+    assert default.eligible
+    assert default.max_planes == 4
+    assert capped.eligible
+    assert select_bivector_exp_executor_family(spec, torch.device("cpu"), dtype=torch.float64) == "spectral_local"
+    assert (
+        select_bivector_exp_executor_family(
+            spec,
+            torch.device("cpu"),
+            dtype=torch.float64,
+            spectral_max_planes=4,
+        )
+        == "spectral_local"
+    )
+
+
+def test_bivector_exp_spectral_local_explicit_cap_matches_when_tail_is_zero():
+    algebra = AlgebraContext(10, 0, 0, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    for index, coefficient in [
+        ((1 << 0) | (1 << 1), 0.20),
+        ((1 << 2) | (1 << 3), 0.13),
+        ((1 << 4) | (1 << 5), 0.07),
+        ((1 << 6) | (1 << 7), 0.03),
+    ]:
+        values[0, bivector_layout.basis_indices.index(index)] = coefficient
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_max_planes=4,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert torch.allclose(executor(values), expected, atol=1e-10, rtol=1e-10)
+
+
+def test_bivector_exp_spectral_local_dominant_plane_threshold_masks_small_planes():
+    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    truncated = torch.zeros_like(values)
+    planes = [
+        ((1 << 0) | (1 << 1), 0.20),
+        ((1 << 2) | (1 << 3), 0.009),
+        ((1 << 4) | (1 << 5), 0.004),
+    ]
+    for index, coefficient in planes:
+        values[0, bivector_layout.basis_indices.index(index)] = coefficient
+    truncated[0, bivector_layout.basis_indices.index(planes[0][0])] = planes[0][1]
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+        spectral_dominant_rel=0.05,
+    )
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        truncated,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.spectral_dominant_rel == 0.05
+    assert torch.allclose(executor(values), expected, atol=1e-12, rtol=1e-12)
+
+
+def test_bivector_exp_spectral_local_handles_repeated_rotated_angles():
+    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+    base = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    for index, coefficient in [
+        ((1 << 0) | (1 << 1), 0.20),
+        ((1 << 2) | (1 << 3), 0.20),
+        ((1 << 4) | (1 << 5), 0.07),
+    ]:
+        base[0, bivector_layout.basis_indices.index(index)] = coefficient
+    generator = torch.matmul(
+        base,
+        executor.bivector_to_nondegenerate_generator.reshape(bivector_layout.dim, -1),
+    ).reshape(1, algebra.n, algebra.n)
+    q, _ = torch.linalg.qr(
+        torch.randn(
+            algebra.n,
+            algebra.n,
+            dtype=torch.float64,
+            generator=torch.Generator(device=DEVICE).manual_seed(317),
+        )
+    )
+    rotated_generator = q.unsqueeze(0) @ generator @ q.T.unsqueeze(0)
+    values = torch.matmul(
+        rotated_generator.reshape(1, -1),
+        executor.nondegenerate_generator_to_bivector.reshape(-1, bivector_layout.dim),
+    )
+
+    actual = executor(values)
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert executor.executor_family == "spectral_local"
+    assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
+
+
+def test_bivector_exp_spectral_local_repeated_angle_gradient_matches_cpu_reference():
+    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    for index, coefficient in [
+        ((1 << 0) | (1 << 1), 0.20),
+        ((1 << 2) | (1 << 3), 0.20),
+        ((1 << 4) | (1 << 5), 0.07),
+    ]:
+        values[0, bivector_layout.basis_indices.index(index)] = coefficient
+    values.requires_grad_(True)
+    reference_values = values.detach().clone().requires_grad_(True)
+    weights = torch.randn(
+        1,
+        even_layout.dim,
+        dtype=torch.float64,
+        generator=torch.Generator(device=DEVICE).manual_seed(331),
+    )
+
+    actual = algebra.exp(values, input_layout=bivector_layout, output_layout=even_layout)
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        reference_values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+    (actual * weights).sum().backward()
+    (expected * weights).sum().backward()
+
+    assert torch.isfinite(values.grad).all()
+    assert torch.allclose(values.grad, reference_values.grad, atol=1e-10, rtol=1e-10)
+
+
+def test_bivector_exp_spectral_local_degenerate_gradient_matches_cpu_reference():
+    algebra = AlgebraContext(4, 0, 2, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = (
+        torch.randn(
+            1,
+            bivector_layout.dim,
+            dtype=torch.float64,
+            generator=torch.Generator(device=DEVICE).manual_seed(367),
+        )
+        * 0.05
+    )
+    values.requires_grad_(True)
+    reference_values = values.detach().clone().requires_grad_(True)
+    weights = torch.randn(
+        1,
+        even_layout.dim,
+        dtype=torch.float64,
+        generator=torch.Generator(device=DEVICE).manual_seed(373),
+    )
+
+    actual = algebra.exp(values, input_layout=bivector_layout, output_layout=even_layout)
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        reference_values,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+    (actual * weights).sum().backward()
+    (expected * weights).sum().backward()
+
+    assert torch.isfinite(values.grad).all()
+    assert torch.allclose(values.grad, reference_values.grad, atol=1e-10, rtol=1e-10)
+
+
+def test_bivector_exp_spectral_local_gradcheck_smoke():
+    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.randn(
+        1,
+        bivector_layout.dim,
+        dtype=torch.float64,
+        generator=torch.Generator(device=DEVICE).manual_seed(353),
+    ) * 0.05
+    values.requires_grad_(True)
+
+    assert torch.autograd.gradcheck(
+        lambda x: algebra.exp(x, input_layout=bivector_layout, output_layout=even_layout),
+        (values,),
+        eps=1e-6,
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+@pytest.mark.parametrize("output_grades", [(0,), tuple(range(7))])
+def test_bivector_exp_spectral_local_public_exp_matches_cpu_reference_for_output_layouts(output_grades):
+    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    output_layout = algebra.layout(output_grades)
+    values = torch.randn(
+        3,
+        bivector_layout.dim,
+        dtype=torch.float64,
+        generator=torch.Generator(device=DEVICE).manual_seed(337),
+    ) * 0.15
+
+    actual = algebra.exp(values, input_layout=bivector_layout, output_layout=output_layout)
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        values,
+        input_layout=bivector_layout,
+        output_layout=output_layout,
+    )
+
+    assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
+
+
+def test_bivector_exp_spectral_local_respects_static_plane_cap_and_tail_tolerance():
+    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
+    truncated = torch.zeros_like(values)
+    planes = [
+        ((1 << 0) | (1 << 1), 0.20),
+        ((1 << 2) | (1 << 3), 0.13),
+        ((1 << 4) | (1 << 5), 0.07),
+    ]
+    for index, coefficient in planes:
+        values[0, bivector_layout.basis_indices.index(index)] = coefficient
+    for index, coefficient in planes[:2]:
+        truncated[0, bivector_layout.basis_indices.index(index)] = coefficient
+
+    capped = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_max_planes=2,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+    tolerance_masked = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float64,
+        device=DEVICE,
+        spectral_tol_abs=0.08,
+        spectral_tol_rel=0.0,
+        cache=False,
+    )
+    expected = _bivector_exp_cpu_reference(
+        algebra,
+        truncated,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+    )
+
+    assert capped.spectral_max_planes == 2
+    assert tolerance_masked.spectral_max_planes == 3
+    assert torch.allclose(capped(values), expected, atol=1e-12, rtol=1e-12)
+    assert torch.allclose(tolerance_masked(values), expected, atol=1e-12, rtol=1e-12)
+
+
+@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
+def test_bivector_exp_spectral_local_compiles_fullgraph_with_aot_eager():
+    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float32)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float32,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+    values = torch.randn(
+        3,
+        bivector_layout.dim,
+        dtype=torch.float32,
+        generator=torch.Generator(device=DEVICE).manual_seed(311),
+    ) * 0.1
+
+    compiled = torch.compile(executor, backend="aot_eager", fullgraph=True)
+
+    expected = executor(values)
+    actual = compiled(values)
+
+    assert executor.executor_family == "spectral_local"
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
+def test_bivector_exp_spectral_local_degenerate_compiles_fullgraph_with_aot_eager():
+    algebra = AlgebraContext(4, 0, 2, device=DEVICE, dtype=torch.float32)
+    bivector_layout = algebra.layout((2,))
+    even_layout = algebra.layout(range(0, algebra.n + 1, 2))
+    executor = algebra.plan_exp(
+        input_layout=bivector_layout,
+        output_layout=even_layout,
+        dtype=torch.float32,
+        device=DEVICE,
+        spectral_tol_abs=0.0,
+        spectral_tol_rel=0.0,
+    )
+    values = torch.randn(
+        2,
+        bivector_layout.dim,
+        dtype=torch.float32,
+        generator=torch.Generator(device=DEVICE).manual_seed(379),
+    ) * 0.05
+
+    compiled = torch.compile(executor, backend="aot_eager", fullgraph=True)
+
+    expected = executor(values)
+    actual = compiled(values)
+
+    assert executor.executor_family == "spectral_local"
+    assert executor.ideal_dim == 2
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.skipif(not _mps_available(), reason="MPS not available")
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_mps_decomposed_bivector_exp_executor_compiles_fullgraph():
+def test_mps_closed_biquadratic_bivector_exp_executor_compiles_fullgraph():
     algebra = AlgebraContext(5, 0, device="mps", dtype=torch.float32)
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4))
@@ -1217,8 +2083,19 @@ def test_mps_decomposed_bivector_exp_executor_compiles_fullgraph():
     expected = executor(values)
     actual = compiled(values)
 
-    assert executor.executor_family == "decomposed"
+    assert executor.executor_family == "closed_biquadratic"
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.skipif(not _mps_available(), reason="MPS not available")
+def test_mps_high_dim_bivector_exp_plans_matrix_exp_family():
+    algebra = AlgebraContext(6, 0, device="mps", dtype=torch.float32)
+    input_layout = algebra.layout((2,))
+    output_layout = algebra.layout((0, 2, 4, 6))
+    executor = algebra.plan_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps")
+
+    assert executor.executor_family == "left_matrix_exp"
+    assert executor.left_product is not None
 
 
 def test_context_projected_product_handles_high_dim_vector_product():
@@ -2342,7 +3219,7 @@ def test_bivector_exp_executor_compiles_fullgraph_with_aot_eager():
     actual = compiled(values)
 
     assert isinstance(executor, BivectorExpExecutor)
-    assert executor.executor_family == "left_matrix_exp"
+    assert executor.executor_family == "closed_biquadratic"
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
 

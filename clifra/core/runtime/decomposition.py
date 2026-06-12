@@ -12,7 +12,6 @@ Reference:
     from Irreducibles." arXiv:2507.11688v1 [cs.LG]
 """
 
-import enum
 from typing import List, Optional, Tuple
 
 import torch
@@ -21,60 +20,6 @@ import torch
 def _full_layout(algebra):
     """Return the canonical full layout for explicit planned decomposition calls."""
     return algebra.layout(tuple(range(int(algebra.n) + 1)))
-
-
-class ExpPolicy(enum.Enum):
-    """Policy controlling fixed-iteration planned bivector decomposition.
-
-    Both policies share the same dispatch (closed-form for n <= 3,
-    compiled-safe decomposition for n >= 4) and differ only in the
-    power-iteration budget used inside the decomposition path.
-
-    - ``BALANCED`` -- knee-point iteration count, cost-efficient default.
-    - ``PRECISE``  -- saturation iteration count, reaches the dtype noise
-      floor at the cost of roughly 2x BALANCED's wall time.
-    """
-
-    BALANCED = "balanced"
-    PRECISE = "precise"
-
-
-# Power-iteration step counts for the compiled-safe decomposed exp path,
-# keyed by (policy, dtype). Calibrated from separated benchmarks.
-#   bf16  : noise floor ~3e-3 reached by k~8;  saturated by k~16
-#   fp32  : knee at k~24 (~3e-7), floor ~3e-8 by k~64
-#   fp64  : knee at k~48 (~1e-12), floor ~1e-14 by k~64; 128 = conservative cap
-_ITER_BASE = {
-    ExpPolicy.BALANCED: {
-        torch.bfloat16: 8,
-        torch.float16: 8,
-        torch.float32: 24,
-        torch.float64: 48,
-    },
-    ExpPolicy.PRECISE: {
-        torch.bfloat16: 16,
-        torch.float16: 16,
-        torch.float32: 64,
-        torch.float64: 128,
-    },
-}
-# Added to the base count when n >= 6 to compensate for the slight error
-# growth observed between n=4 and n=6 in benchmarks (e.g. fp32:
-# 3.46e-8 -> 8.73e-8 at fixed iters).
-_ITER_N_BUMP = {ExpPolicy.BALANCED: 8, ExpPolicy.PRECISE: 16}
-
-
-def resolve_fixed_iterations(policy: ExpPolicy, dtype: torch.dtype, n: int) -> int:
-    """Return the (policy, dtype, n)-keyed power-iteration count.
-
-    Used by ``AlgebraContext`` at init (and on policy change) to pin a
-    static iteration budget matched to the algebra's working precision
-    and dimension.
-    """
-    base_table = _ITER_BASE[policy]
-    base = base_table.get(dtype, base_table[torch.float32])
-    bump = _ITER_N_BUMP[policy] if n >= 6 else 0
-    return base + bump
 
 
 def _seed_vector(algebra, b: torch.Tensor) -> torch.Tensor:

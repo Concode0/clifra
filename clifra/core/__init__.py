@@ -49,7 +49,14 @@ from .foundation.layout import AlgebraSpec, GradeLayout
 from .foundation.module import AlgebraLike, CliffordModule
 from .foundation.numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
 from .foundation.validation import check_channels, check_multivector
-from .planning.exp import BivectorExpPlan, build_bivector_exp_plan
+from .planning.exp import (
+    DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY,
+    BivectorExpExecutionPolicy,
+    BivectorExpPlan,
+    SpectralExpPreselection,
+    build_bivector_exp_plan,
+    spectral_exp_preselection,
+)
 from .planning.flow import GradeFlow
 from .planning.layouts import ProductRequest, build_product_request
 from .planning.metric import NormSquaredPlan, build_norm_squared_plan
@@ -65,11 +72,7 @@ from .planning.product import (
 from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .planning.unary import GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
 from .runtime.algebra import AlgebraContext
-from .runtime.decomposition import (
-    ExpPolicy,
-    differentiable_invariant_decomposition,
-    ga_power_iteration,
-)
+from .runtime.decomposition import differentiable_invariant_decomposition, ga_power_iteration
 from .runtime.metric import (
     clifford_conjugate,
     geometric_distance,
@@ -133,6 +136,9 @@ __all__ = [
     "ExecutionBoundary",
     "BivectorExpExecutor",
     "BivectorExpPlan",
+    "BivectorExpExecutionPolicy",
+    "DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY",
+    "SpectralExpPreselection",
     "PlanningLimits",
     "PlanCost",
     "DEFAULT_PLANNING_LIMITS",
@@ -179,7 +185,6 @@ __all__ = [
     "materialize_full",
     "metric_self_signs",
     # decomposition
-    "ExpPolicy",
     "ga_power_iteration",
     "differentiable_invariant_decomposition",
     # static executor planning
@@ -207,6 +212,7 @@ __all__ = [
     "build_norm_squared_plan",
     "build_dual_plan",
     "build_bivector_exp_plan",
+    "spectral_exp_preselection",
     "build_grade_plan_tree",
     "build_product_request",
     "build_unary_request",

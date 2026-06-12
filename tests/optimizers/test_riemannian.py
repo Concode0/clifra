@@ -656,6 +656,38 @@ def test_sphere_retraction(algebra_3d):
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5), f"Expected unit norms, got {norms}"
 
 
+@pytest.mark.parametrize("optimizer_cls", [ExponentialSGD, RiemannianAdam])
+def test_sphere_retraction_uses_signature_norm_for_mixed_signature(optimizer_cls):
+    """Sphere retraction should normalize by |<v reverse(v)>| outside Euclidean signatures."""
+    algebra = AlgebraContext(p=1, q=1, device="cpu")
+    vector_layout = algebra.layout((1,))
+    vector = nn.Parameter(torch.tensor([[2.0, 0.5]], dtype=torch.float32))
+    vector._manifold = MANIFOLD_SPHERE
+    vector.grad = torch.zeros_like(vector)
+    optimizer = optimizer_cls([{"params": [vector], "manifold": MANIFOLD_SPHERE}], lr=0.0, algebra=algebra)
+
+    optimizer.step()
+
+    metric_norm = algebra.norm_sq(vector, input_layout=vector_layout).abs()
+    euclidean_norm = vector.norm(dim=-1, keepdim=True)
+    assert torch.allclose(metric_norm, torch.ones_like(metric_norm), atol=1e-6)
+    assert not torch.allclose(euclidean_norm, torch.ones_like(euclidean_norm), atol=1e-4)
+
+
+def test_sphere_retraction_falls_back_for_null_mixed_signature_vector():
+    """Null vectors have no metric unit scaling, so retraction should remain finite."""
+    algebra = AlgebraContext(p=1, q=1, device="cpu")
+    vector = nn.Parameter(torch.tensor([[1.0, 1.0]], dtype=torch.float32))
+    vector._manifold = MANIFOLD_SPHERE
+    vector.grad = torch.zeros_like(vector)
+    optimizer = ExponentialSGD([{"params": [vector], "manifold": MANIFOLD_SPHERE}], lr=0.0, algebra=algebra)
+
+    optimizer.step()
+
+    assert torch.isfinite(vector).all()
+    assert torch.allclose(vector.norm(dim=-1), torch.ones(1), atol=1e-6)
+
+
 def test_euclidean_no_retraction(algebra_3d):
     """Verify euclidean params get standard Adam with no retraction."""
 

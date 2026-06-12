@@ -34,6 +34,7 @@ from clifra.core.foundation.manifold import (
     tag_manifold,
     validate_manifold,
 )
+from clifra.core.foundation.numerics import eps_like
 
 
 def group_parameters_by_manifold(
@@ -98,6 +99,55 @@ def make_riemannian_optimizer(
     if key in {"sgd", "exponential_sgd"}:
         return ExponentialSGD.from_model(model, algebra=algebra, **kwargs)
     raise ValueError("optimizer must be one of 'adam', 'riemannian_adam', 'sgd', or 'exponential_sgd'")
+
+
+def _layout_for_parameter(algebra, values: torch.Tensor, grade: int):
+    try:
+        layout = algebra.layout((int(grade),))
+    except (AttributeError, ValueError):
+        return None
+    return layout if values.shape[-1] == layout.dim else None
+
+
+def _metric_norm_sq_or_none(algebra, values: torch.Tensor, grade: int) -> torch.Tensor | None:
+    layout = _layout_for_parameter(algebra, values, grade)
+    if layout is None:
+        return None
+    return algebra.norm_sq(values, input_layout=layout)
+
+
+def _euclidean_norm(values: torch.Tensor) -> torch.Tensor:
+    floor = eps_like(values, min_value=torch.finfo(values.dtype).tiny)
+    return values.norm(dim=-1, keepdim=True).clamp_min(floor)
+
+
+def _sphere_retract_(values: torch.Tensor, algebra) -> None:
+    metric_norm_sq = _metric_norm_sq_or_none(algebra, values, 1)
+    if metric_norm_sq is None:
+        values.div_(_euclidean_norm(values))
+        return
+
+    floor = eps_like(metric_norm_sq, multiplier=32.0, min_value=torch.finfo(metric_norm_sq.dtype).tiny)
+    metric_scale = metric_norm_sq.abs().clamp_min(floor).sqrt()
+    euclidean_scale = _euclidean_norm(values)
+    scale = torch.where(metric_norm_sq.abs() > floor, metric_scale, euclidean_scale)
+    values.div_(scale)
+
+
+def _clip_bivector_coefficients_(values: torch.Tensor, max_norm: float | None) -> None:
+    if max_norm is None:
+        return
+    norm = _euclidean_norm(values)
+    values.div_(torch.clamp(norm / float(max_norm), min=1.0))
+
+
+def _retract_parameter_(values: torch.Tensor, *, manifold: str, algebra, max_bivector_norm: float | None) -> None:
+    if manifold == MANIFOLD_SPHERE:
+        _sphere_retract_(values, algebra)
+    elif manifold == MANIFOLD_EUCLIDEAN:
+        return
+    elif manifold == MANIFOLD_SPIN:
+        _clip_bivector_coefficients_(values, max_bivector_norm)
 
 
 class ExponentialSGD(Optimizer):
@@ -220,18 +270,12 @@ class ExponentialSGD(Optimizer):
                 # Update parameters
                 p.add_(grad, alpha=-lr)
 
-                # Per-manifold retraction
-                if manifold == MANIFOLD_SPHERE:
-                    # Project back to unit sphere: v / ||v||
-                    p_norm = p.norm(dim=-1, keepdim=True).clamp(min=1e-12)
-                    p.div_(p_norm)
-                elif manifold == MANIFOLD_EUCLIDEAN:
-                    pass  # No retraction for Euclidean parameters
-                elif manifold == MANIFOLD_SPIN:
-                    if self.max_bivector_norm is not None:
-                        p_norm = p.norm(dim=-1, keepdim=True)
-                        scale = torch.clamp(p_norm / self.max_bivector_norm, min=1.0)
-                        p.div_(scale)
+                _retract_parameter_(
+                    p,
+                    manifold=manifold,
+                    algebra=self.algebra,
+                    max_bivector_norm=self.max_bivector_norm,
+                )
 
         return loss
 
@@ -373,18 +417,12 @@ class RiemannianAdam(Optimizer):
                 denom = (exp_avg_sq.sqrt() / bias_correction2_sqrt).add_(eps)
                 p.addcdiv_(exp_avg, denom, value=-step_size)
 
-                # Per-manifold retraction
-                if manifold == MANIFOLD_SPHERE:
-                    # Project back to unit sphere: v / ||v||
-                    p_norm = p.norm(dim=-1, keepdim=True).clamp(min=1e-12)
-                    p.div_(p_norm)
-                elif manifold == MANIFOLD_EUCLIDEAN:
-                    pass  # No retraction for Euclidean parameters
-                elif manifold == MANIFOLD_SPIN:
-                    if self.max_bivector_norm is not None:
-                        p_norm = p.norm(dim=-1, keepdim=True)
-                        scale = torch.clamp(p_norm / self.max_bivector_norm, min=1.0)
-                        p.div_(scale)
+                _retract_parameter_(
+                    p,
+                    manifold=manifold,
+                    algebra=self.algebra,
+                    max_bivector_norm=self.max_bivector_norm,
+                )
 
         return loss
 

@@ -16,6 +16,7 @@ from clifra.core.foundation.basis import normalize_grades
 from clifra.core.foundation.device import resolve_device, resolve_dtype
 from clifra.core.foundation.host import AlgebraHostMixin
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY, BivectorExpExecutionPolicy
 from clifra.core.planning.planner import GradePlanner
 from clifra.core.planning.policy import (
     DEFAULT_PLANNING_LIMITS,
@@ -37,10 +38,9 @@ class AlgebraContext(AlgebraHostMixin):
         device="cuda",
         dtype: torch.dtype = torch.float32,
         default_grades: Optional[Iterable[int]] = None,
-        exp_policy: str = "balanced",
-        fixed_iterations: Optional[int] = None,
         planning_limits: Optional[PlanningLimits] = None,
         product_execution_policy: Optional[ProductExecutionPolicy] = None,
+        bivector_exp_execution_policy: Optional[BivectorExpExecutionPolicy] = None,
     ):
         if p < 0 or q < 0 or r < 0:
             raise ValueError(f"signature counts must be non-negative, got Cl({p},{q},{r})")
@@ -58,18 +58,14 @@ class AlgebraContext(AlgebraHostMixin):
         self.product_execution_policy = (
             DEFAULT_PRODUCT_EXECUTION_POLICY if product_execution_policy is None else product_execution_policy
         )
+        self.bivector_exp_execution_policy = (
+            DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY
+            if bivector_exp_execution_policy is None
+            else bivector_exp_execution_policy
+        )
         self._default_grades = None if default_grades is None else normalize_grades(default_grades, self.n)
         self._default_layout: Optional[GradeLayout] = None
         self._g1_indices_cache: dict[str, torch.Tensor] = {}
-        from clifra.core.runtime.decomposition import ExpPolicy, resolve_fixed_iterations
-
-        self._exp_policy = exp_policy if isinstance(exp_policy, ExpPolicy) else ExpPolicy(exp_policy)
-        self._exp_fixed_iterations_manual = fixed_iterations is not None
-        self._exp_fixed_iterations = (
-            int(fixed_iterations)
-            if fixed_iterations is not None
-            else resolve_fixed_iterations(self._exp_policy, self.dtype, self.n)
-        )
         self.planner = GradePlanner(self)
         self._sync_eps()
 
@@ -82,21 +78,6 @@ class AlgebraContext(AlgebraHostMixin):
     def dtype(self) -> torch.dtype:
         """Return the context floating-point dtype."""
         return self._dtype
-
-    @property
-    def exp_policy(self):
-        """Active :class:`ExpPolicy` controlling planned bivector-exp dispatch."""
-        return self._exp_policy
-
-    @exp_policy.setter
-    def exp_policy(self, value):
-        """Set the bivector exponential dispatch policy."""
-        from clifra.core.runtime.decomposition import ExpPolicy, resolve_fixed_iterations
-
-        self._exp_policy = value if isinstance(value, ExpPolicy) else ExpPolicy(value)
-        self._exp_fixed_iterations_manual = False
-        self._exp_fixed_iterations = resolve_fixed_iterations(self._exp_policy, self.dtype, self.n)
-        self.planner._bivector_exp_executors.clear()
 
     def bivector_squared_signs(self, *, device=None, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
         """Return ``(e_ab)^2`` signs in canonical grade-2 layout order."""
@@ -111,7 +92,6 @@ class AlgebraContext(AlgebraHostMixin):
         self._device = probe.device
         if probe.dtype.is_floating_point:
             self._dtype = probe.dtype
-        self._sync_exp_iterations()
         self._sync_eps()
         self._g1_indices_cache.clear()
         self.planner._apply(fn)
@@ -123,7 +103,6 @@ class AlgebraContext(AlgebraHostMixin):
             self._device = torch.device(resolve_device(device) if str(device) == "auto" else device)
         if dtype is not None:
             self._dtype = resolve_dtype(dtype)
-        self._sync_exp_iterations()
         self._sync_eps()
         self._g1_indices_cache.clear()
         self.planner.clear_cache()
@@ -207,10 +186,3 @@ class AlgebraContext(AlgebraHostMixin):
         finfo = torch.finfo(self.dtype)
         self.eps = float(finfo.eps)
         self.eps_sq = float(finfo.eps**2)
-
-    def _sync_exp_iterations(self) -> None:
-        if self._exp_fixed_iterations_manual:
-            return
-        from clifra.core.runtime.decomposition import resolve_fixed_iterations
-
-        self._exp_fixed_iterations = resolve_fixed_iterations(self._exp_policy, self.dtype, self.n)

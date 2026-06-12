@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from clifra.core.runtime.algebra import AlgebraContext
-from clifra.core.runtime.decomposition import ExpPolicy, differentiable_invariant_decomposition, ga_power_iteration
+from clifra.core.runtime.decomposition import differentiable_invariant_decomposition, ga_power_iteration
 
 pytestmark = pytest.mark.unit
 
@@ -63,14 +63,3 @@ def test_bivector_decomposition_preserves_gradient_path():
     components, _ = differentiable_invariant_decomposition(algebra, bivector, k=1)
 
     assert components[0].requires_grad
-
-
-def test_exp_policy_setter_replans_exp_iteration_budget():
-    algebra = AlgebraContext(4, 0, device="cpu")
-
-    assert algebra.exp_policy == ExpPolicy.BALANCED
-    balanced_iterations = algebra._exp_fixed_iterations
-    algebra.exp_policy = ExpPolicy.PRECISE
-
-    assert algebra.exp_policy == ExpPolicy.PRECISE
-    assert algebra._exp_fixed_iterations > balanced_iterations

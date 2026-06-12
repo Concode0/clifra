@@ -24,7 +24,7 @@ from clifra.core.planning.action import (
     build_paired_bivector_action_plan,
     build_versor_action_plan,
 )
-from clifra.core.planning.exp import build_bivector_exp_plan
+from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY, build_bivector_exp_plan
 from clifra.core.planning.layouts import ProductRequest, build_product_request, normalize_product_op
 from clifra.core.planning.metric import build_norm_squared_plan
 from clifra.core.planning.permutation import build_dual_plan
@@ -451,6 +451,12 @@ class GradePlanner:
         dtype,
         device,
         cache: bool = True,
+        spectral_max_planes: int | None = None,
+        spectral_tol_abs: float | None = None,
+        spectral_tol_rel: float | None = None,
+        spectral_dominant_rel: float | None = None,
+        spectral_allow_degenerate: bool | None = None,
+        spectral_allow_truncated_degenerate: bool | None = None,
     ) -> BivectorExpExecutor:
         """Return a cached executor for ``exp(B)`` with grade-2 input."""
         if input_layout.spec != self.spec:
@@ -460,13 +466,33 @@ class GradePlanner:
         if input_layout.grades != (2,):
             raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
         resolved_device = torch.device(device)
+        policy = getattr(self.algebra, "bivector_exp_execution_policy", DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY)
+        resolved_spectral_max_planes = policy.spectral_max_planes if spectral_max_planes is None else spectral_max_planes
+        resolved_spectral_tol_abs = policy.spectral_tol_abs if spectral_tol_abs is None else spectral_tol_abs
+        resolved_spectral_tol_rel = policy.spectral_tol_rel if spectral_tol_rel is None else spectral_tol_rel
+        resolved_spectral_dominant_rel = (
+            policy.spectral_dominant_rel if spectral_dominant_rel is None else spectral_dominant_rel
+        )
+        resolved_spectral_allow_degenerate = (
+            policy.spectral_allow_degenerate if spectral_allow_degenerate is None else bool(spectral_allow_degenerate)
+        )
+        resolved_spectral_allow_truncated_degenerate = (
+            policy.spectral_allow_truncated_degenerate
+            if spectral_allow_truncated_degenerate is None
+            else bool(spectral_allow_truncated_degenerate)
+        )
         plan = build_bivector_exp_plan(
             self.spec,
             input_layout=input_layout,
             output_layout=output_layout,
             dtype=dtype,
             device=resolved_device,
-            fixed_iterations=getattr(self.algebra, "_exp_fixed_iterations", 20),
+            spectral_max_planes=resolved_spectral_max_planes,
+            spectral_tol_abs=resolved_spectral_tol_abs,
+            spectral_tol_rel=resolved_spectral_tol_rel,
+            spectral_dominant_rel=resolved_spectral_dominant_rel,
+            spectral_allow_degenerate=resolved_spectral_allow_degenerate,
+            spectral_allow_truncated_degenerate=resolved_spectral_allow_truncated_degenerate,
         )
         key = (
             self.spec,
@@ -474,6 +500,12 @@ class GradePlanner:
             str(dtype),
             "bivector_exp",
             plan.executor_family,
+            plan.spectral_max_planes,
+            plan.spectral_tol_abs,
+            plan.spectral_tol_rel,
+            plan.spectral_dominant_rel,
+            plan.spectral_allow_degenerate,
+            plan.spectral_allow_truncated_degenerate,
             input_layout.grades,
             output_layout.grades,
         )
@@ -483,10 +515,17 @@ class GradePlanner:
             bivector_wedge = None
             grade4_square = None
             bivector_grade4_product = None
-            vector_contraction = None
-            vector_wedge = None
-            rotor_product = None
             if plan.executor_family == "left_matrix_exp":
+                left_product = self.product_executor_for_layouts(
+                    op="gp",
+                    left_layout=plan.input_layout,
+                    right_layout=plan.operator_layout,
+                    output_layout=plan.operator_layout,
+                    dtype=dtype,
+                    device=resolved_device,
+                    cache=cache,
+                )
+            elif plan.executor_family == "spectral_local":
                 left_product = self.product_executor_for_layouts(
                     op="gp",
                     left_layout=plan.input_layout,
@@ -527,43 +566,12 @@ class GradePlanner:
                     device=resolved_device,
                     cache=cache,
                 )
-            elif plan.executor_family == "decomposed":
-                vector_contraction = self.product_executor_for_layouts(
-                    op="right_contraction",
-                    left_layout=plan.input_layout,
-                    right_layout=plan.vector_layout,
-                    output_layout=plan.vector_layout,
-                    dtype=dtype,
-                    device=resolved_device,
-                    cache=cache,
-                )
-                vector_wedge = self.product_executor_for_layouts(
-                    op="wedge",
-                    left_layout=plan.vector_layout,
-                    right_layout=plan.vector_layout,
-                    output_layout=plan.input_layout,
-                    dtype=dtype,
-                    device=resolved_device,
-                    cache=cache,
-                )
-                rotor_product = self.product_executor_for_layouts(
-                    op="gp",
-                    left_layout=plan.operator_layout,
-                    right_layout=plan.operator_layout,
-                    output_layout=plan.operator_layout,
-                    dtype=dtype,
-                    device=resolved_device,
-                    cache=cache,
-                )
             executor = BivectorExpExecutor(
                 plan,
                 left_product,
                 bivector_wedge=bivector_wedge,
                 grade4_square=grade4_square,
                 bivector_grade4_product=bivector_grade4_product,
-                vector_contraction=vector_contraction,
-                vector_wedge=vector_wedge,
-                rotor_product=rotor_product,
             )
             if cache:
                 self._bivector_exp_executors[key] = executor

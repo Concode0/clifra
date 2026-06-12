@@ -675,8 +675,6 @@ def _make_algebra(
     dtype: torch.dtype,
     *,
     device: str | None = None,
-    exp_policy: str = "balanced",
-    fixed_iterations: int | None = None,
 ) -> AlgebraContext:
     policy = _benchmark_policy(args)
     return AlgebraContext(
@@ -685,8 +683,6 @@ def _make_algebra(
         spec.r,
         device=args.device if device is None else device,
         dtype=dtype,
-        exp_policy=exp_policy,
-        fixed_iterations=fixed_iterations,
         planning_limits=policy.planning_limits,
         product_execution_policy=policy.product_execution_policy,
     )
@@ -704,7 +700,60 @@ def _policy_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "planning_max_pairs": policy.planning_limits.max_pairs,
         "full_table_max_lanes": policy.product_execution_policy.full_table_max_lanes,
         "benchmark_max_full_lanes": int(args.max_full_lanes),
+        "exp_output_grades_requested": args.exp_output_grades,
+        "exp_spectral_max_planes_requested": args.exp_spectral_max_planes,
+        "exp_spectral_tol_abs_requested": args.exp_spectral_tol_abs,
+        "exp_spectral_tol_rel_requested": args.exp_spectral_tol_rel,
+        "exp_spectral_dominant_rel_requested": args.exp_spectral_dominant_rel,
+        "exp_spectral_allow_degenerate": not bool(args.exp_spectral_disable_degenerate),
+        "exp_spectral_allow_truncated_degenerate": not bool(args.exp_spectral_disable_truncated_degenerate),
     }
+
+
+def _exp_plan_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "spectral_max_planes": args.exp_spectral_max_planes,
+        "spectral_tol_abs": args.exp_spectral_tol_abs,
+        "spectral_tol_rel": args.exp_spectral_tol_rel,
+        "spectral_dominant_rel": args.exp_spectral_dominant_rel,
+        "spectral_allow_degenerate": False if args.exp_spectral_disable_degenerate else None,
+        "spectral_allow_truncated_degenerate": False if args.exp_spectral_disable_truncated_degenerate else None,
+    }
+
+
+def _exp_pair_count(executor: Any) -> int:
+    left_product = getattr(executor, "left_product", None)
+    return int(getattr(left_product, "pair_count", 0) or 0)
+
+
+def _exp_executor_metadata(executor: Any) -> dict[str, Any]:
+    return {
+        "exp_spectral_max_planes": getattr(executor, "spectral_max_planes", None),
+        "exp_spectral_tol_abs": getattr(executor, "spectral_tol_abs", None),
+        "exp_spectral_tol_rel": getattr(executor, "spectral_tol_rel", None),
+        "exp_spectral_dominant_rel": getattr(executor, "spectral_dominant_rel", None),
+        "exp_spectral_allow_degenerate_resolved": getattr(executor, "spectral_allow_degenerate", None),
+        "exp_spectral_allow_truncated_degenerate_resolved": getattr(
+            executor,
+            "spectral_allow_truncated_degenerate",
+            None,
+        ),
+        "exp_spectral_local_axis_count": getattr(executor, "spectral_local_axis_count", None),
+        "exp_nondegenerate_dim": getattr(executor, "nondegenerate_dim", None),
+        "exp_ideal_dim": getattr(executor, "ideal_dim", None),
+    }
+
+
+def _exp_output_layout(algebra: AlgebraContext, selector: str) -> tuple[GradeLayout, str]:
+    normalized = str(selector).strip().lower()
+    if normalized in {"", "even"}:
+        return algebra.layout(range(0, algebra.n + 1, 2)), "even"
+    if normalized == "full":
+        return algebra.spec.full_layout(), "full"
+    grades = tuple(int(part) for part in _parse_csv(normalized.replace(":", ",")))
+    if not grades:
+        raise ValueError("exp output grades selector must be 'even', 'full', or a comma-separated grade list")
+    return algebra.layout(grades), ":".join(str(grade) for grade in grades)
 
 
 def _randn(shape: tuple[int, ...], *, device: str, dtype: torch.dtype, seed: int, scale: float = 1.0) -> torch.Tensor:
@@ -809,6 +858,8 @@ def _build_target(
     device: str,
     dtype: torch.dtype,
     seed: int,
+    exp_plan_kwargs: dict[str, Any] | None = None,
+    exp_output_grades: str = "even",
 ) -> BenchTarget | None:
     full = algebra.spec.full_layout()
     vector = algebra.layout((1,))
@@ -949,8 +1000,8 @@ def _build_target(
         )
 
     if op_name == "bivector_exp":
-        even = algebra.layout(range(0, algebra.n + 1, 2))
-        executor = algebra.plan_exp(input_layout=bivector, output_layout=even)
+        output_layout, output_selector = _exp_output_layout(algebra, exp_output_grades)
+        executor = algebra.plan_exp(input_layout=bivector, output_layout=output_layout, **(exp_plan_kwargs or {}))
         values = _randn((batch, bivector.dim), device=device, dtype=dtype, seed=seed, scale=0.1)
         return BenchTarget(
             name=op_name,
@@ -964,7 +1015,9 @@ def _build_target(
                 "call_method": "plan_exp_executor",
                 **_layout_metadata("input", bivector),
                 **_layout_metadata("output", executor.output_layout),
-                "pair_count": getattr(executor.left_product, "pair_count", 0),
+                "exp_output_grades_selector": output_selector,
+                "pair_count": _exp_pair_count(executor),
+                **_exp_executor_metadata(executor),
             },
         )
 
@@ -1195,6 +1248,8 @@ def run_benchmarks(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list
                                 device=args.device,
                                 dtype=dtype,
                                 seed=seed,
+                                exp_plan_kwargs=_exp_plan_kwargs(args),
+                                exp_output_grades=args.exp_output_grades,
                             ),
                             device=args.device,
                         )
@@ -1371,6 +1426,8 @@ def run_backward_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]]:
                                 device=args.device,
                                 dtype=dtype,
                                 seed=seed,
+                                exp_plan_kwargs=_exp_plan_kwargs(args),
+                                exp_output_grades=args.exp_output_grades,
                             ),
                             device=args.device,
                         )
@@ -1586,12 +1643,15 @@ def run_convergence_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]
             ref_even = ref_alg.layout(range(0, ref_alg.n + 1, 2))
             ref_b = _make_commuting_bivector(ref_alg, args.diagnostic_batch_size, args.diagnostic_bivector_scale)
             ref_rotor = _exact_commuting_exp(ref_alg, ref_b, ref_even)
-            for fixed_iterations in iterations:
+            for spectral_max_planes_probe in iterations:
                 try:
-                    algebra = _make_algebra(args, spec, dtype, fixed_iterations=fixed_iterations)
+                    algebra = _make_algebra(args, spec, dtype)
                     bivector = algebra.layout((2,))
                     even = algebra.layout(range(0, algebra.n + 1, 2))
-                    executor = algebra.plan_exp(input_layout=bivector, output_layout=even)
+                    exp_kwargs = _exp_plan_kwargs(args)
+                    if args.exp_spectral_max_planes is None:
+                        exp_kwargs["spectral_max_planes"] = spectral_max_planes_probe
+                    executor = algebra.plan_exp(input_layout=bivector, output_layout=even, **exp_kwargs)
                     b = _make_commuting_bivector(algebra, args.diagnostic_batch_size, args.diagnostic_bivector_scale)
                     timing = _time_callable(
                         executor,
@@ -1615,11 +1675,14 @@ def run_convergence_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]
                         "dtype": dtype_name(dtype),
                         "batch": args.diagnostic_batch_size,
                         "target": "bivector_exp_convergence",
-                        "fixed_iterations": fixed_iterations,
+                        "fixed_iterations": spectral_max_planes_probe,
+                        "spectral_max_planes_probe": spectral_max_planes_probe,
                         "executor_family": executor.executor_family,
-                        "convergence_active": executor.executor_family == "decomposed",
+                        "convergence_active": executor.executor_family == "spectral_local",
+                        "spectral_local_active": executor.executor_family == "spectral_local",
                         "unitarity_error": _error_stats(unit, identity)["max_abs_error"],
                         "output_finite": bool(torch.isfinite(output).all().item()),
+                        **_exp_executor_metadata(executor),
                         **errors,
                         **_timing_fields(timing),
                     }
@@ -1628,7 +1691,7 @@ def run_convergence_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]
                     rows.append(row)
                     print(
                         f"DIAG convergence {spec.label:<12s} {dtype_name(dtype):<8s} "
-                        f"it={fixed_iterations:<4d} {executor.executor_family:<16s} "
+                        f"k={spectral_max_planes_probe:<4d} {executor.executor_family:<16s} "
                         f"err={float(row['max_abs_error']):.2e} gate={row['diagnostic_gate_ok']}"
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -1641,10 +1704,16 @@ def run_convergence_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]
                             batch=args.diagnostic_batch_size,
                             target="bivector_exp_convergence",
                             exc=exc,
-                            extra={"fixed_iterations": fixed_iterations},
+                            extra={
+                                "fixed_iterations": spectral_max_planes_probe,
+                                "spectral_max_planes_probe": spectral_max_planes_probe,
+                            },
                         )
                     )
-                    print(f"DIAG FAIL convergence {spec.label} {dtype_name(dtype)} it={fixed_iterations}: {exc}")
+                    print(
+                        f"DIAG FAIL convergence {spec.label} {dtype_name(dtype)} "
+                        f"k={spectral_max_planes_probe}: {exc}"
+                    )
                 finally:
                     _release_memory(args.device)
     return rows
@@ -2019,6 +2088,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--correctness-atol", type=float, default=1e-4, help="max_abs_diff allowed by calibration summary")
     parser.add_argument("--correctness-rtol", type=float, default=1e-4, help="max_rel_diff allowed by calibration summary")
     parser.add_argument("--max-cache-mutation", type=int, default=0, help="cache entries allowed during measured forward")
+    parser.add_argument("--exp-spectral-max-planes", type=int, default=None, help="override spectral-local bivector exp plane cap")
+    parser.add_argument("--exp-spectral-tol-abs", type=float, default=None, help="override spectral-local absolute tail tolerance")
+    parser.add_argument("--exp-spectral-tol-rel", type=float, default=None, help="override spectral-local relative tail tolerance")
+    parser.add_argument(
+        "--exp-output-grades",
+        default="even",
+        help="bivector exp output layout for benchmark rows: even, full, or comma-separated grades such as 0,2,4",
+    )
+    parser.add_argument(
+        "--exp-spectral-dominant-rel",
+        type=float,
+        default=None,
+        help="override dominant-plane relative cutoff for spectral-local exp",
+    )
+    parser.add_argument(
+        "--exp-spectral-disable-degenerate",
+        action="store_true",
+        help="route degenerate signatures away from spectral-local exp",
+    )
+    parser.add_argument(
+        "--exp-spectral-disable-truncated-degenerate",
+        action="store_true",
+        help="require full local coverage for degenerate spectral-local exp",
+    )
     parser.add_argument(
         "--extra-suites",
         default="",
@@ -2036,7 +2129,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chain-samples", type=int, default=8, help="log-spaced cumulative samples")
     parser.add_argument("--chain-bivector-scale", type=float, default=0.025, help="controlled bivector scale for cumulative diagnostics")
     parser.add_argument("--convergence-dimension-range", default="4:6", help="dimension range for exp convergence diagnostics")
-    parser.add_argument("--convergence-iters", default="1,2,4,8,16,32,64", help="fixed exp iteration probes")
+    parser.add_argument(
+        "--convergence-iters",
+        default="1,2,4,8,16,32,64",
+        help="spectral plane-cap probes for exp convergence diagnostics",
+    )
     parser.add_argument("--diagnostic-batch-size", type=int, default=4, help="batch size for convergence diagnostics")
     parser.add_argument("--diagnostic-bivector-scale", type=float, default=0.15, help="controlled bivector scale for convergence diagnostics")
     parser.add_argument("--diagnostic-warmup", type=int, default=1, help="convergence diagnostic warmup calls")

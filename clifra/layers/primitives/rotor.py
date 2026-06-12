@@ -26,8 +26,10 @@ class RotorLayer(CliffordModule):
 
     Preserves origin. For grade=2, also preserves lengths and angles (isometry).
 
-    The exp strategy (closed-form vs decomposition) is controlled by
-    ``algebra.exp_policy`` -- see :class:`clifra.core.runtime.decomposition.ExpPolicy`.
+    Bivector exponentials are planned by the core exp executor family:
+    closed formulas for low dimensions, matrix exp by default in higher
+    dimensions, and spectral-local execution for eligible high-dimensional
+    signatures.
 
     Attributes:
         channels (int): Number of versors.

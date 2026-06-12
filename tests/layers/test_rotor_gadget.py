@@ -373,15 +373,8 @@ class TestAggregationMethods:
         assert layer.agg_weights.shape == (2, 4)
 
 
-class TestExpPolicy:
-    """Test RotorGadget with different exp policies."""
-
-    def test_with_exact_policy(self, algebra_3d):
-        """Test layer with EXACT exp policy."""
-        from clifra.core.runtime.decomposition import ExpPolicy
-
-        algebra_3d.exp_policy = ExpPolicy.PRECISE
-
+class TestRotorGadgetExp:
+    def test_exp_path_shape(self, algebra_3d):
         layer = RotorGadget(
             algebra=algebra_3d,
             in_channels=4,
@@ -393,12 +386,8 @@ class TestExpPolicy:
         out = layer(x)
 
         assert out.shape == (2, 4, algebra_3d.dim)
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
 
-    def test_policy_fast_vs_exact(self, algebra_3d):
-        """Compare FAST and EXACT policies (n=3: should match)."""
-        from clifra.core.runtime.decomposition import ExpPolicy
-
+    def test_same_initialization_matches(self, algebra_3d):
         torch.manual_seed(42)
         layer_a = RotorGadget(
             algebra=algebra_3d,
@@ -417,13 +406,8 @@ class TestExpPolicy:
 
         x = torch.randn(2, 4, algebra_3d.dim)
 
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
         out_fast = layer_a(x)
-
-        algebra_3d.exp_policy = ExpPolicy.PRECISE
         out_exact = layer_b(x)
-
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
 
         assert torch.allclose(out_fast, out_exact, atol=1e-3)
 

@@ -245,6 +245,12 @@ class AlgebraHostMixin:
         dtype: Optional[torch.dtype] = None,
         device=None,
         cache: bool = True,
+        spectral_max_planes: Optional[int] = None,
+        spectral_tol_abs: Optional[float] = None,
+        spectral_tol_rel: Optional[float] = None,
+        spectral_dominant_rel: Optional[float] = None,
+        spectral_allow_degenerate: Optional[bool] = None,
+        spectral_allow_truncated_degenerate: Optional[bool] = None,
     ):
         """Return a bivector exponential executor for active-lane values."""
         if dtype is None:
@@ -263,6 +269,12 @@ class AlgebraHostMixin:
             dtype=dtype,
             device=device,
             cache=cache,
+            spectral_max_planes=spectral_max_planes,
+            spectral_tol_abs=spectral_tol_abs,
+            spectral_tol_rel=spectral_tol_rel,
+            spectral_dominant_rel=spectral_dominant_rel,
+            spectral_allow_degenerate=spectral_allow_degenerate,
+            spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
         )
 
     def plan_sandwich_action(

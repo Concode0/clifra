@@ -214,15 +214,10 @@ class TestLayers:
         # 3D algebra has 4 grades (0, 1, 2, 3)
         assert inv.shape == (4, 5, 4)
 
-    def test_rotor_layer_exact_policy(self, algebra_3d):
-        """Test RotorLayer with EXACT exp policy."""
-        from clifra.core.runtime.decomposition import ExpPolicy
-
-        algebra_3d.exp_policy = ExpPolicy.PRECISE
+    def test_rotor_layer_preserves_norm(self, algebra_3d):
         x = torch.randn(4, 5, 8)
         layer = RotorLayer(algebra_3d, 5)
         y = layer(x)
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
 
         # Check output shape
         assert y.shape == (4, 5, 8)
@@ -232,33 +227,20 @@ class TestLayers:
         y_norm = y.norm(dim=-1)
         assert torch.allclose(x_norm, y_norm, atol=1e-4)
 
-    def test_rotor_layer_policy_vs_standard(self, algebra_3d):
-        """Compare RotorLayer with FAST vs EXACT policy."""
-        from clifra.core.runtime.decomposition import ExpPolicy
-
+    def test_rotor_layer_repeated_evaluation_matches(self, algebra_3d):
         layer_a = RotorLayer(algebra_3d, 3)
         layer_b = RotorLayer(algebra_3d, 3)
         layer_b.grade_weights.data = layer_a.grade_weights.data.clone()
 
         x = torch.randn(2, 3, 8)
 
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
         y_fast = layer_a(x)
-
-        algebra_3d.exp_policy = ExpPolicy.PRECISE
         y_exact = layer_b(x)
-
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
 
         # For n=3, all bivectors are simple so results should match
         assert torch.allclose(y_fast, y_exact, atol=1e-3)
 
-    def test_rotor_layer_backward_exact(self, algebra_3d):
-        """Test gradient flow through RotorLayer with EXACT policy."""
-        from clifra.core.runtime.decomposition import ExpPolicy
-
-        algebra_3d.exp_policy = ExpPolicy.PRECISE
-
+    def test_rotor_layer_backward(self, algebra_3d):
         x = torch.randn(2, 3, 8, requires_grad=True)
         layer = RotorLayer(algebra_3d, 3)
 
@@ -273,26 +255,14 @@ class TestLayers:
         assert not torch.isnan(layer.grade_weights.grad).any()
         assert not torch.isinf(layer.grade_weights.grad).any()
 
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
-
-    def test_multi_rotor_layer_exact_policy(self, algebra_3d):
-        """Test MultiRotorLayer with EXACT policy."""
-        from clifra.core.runtime.decomposition import ExpPolicy
-
-        algebra_3d.exp_policy = ExpPolicy.PRECISE
+    def test_multi_rotor_layer_shape(self, algebra_3d):
         x = torch.randn(4, 5, 8)
         layer = MultiRotorLayer(algebra_3d, 5, num_rotors=4)
         y = layer(x)
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
 
         assert y.shape == (4, 5, 8)
 
-    def test_multi_rotor_layer_backward_exact(self, algebra_3d):
-        """Test gradient flow through MultiRotorLayer with EXACT policy."""
-        from clifra.core.runtime.decomposition import ExpPolicy
-
-        algebra_3d.exp_policy = ExpPolicy.PRECISE
-
+    def test_multi_rotor_layer_backward(self, algebra_3d):
         x = torch.randn(2, 3, 8, requires_grad=True)
         layer = MultiRotorLayer(algebra_3d, 3, num_rotors=4)
 
@@ -308,14 +278,8 @@ class TestLayers:
         assert not torch.isnan(layer.rotor_grade_weights.grad).any()
         assert not torch.isinf(layer.rotor_grade_weights.grad).any()
 
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
-
     def test_rotor_layer_rotor_property(self, algebra_3d):
         """Verify that exp-produced rotors satisfy R * ~R = 1."""
-        from clifra.core.runtime.decomposition import ExpPolicy
-
-        algebra_3d.exp_policy = ExpPolicy.PRECISE
-
         layer = RotorLayer(algebra_3d, 2)
 
         B = torch.zeros(layer.channels, algebra_3d.dim)
@@ -333,8 +297,6 @@ class TestLayers:
             expected_identity[..., 0] = 1.0
 
             assert torch.allclose(identity, expected_identity, atol=1e-4)
-
-        algebra_3d.exp_policy = ExpPolicy.BALANCED
 
     def test_reflection_shape(self, algebra_3d):
         B, C = 4, 5

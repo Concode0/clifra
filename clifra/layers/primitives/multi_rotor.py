@@ -28,7 +28,9 @@ class MultiRotorLayer(CliffordModule):
     x' = sum_k w_k R_k x R~_k.
     For grade=k: each V_k is a grade-k versor applied via the general versor product.
 
-    The exp strategy is controlled by ``algebra.exp_policy``.
+    Bivector exponentials are planned by the core exp executor family:
+    closed formulas, matrix exp, or spectral-local execution for eligible
+    high-dimensional signatures.
 
     Attributes:
         channels (int): Input features.
