@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
+from clifra.core.foundation.numerics import eps_like
 
 
 class GeometricAttentionScoreExecutor(nn.Module):
@@ -77,7 +78,7 @@ class GeometricAttentionScoreExecutor(nn.Module):
 
         bivectors = torch.index_select(product, -1, self._score_bivector_positions)
         if bivectors.shape[-1] > 0:
-            score_g2 = bivectors.pow(2).sum(dim=(2, -1)).clamp_min(0.0).sqrt()
+            score_g2 = bivectors.pow(2).sum(dim=(2, -1)).clamp_min(eps_like(bivectors)).sqrt()
         else:
             score_g2 = torch.zeros_like(score_g0)
 
