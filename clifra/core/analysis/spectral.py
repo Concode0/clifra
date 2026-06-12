@@ -4,8 +4,8 @@
 
 """Spectral analysis of multivector data in a Clifford algebra.
 
-Computes grade-energy spectrum, bivector-field decomposition, and
-(optionally) the eigenvalue spectrum of the geometric-product operator.
+Computes grade-energy spectrum, mean-bivector magnitude, and optionally the
+eigenvalue spectrum of the geometric-product operator.
 """
 
 from typing import Optional
@@ -13,8 +13,6 @@ from typing import Optional
 import torch
 
 from clifra.core.foundation.module import AlgebraLike
-from clifra.core.foundation.numerics import eps_like
-from clifra.core.runtime.decomposition import differentiable_invariant_decomposition
 from clifra.core.runtime.metric import hermitian_grade_spectrum
 
 from ._types import CONSTANTS, SpectralResult
@@ -34,24 +32,13 @@ class SpectralAnalyzer:
 
     1. **Grade energy spectrum** -- population-level distribution of
        Hermitian grade energy across all grades.
-    2. **Bivector field spectrum** -- singular values from decomposing
-       the mean bivector into simple components (rotation planes).
+    2. **Bivector field spectrum** -- norm of the mean bivector field.
     3. **GP operator spectrum** -- eigenvalues of the left-multiplication
        operator :math:`L_x(y) = x \\cdot y` (only for small algebras).
-
-    Args:
-        algebra: Layout-first algebra host.
-        max_simple_components: Maximum number of simple components to
-            extract from the mean bivector.
     """
 
-    def __init__(
-        self,
-        algebra: AlgebraLike,
-        max_simple_components: int = CONSTANTS.spectral_max_simple_components,
-    ):
+    def __init__(self, algebra: AlgebraLike):
         self.algebra = algebra
-        self.max_simple_components = max_simple_components
 
     def analyze(self, mv_data: torch.Tensor) -> SpectralResult:
         """Full spectral analysis.
@@ -120,15 +107,15 @@ class SpectralAnalyzer:
         return spectrum.mean(dim=0)  # [n+1]
 
     def bivector_field_spectrum(self, mv_data: torch.Tensor) -> tuple:
-        """Decompose the mean bivector into simple components.
+        """Return the mean-bivector magnitude and representative component.
 
         Args:
             mv_data: ``[N, C, dim]`` multivector data.
 
         Returns:
-            ``(singular_values, simple_components)`` where
-            *singular_values* is a 1-D tensor of component norms and
-            *simple_components* is a list of ``[dim]`` simple bivectors.
+            ``(spectrum, components)`` where *spectrum* is a 1-D tensor
+            containing the mean-bivector norm and *components* contains the
+            corresponding full-layout mean bivector.
         """
         spectrum, components, _ = self._bivector_field_spectrum_with_skips(mv_data)
         return spectrum, components
@@ -139,9 +126,8 @@ class SpectralAnalyzer:
         mean_mv = flat.mean(dim=0)  # [dim]
         skipped = {}
 
-        # Guard: algebra needs at least grade 2 for bivectors
         if self.algebra.n < 2:
-            skipped["bivector_field_decomposition"] = {
+            skipped["bivector_field_spectrum"] = {
                 "reason": "grade_absent",
                 "details": {"n": int(self.algebra.n), "required_grade": 2},
             }
@@ -157,53 +143,13 @@ class SpectralAnalyzer:
         mean_bv = bv_layout.full(mean_bv_compact)
 
         bv_norm = mean_bv_compact.norm()
-        if bv_norm < eps_like(mean_bv_compact):
+        if bv_norm <= torch.finfo(mean_bv_compact.dtype).eps:
             return (
                 torch.zeros(1, device=mv_data.device),
                 [torch.zeros_like(mean_bv)],
                 skipped,
             )
-
-        decomp_product = full_product_feasibility(
-            self.algebra,
-            role="bivector_field_decomposition",
-            op="gp",
-            max_pairs=CONSTANTS.analysis_product_pairs,
-        )
-        if not decomp_product:
-            skipped["bivector_field_decomposition"] = feasibility_record(decomp_product)
-            return bv_norm.reshape(1), [mean_bv], skipped
-
-        decomp, _ = differentiable_invariant_decomposition(
-            self.algebra,
-            mean_bv.unsqueeze(0),  # [1, dim]
-            k=self.max_simple_components,
-        )
-
-        # decomp is a list of [1, dim] tensors
-        norms = []
-        components = []
-        for comp in decomp:
-            c = comp.squeeze(0)  # [dim]
-            n = c.norm()
-            if n > eps_like(c):
-                norms.append(n)
-                components.append(c)
-
-        if not norms:
-            return (
-                torch.zeros(1, device=mv_data.device),
-                [torch.zeros_like(mean_bv)],
-                skipped,
-            )
-
-        sv = torch.stack(norms)
-        # Sort descending
-        order = sv.argsort(descending=True)
-        sv = sv[order]
-        components = [components[i] for i in order.tolist()]
-
-        return sv, components, skipped
+        return bv_norm.reshape(1), [mean_bv], skipped
 
     def gp_operator_spectrum(self, mv_data: torch.Tensor, n_samples: Optional[int] = None) -> torch.Tensor:
         """Eigenvalue magnitudes of the left-multiplication operator.

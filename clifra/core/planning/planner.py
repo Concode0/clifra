@@ -455,6 +455,7 @@ class GradePlanner:
         spectral_tol_abs: float | None = None,
         spectral_tol_rel: float | None = None,
         spectral_dominant_rel: float | None = None,
+        spectral_transition_n: int | None = None,
         spectral_allow_degenerate: bool | None = None,
         spectral_allow_truncated_degenerate: bool | None = None,
     ) -> BivectorExpExecutor:
@@ -472,6 +473,9 @@ class GradePlanner:
         resolved_spectral_tol_rel = policy.spectral_tol_rel if spectral_tol_rel is None else spectral_tol_rel
         resolved_spectral_dominant_rel = (
             policy.spectral_dominant_rel if spectral_dominant_rel is None else spectral_dominant_rel
+        )
+        resolved_spectral_transition_n = (
+            policy.spectral_transition_n if spectral_transition_n is None else int(spectral_transition_n)
         )
         resolved_spectral_allow_degenerate = (
             policy.spectral_allow_degenerate if spectral_allow_degenerate is None else bool(spectral_allow_degenerate)
@@ -491,6 +495,7 @@ class GradePlanner:
             spectral_tol_abs=resolved_spectral_tol_abs,
             spectral_tol_rel=resolved_spectral_tol_rel,
             spectral_dominant_rel=resolved_spectral_dominant_rel,
+            spectral_transition_n=resolved_spectral_transition_n,
             spectral_allow_degenerate=resolved_spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=resolved_spectral_allow_truncated_degenerate,
         )
@@ -504,6 +509,7 @@ class GradePlanner:
             plan.spectral_tol_abs,
             plan.spectral_tol_rel,
             plan.spectral_dominant_rel,
+            plan.spectral_transition_n,
             plan.spectral_allow_degenerate,
             plan.spectral_allow_truncated_degenerate,
             input_layout.grades,
@@ -515,24 +521,15 @@ class GradePlanner:
             bivector_wedge = None
             grade4_square = None
             bivector_grade4_product = None
-            if plan.executor_family == "left_matrix_exp":
+            if plan.executor_family in {"left_matrix_exp", "cpu_matrix_exp"}:
+                product_device = torch.device("cpu") if plan.executor_family == "cpu_matrix_exp" else resolved_device
                 left_product = self.product_executor_for_layouts(
                     op="gp",
                     left_layout=plan.input_layout,
                     right_layout=plan.operator_layout,
                     output_layout=plan.operator_layout,
                     dtype=dtype,
-                    device=resolved_device,
-                    cache=cache,
-                )
-            elif plan.executor_family == "spectral_local":
-                left_product = self.product_executor_for_layouts(
-                    op="gp",
-                    left_layout=plan.input_layout,
-                    right_layout=plan.operator_layout,
-                    output_layout=plan.operator_layout,
-                    dtype=dtype,
-                    device=resolved_device,
+                    device=product_device,
                     cache=cache,
                 )
             elif plan.executor_family == "closed_biquadratic":
@@ -754,6 +751,13 @@ class GradePlanner:
             str(executor.operator_eye.dtype),
             executor.op,
             executor.executor_family,
+            executor.spectral_max_planes,
+            executor.spectral_tol_abs,
+            executor.spectral_tol_rel,
+            executor.spectral_dominant_rel,
+            executor.spectral_transition_n,
+            executor.spectral_allow_degenerate,
+            executor.spectral_allow_truncated_degenerate,
             executor.input_layout.grades,
             executor.output_layout.grades,
         )

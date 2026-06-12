@@ -14,11 +14,17 @@ from .action import (
 )
 from .exp import (
     DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY,
+    SPECTRAL_LOCAL_TRUNCATION_NOTICE,
     BivectorExpExecutionPolicy,
     BivectorExpPlan,
+    SpectralExpAngleDiagnostics,
     SpectralExpPreselection,
+    SpectralExpUniformTailStress,
     build_bivector_exp_plan,
+    format_spectral_exp_uniform_tail_stress,
+    spectral_exp_angle_diagnostics,
     spectral_exp_preselection,
+    spectral_exp_uniform_tail_stress,
 )
 from .flow import GradeFlow
 from .layouts import ProductRequest, build_product_request
@@ -63,7 +69,10 @@ __all__ = [
     "BivectorExpPlan",
     "BivectorExpExecutionPolicy",
     "DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY",
+    "SPECTRAL_LOCAL_TRUNCATION_NOTICE",
+    "SpectralExpAngleDiagnostics",
     "SpectralExpPreselection",
+    "SpectralExpUniformTailStress",
     "FULL_TABLE_AUTO_MAX_N",
     "FULL_TABLE_EXPLICIT_MAX_N",
     "LinearActionPlan",
@@ -80,7 +89,10 @@ __all__ = [
     "build_full_table_product_plan",
     "build_grade_plan_tree",
     "build_bivector_exp_plan",
+    "format_spectral_exp_uniform_tail_stress",
+    "spectral_exp_angle_diagnostics",
     "spectral_exp_preselection",
+    "spectral_exp_uniform_tail_stress",
     "build_norm_squared_plan",
     "build_dual_plan",
     "build_product_request",

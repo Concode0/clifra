@@ -101,7 +101,6 @@ class AnalysisConstants:
     signature_search_max_dim: int = FULL_TABLE_EXPLICIT_MAX_N - 2
     signature_bootstrap_resamples: int = 10
     signature_bootstrap_max_samples: int = 500
-    spectral_max_simple_components: int = 5
     symmetry_null_threshold: float = 0.01
     commutator_max_bivectors: int = 15
     pipeline_parallel_workers: int = 3
@@ -217,9 +216,8 @@ class SpectralResult:
 
     Attributes:
         grade_energy: Mean Hermitian grade energy ``[n+1]``.
-        bivector_spectrum: Singular values of decomposed bivector field.
-        simple_components: List of simple-bivector tensors from
-            decomposition.
+        bivector_spectrum: Norm summary of the mean bivector field.
+        simple_components: Representative full-layout bivector tensors.
         gp_eigenvalues: Eigenvalues of the geometric-product left-action
             operator (``None`` if the algebra was too large).
         skipped: Optional analysis subreports skipped by feasibility policy.

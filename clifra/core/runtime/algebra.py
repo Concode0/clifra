@@ -160,6 +160,13 @@ class AlgebraContext(AlgebraHostMixin):
         output_grades=None,
         input_layout: Optional[GradeLayout] = None,
         output_layout: Optional[GradeLayout] = None,
+        spectral_max_planes: Optional[int] = None,
+        spectral_tol_abs: Optional[float] = None,
+        spectral_tol_rel: Optional[float] = None,
+        spectral_dominant_rel: Optional[float] = None,
+        spectral_transition_n: Optional[int] = None,
+        spectral_allow_degenerate: Optional[bool] = None,
+        spectral_allow_truncated_degenerate: Optional[bool] = None,
         return_layout: bool = False,
     ) -> torch.Tensor:
         """Exponentiate a declared bivector through the shared planner route."""
@@ -170,6 +177,13 @@ class AlgebraContext(AlgebraHostMixin):
             output_grades=output_grades,
             input_layout=input_layout,
             output_layout=output_layout,
+            spectral_max_planes=spectral_max_planes,
+            spectral_tol_abs=spectral_tol_abs,
+            spectral_tol_rel=spectral_tol_rel,
+            spectral_dominant_rel=spectral_dominant_rel,
+            spectral_transition_n=spectral_transition_n,
+            spectral_allow_degenerate=spectral_allow_degenerate,
+            spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
             return_layout=return_layout,
         )
 

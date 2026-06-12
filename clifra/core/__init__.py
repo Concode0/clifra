@@ -4,7 +4,7 @@
 """Core mathematical package for Geometric Algebra.
 
 Provides Clifford algebra hosts, layout contracts, planner/executor utilities,
-metric functions, bivector decomposition, and signature search utilities.
+metric functions, and signature search utilities.
 
 The ``clifra.core.analysis`` sub-package (``MetricSearch``, ``GeodesicFlow``,
 ``GeometricAnalyzer``, etc.) is **lazily imported** - it is not loaded
@@ -51,11 +51,17 @@ from .foundation.numerics import covariance_regularizer, eps_for, eps_like, sign
 from .foundation.validation import check_channels, check_multivector
 from .planning.exp import (
     DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY,
+    SPECTRAL_LOCAL_TRUNCATION_NOTICE,
     BivectorExpExecutionPolicy,
     BivectorExpPlan,
+    SpectralExpAngleDiagnostics,
     SpectralExpPreselection,
+    SpectralExpUniformTailStress,
     build_bivector_exp_plan,
+    format_spectral_exp_uniform_tail_stress,
+    spectral_exp_angle_diagnostics,
     spectral_exp_preselection,
+    spectral_exp_uniform_tail_stress,
 )
 from .planning.flow import GradeFlow
 from .planning.layouts import ProductRequest, build_product_request
@@ -72,7 +78,6 @@ from .planning.product import (
 from .planning.tree import GradePathNode, GradePlanTree, build_grade_plan_tree
 from .planning.unary import GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
 from .runtime.algebra import AlgebraContext
-from .runtime.decomposition import differentiable_invariant_decomposition, ga_power_iteration
 from .runtime.metric import (
     clifford_conjugate,
     geometric_distance,
@@ -138,7 +143,10 @@ __all__ = [
     "BivectorExpPlan",
     "BivectorExpExecutionPolicy",
     "DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY",
+    "SPECTRAL_LOCAL_TRUNCATION_NOTICE",
+    "SpectralExpAngleDiagnostics",
     "SpectralExpPreselection",
+    "SpectralExpUniformTailStress",
     "PlanningLimits",
     "PlanCost",
     "DEFAULT_PLANNING_LIMITS",
@@ -184,9 +192,6 @@ __all__ = [
     "hermitian_signs",
     "materialize_full",
     "metric_self_signs",
-    # decomposition
-    "ga_power_iteration",
-    "differentiable_invariant_decomposition",
     # static executor planning
     "GradeProductOp",
     "FullTableProductExecutor",
@@ -212,7 +217,10 @@ __all__ = [
     "build_norm_squared_plan",
     "build_dual_plan",
     "build_bivector_exp_plan",
+    "format_spectral_exp_uniform_tail_stress",
+    "spectral_exp_angle_diagnostics",
     "spectral_exp_preselection",
+    "spectral_exp_uniform_tail_stress",
     "build_grade_plan_tree",
     "build_product_request",
     "build_unary_request",

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import torch
@@ -14,16 +15,33 @@ from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 
 SPECTRAL_LOCAL_MAX_PLANES = 4
 SPECTRAL_LOCAL_MAX_IDEAL_DIM = 4
+SPECTRAL_LOCAL_TRUNCATION_NOTICE = (
+    "spectral_local extracts k dominant orthogonal planes. Clipping errors can occur when rotation energy is "
+    "evenly distributed; because orthogonal plane rotors commute, the strict tail guard is bounded by the sum of "
+    "the clipped tail angles."
+)
 
 
 @dataclass(frozen=True)
 class BivectorExpExecutionPolicy:
-    """Public policy knobs for planned bivector exponentials."""
+    """Public policy knobs for planned bivector exponentials.
+
+    ``spectral_local`` keeps the dominant plane spectrum up to ``spectral_max_planes``.
+    Use the diagnostics in this module when evenly distributed rotation energy would make
+    the clipped tail numerically relevant.
+
+    .. caution::
+        Spectral truncation diagnostics (`spectral_exp_angle_diagnostics`) are intended
+        for static design-time evaluation or validation/inference logging. 
+        Avoid extracting scalar values inside compiled 
+        training loops to prevent hardware stream synchronization bottlenecks.
+    """
 
     spectral_max_planes: int | None = None
     spectral_tol_abs: float | None = None
     spectral_tol_rel: float = 0.0
     spectral_dominant_rel: float | None = None
+    spectral_transition_n: int = 10
     spectral_allow_degenerate: bool = True
     spectral_allow_truncated_degenerate: bool = True
 
@@ -47,7 +65,6 @@ class BivectorExpPlan:
     mixed_degenerate_bivector_positions: torch.Tensor
     nilpotent_bivector_positions: torch.Tensor
     bivector_to_nondegenerate_generator: torch.Tensor
-    nondegenerate_generator_to_bivector: torch.Tensor
     bivector_to_mixed_generator: torch.Tensor
     output_scalar_mask: torch.Tensor
     operator_scalar_mask: torch.Tensor
@@ -65,6 +82,14 @@ class BivectorExpPlan:
     spectral_local_sparse_right_positions: torch.Tensor
     spectral_local_sparse_output_positions: torch.Tensor
     spectral_local_sparse_coefficients: torch.Tensor
+    spectral_nondegenerate_generator_input_positions: torch.Tensor
+    spectral_nondegenerate_generator_row_positions: torch.Tensor
+    spectral_nondegenerate_generator_col_positions: torch.Tensor
+    spectral_nondegenerate_generator_coefficients: torch.Tensor
+    spectral_mixed_generator_input_positions: torch.Tensor
+    spectral_mixed_generator_row_positions: torch.Tensor
+    spectral_mixed_generator_col_positions: torch.Tensor
+    spectral_mixed_generator_coefficients: torch.Tensor
     spectral_plane_bivector_map: torch.Tensor
     spectral_plane_eye: torch.Tensor
     spectral_plane_left_positions: torch.Tensor
@@ -72,18 +97,23 @@ class BivectorExpPlan:
     spectral_plane_output_positions: torch.Tensor
     spectral_plane_coefficients: torch.Tensor
     spectral_plane_to_local: torch.Tensor
-    spectral_nilpotent_to_local: torch.Tensor
+    spectral_nilpotent_input_positions: torch.Tensor
+    spectral_nilpotent_local_positions: torch.Tensor
     spectral_ideal_basis: torch.Tensor
     spectral_lift_grades: torch.Tensor
+    spectral_lift_grade_values: tuple[int, ...]
     spectral_lift_local_positions: torch.Tensor
     spectral_lift_local_axes: torch.Tensor
     spectral_lift_local_mask: torch.Tensor
     spectral_lift_target_axes: torch.Tensor
-    spectral_lift_target_map: torch.Tensor
+    spectral_lift_target_positions: torch.Tensor
+    spectral_lift_target_mask: torch.Tensor
+    spectral_lift_output_dim: int
     spectral_tolerances: torch.Tensor
     spectral_tol_abs: float
     spectral_tol_rel: float
     spectral_dominant_rel: float
+    spectral_transition_n: int
     spectral_allow_degenerate: bool
     spectral_allow_truncated_degenerate: bool
     nondegenerate_dim: int
@@ -95,7 +125,11 @@ class BivectorExpPlan:
 
 @dataclass(frozen=True)
 class SpectralExpPreselection:
-    """Static eligibility record for the spectral-local exp path."""
+    """Static eligibility record for the spectral-local exp path.
+
+    See :data:`SPECTRAL_LOCAL_TRUNCATION_NOTICE` for the precision caveat when
+    ``max_planes`` is smaller than the full orthogonal plane count.
+    """
 
     eligible: bool
     reason: str
@@ -106,6 +140,36 @@ class SpectralExpPreselection:
     nondegenerate_dim: int
     ideal_dim: int
     solver_family: str
+
+
+@dataclass(frozen=True)
+class SpectralExpAngleDiagnostics:
+    """Runtime truncation diagnostics for a solver angle spectrum."""
+
+    selected_planes: int
+    total_planes: int
+    sorted_abs_angles: torch.Tensor
+    tail_angle_sum_bound: torch.Tensor
+    geometric_variance_captured: torch.Tensor
+    truncates: bool
+    notice: str = SPECTRAL_LOCAL_TRUNCATION_NOTICE
+
+
+@dataclass(frozen=True)
+class SpectralExpUniformTailStress:
+    """Static uniform-energy stress row for spectral-local truncation."""
+
+    spec: AlgebraSpec
+    max_planes: int
+    total_planes: int
+    selected_planes: int
+    clipped_planes: int
+    bivector_norm: float
+    uniform_angle: float
+    tail_angle_sum_bound: float
+    geometric_variance_captured: float
+    truncates: bool
+    notice: str = SPECTRAL_LOCAL_TRUNCATION_NOTICE
 
 
 def build_bivector_exp_plan(
@@ -119,6 +183,7 @@ def build_bivector_exp_plan(
     spectral_tol_abs: float | None = None,
     spectral_tol_rel: float = 0.0,
     spectral_dominant_rel: float | None = None,
+    spectral_transition_n: int = 10,
     spectral_allow_degenerate: bool = True,
     spectral_allow_truncated_degenerate: bool = True,
 ) -> BivectorExpPlan:
@@ -131,12 +196,7 @@ def build_bivector_exp_plan(
         raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
 
     resolved_device = torch.device(device)
-    grade4_layout = spec.layout((4,)) if spec.n >= 4 else None
-    operator_layout = spec.layout(range(0, spec.n + 1, 2))
     finfo = torch.finfo(dtype)
-    operator_position_by_index = {index: position for position, index in enumerate(operator_layout.basis_indices)}
-    metric_signs = _metric_signs(spec, dtype=dtype, device=resolved_device)
-    partition = _bivector_axis_partition(input_layout, spec, device=resolved_device)
     preselection = spectral_exp_preselection(
         spec,
         resolved_device,
@@ -145,18 +205,63 @@ def build_bivector_exp_plan(
         tol_abs=spectral_tol_abs,
         tol_rel=spectral_tol_rel,
         dominant_rel=spectral_dominant_rel,
+        transition_n=spectral_transition_n,
         allow_degenerate=spectral_allow_degenerate,
         allow_truncated_degenerate=spectral_allow_truncated_degenerate,
     )
-    local_buffers = _spectral_local_buffers(
-        spec,
-        input_layout,
-        output_layout,
-        preselection.max_planes,
-        ideal_dim=preselection.ideal_dim if preselection.eligible else 0,
-        dtype=dtype,
-        device=resolved_device,
-    )
+    executor_family = _executor_family_from_preselection(spec, preselection, resolved_device)
+    buffer_device = torch.device("cpu") if executor_family == "cpu_matrix_exp" else resolved_device
+    grade4_layout = spec.layout((4,)) if executor_family == "closed_biquadratic" else None
+    operator_layout = spec.layout((0,)) if executor_family == "spectral_local" else spec.layout(range(0, spec.n + 1, 2))
+    operator_position_by_index = {index: position for position, index in enumerate(operator_layout.basis_indices)}
+    metric_signs = _metric_signs(spec, dtype=dtype, device=buffer_device)
+    partition = _bivector_axis_partition(input_layout, spec, device=buffer_device)
+    if executor_family == "spectral_local":
+        local_buffers = _spectral_local_buffers(
+            spec,
+            input_layout,
+            output_layout,
+            preselection.max_planes,
+            ideal_dim=preselection.ideal_dim,
+            dtype=dtype,
+            device=buffer_device,
+        )
+        spectral_nondegenerate_entries = _bivector_to_nondegenerate_generator_entries(
+            input_layout,
+            spec,
+            dtype=dtype,
+            device=buffer_device,
+        )
+        spectral_mixed_entries = _bivector_to_mixed_generator_entries(
+            input_layout,
+            spec,
+            dtype=dtype,
+            device=buffer_device,
+        )
+        bivector_to_nondegenerate_generator = torch.zeros((0, 0, 0), dtype=dtype, device=buffer_device)
+        bivector_to_mixed_generator = torch.zeros((0, 0, 0), dtype=dtype, device=buffer_device)
+        bivector_to_output = torch.zeros((0, 0), dtype=dtype, device=buffer_device)
+        bivector_to_operator = torch.zeros((0, 0), dtype=dtype, device=buffer_device)
+        operator_to_output = torch.zeros((0, 0), dtype=dtype, device=buffer_device)
+    else:
+        local_buffers = _empty_spectral_local_buffers(spec, input_layout, output_layout, dtype=dtype, device=buffer_device)
+        spectral_nondegenerate_entries = _empty_generator_entries(dtype=dtype, device=buffer_device)
+        spectral_mixed_entries = _empty_generator_entries(dtype=dtype, device=buffer_device)
+        bivector_to_nondegenerate_generator = _bivector_to_nondegenerate_generator(
+            input_layout,
+            spec,
+            dtype=dtype,
+            device=buffer_device,
+        )
+        bivector_to_mixed_generator = _bivector_to_mixed_generator(
+            input_layout,
+            spec,
+            dtype=dtype,
+            device=buffer_device,
+        )
+        bivector_to_output = _layout_map(input_layout, output_layout, dtype=dtype, device=buffer_device)
+        bivector_to_operator = _layout_map(input_layout, operator_layout, dtype=dtype, device=buffer_device)
+        operator_to_output = _layout_map(operator_layout, output_layout, dtype=dtype, device=buffer_device)
 
     signs = []
     for index in input_layout.basis_indices:
@@ -175,47 +280,21 @@ def build_bivector_exp_plan(
         grade4_layout=grade4_layout,
         operator_layout=operator_layout,
         output_layout=output_layout,
-        executor_family=select_bivector_exp_executor_family(
-            spec,
-            resolved_device,
-            dtype=dtype,
-            spectral_max_planes=spectral_max_planes,
-            spectral_tol_abs=spectral_tol_abs,
-            spectral_tol_rel=spectral_tol_rel,
-            spectral_dominant_rel=spectral_dominant_rel,
-            spectral_allow_degenerate=spectral_allow_degenerate,
-            spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
-        ),
+        executor_family=executor_family,
         metric_signs=metric_signs,
-        bivector_squared_signs=torch.tensor(signs, dtype=dtype, device=resolved_device),
+        bivector_squared_signs=torch.tensor(signs, dtype=dtype, device=buffer_device),
         nondegenerate_bivector_positions=partition[0],
         mixed_degenerate_bivector_positions=partition[1],
         nilpotent_bivector_positions=partition[2],
-        bivector_to_nondegenerate_generator=_bivector_to_nondegenerate_generator(
-            input_layout,
-            spec,
-            dtype=dtype,
-            device=resolved_device,
-        ),
-        nondegenerate_generator_to_bivector=_nondegenerate_generator_to_bivector(
-            input_layout,
-            spec,
-            dtype=dtype,
-            device=resolved_device,
-        ),
-        bivector_to_mixed_generator=_bivector_to_mixed_generator(
-            input_layout,
-            spec,
-            dtype=dtype,
-            device=resolved_device,
-        ),
-        output_scalar_mask=_scalar_mask(output_layout, dtype=dtype, device=resolved_device),
-        operator_scalar_mask=_scalar_mask(operator_layout, dtype=dtype, device=resolved_device),
-        bivector_to_output=_layout_map(input_layout, output_layout, dtype=dtype, device=resolved_device),
-        bivector_to_operator=_layout_map(input_layout, operator_layout, dtype=dtype, device=resolved_device),
-        grade4_to_output=_layout_map(grade4_layout, output_layout, dtype=dtype, device=resolved_device),
-        operator_to_output=_layout_map(operator_layout, output_layout, dtype=dtype, device=resolved_device),
-        operator_eye=torch.eye(operator_layout.dim, dtype=dtype, device=resolved_device),
+        bivector_to_nondegenerate_generator=bivector_to_nondegenerate_generator,
+        bivector_to_mixed_generator=bivector_to_mixed_generator,
+        output_scalar_mask=_scalar_mask(output_layout, dtype=dtype, device=buffer_device),
+        operator_scalar_mask=_scalar_mask(operator_layout, dtype=dtype, device=buffer_device),
+        bivector_to_output=bivector_to_output,
+        bivector_to_operator=bivector_to_operator,
+        grade4_to_output=_layout_map(grade4_layout, output_layout, dtype=dtype, device=buffer_device),
+        operator_to_output=operator_to_output,
+        operator_eye=torch.eye(operator_layout.dim, dtype=dtype, device=buffer_device),
         operator_scalar_position=operator_position_by_index[0],
         spectral_max_planes=preselection.max_planes,
         spectral_local_scalar_mask=local_buffers["scalar_mask"],
@@ -225,6 +304,14 @@ def build_bivector_exp_plan(
         spectral_local_sparse_right_positions=local_buffers["sparse_right_positions"],
         spectral_local_sparse_output_positions=local_buffers["sparse_output_positions"],
         spectral_local_sparse_coefficients=local_buffers["sparse_coefficients"],
+        spectral_nondegenerate_generator_input_positions=spectral_nondegenerate_entries["input_positions"],
+        spectral_nondegenerate_generator_row_positions=spectral_nondegenerate_entries["row_positions"],
+        spectral_nondegenerate_generator_col_positions=spectral_nondegenerate_entries["col_positions"],
+        spectral_nondegenerate_generator_coefficients=spectral_nondegenerate_entries["coefficients"],
+        spectral_mixed_generator_input_positions=spectral_mixed_entries["input_positions"],
+        spectral_mixed_generator_row_positions=spectral_mixed_entries["row_positions"],
+        spectral_mixed_generator_col_positions=spectral_mixed_entries["col_positions"],
+        spectral_mixed_generator_coefficients=spectral_mixed_entries["coefficients"],
         spectral_plane_bivector_map=local_buffers["plane_bivector_map"],
         spectral_plane_eye=local_buffers["plane_eye"],
         spectral_plane_left_positions=local_buffers["plane_left_positions"],
@@ -232,14 +319,18 @@ def build_bivector_exp_plan(
         spectral_plane_output_positions=local_buffers["plane_output_positions"],
         spectral_plane_coefficients=local_buffers["plane_coefficients"],
         spectral_plane_to_local=local_buffers["plane_to_local"],
-        spectral_nilpotent_to_local=local_buffers["nilpotent_to_local"],
+        spectral_nilpotent_input_positions=local_buffers["nilpotent_input_positions"],
+        spectral_nilpotent_local_positions=local_buffers["nilpotent_local_positions"],
         spectral_ideal_basis=local_buffers["ideal_basis"],
         spectral_lift_grades=local_buffers["lift_grades"],
+        spectral_lift_grade_values=local_buffers["lift_grade_values"],
         spectral_lift_local_positions=local_buffers["lift_local_positions"],
         spectral_lift_local_axes=local_buffers["lift_local_axes"],
         spectral_lift_local_mask=local_buffers["lift_local_mask"],
         spectral_lift_target_axes=local_buffers["lift_target_axes"],
-        spectral_lift_target_map=local_buffers["lift_target_map"],
+        spectral_lift_target_positions=local_buffers["lift_target_positions"],
+        spectral_lift_target_mask=local_buffers["lift_target_mask"],
+        spectral_lift_output_dim=output_layout.dim,
         spectral_tolerances=torch.tensor(
             [preselection.tol_abs, preselection.tol_rel, preselection.dominant_rel],
             dtype=dtype,
@@ -248,14 +339,66 @@ def build_bivector_exp_plan(
         spectral_tol_abs=preselection.tol_abs,
         spectral_tol_rel=preselection.tol_rel,
         spectral_dominant_rel=preselection.dominant_rel,
-        spectral_allow_degenerate=bool(spectral_allow_degenerate),
-        spectral_allow_truncated_degenerate=bool(spectral_allow_truncated_degenerate),
+        spectral_transition_n=spectral_transition_n,
+        spectral_allow_degenerate=spectral_allow_degenerate,
+        spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
         nondegenerate_dim=preselection.nondegenerate_dim,
         ideal_dim=preselection.ideal_dim,
         spectral_local_axis_count=int(local_buffers["axis_count"]),
         eps=float(finfo.eps),
         eps_sq=float(finfo.eps**2),
     )
+
+
+def _executor_family_from_preselection(spec: AlgebraSpec, preselection: SpectralExpPreselection, device) -> str:
+    if spec.n <= 3:
+        return "closed_simple"
+    if spec.n <= 5:
+        return "closed_biquadratic"
+    if preselection.eligible:
+        return "spectral_local"
+    if torch.device(device).type == "mps" and preselection.reason.endswith("cpu_matrix_exp"):
+        return "cpu_matrix_exp"
+    return "left_matrix_exp"
+
+
+def _empty_spectral_local_buffers(
+    spec: AlgebraSpec,
+    input_layout: GradeLayout,
+    output_layout: GradeLayout,
+    *,
+    dtype: torch.dtype,
+    device,
+) -> dict[str, torch.Tensor | tuple[int, ...] | int]:
+    empty_sparse = _empty_sparse_product_buffers(dtype=dtype, device=device)
+    return {
+        "axis_count": 0,
+        "scalar_mask": torch.ones(1, dtype=dtype, device=device),
+        "plane_masks": torch.zeros((0, 1), dtype=dtype, device=device),
+        "product_table": torch.zeros((1, 1, 1), dtype=dtype, device=device),
+        "sparse_left_positions": empty_sparse["left_positions"],
+        "sparse_right_positions": empty_sparse["right_positions"],
+        "sparse_output_positions": empty_sparse["output_positions"],
+        "sparse_coefficients": empty_sparse["coefficients"],
+        "plane_bivector_map": torch.zeros((1, 1), dtype=dtype, device=device),
+        "plane_eye": torch.eye(1, dtype=dtype, device=device),
+        "plane_left_positions": empty_sparse["left_positions"],
+        "plane_right_positions": empty_sparse["right_positions"],
+        "plane_output_positions": empty_sparse["output_positions"],
+        "plane_coefficients": empty_sparse["coefficients"],
+        "plane_to_local": torch.zeros((0, 1, 1), dtype=dtype, device=device),
+        "nilpotent_input_positions": torch.zeros(0, dtype=torch.long, device=device),
+        "nilpotent_local_positions": torch.zeros(0, dtype=torch.long, device=device),
+        "ideal_basis": torch.zeros((0, spec.n), dtype=dtype, device=device),
+        "lift_grades": torch.zeros(1, dtype=torch.long, device=device),
+        "lift_grade_values": (0,),
+        "lift_local_positions": torch.zeros((1, 1), dtype=torch.long, device=device),
+        "lift_local_axes": torch.zeros((1, 1, 0), dtype=torch.long, device=device),
+        "lift_local_mask": torch.zeros((1, 1), dtype=dtype, device=device),
+        "lift_target_axes": torch.zeros((1, 1, 0), dtype=torch.long, device=device),
+        "lift_target_positions": torch.zeros((1, 1), dtype=torch.long, device=device),
+        "lift_target_mask": torch.zeros((1, 1), dtype=dtype, device=device),
+    }
 
 
 def _spectral_local_buffers(
@@ -284,7 +427,6 @@ def _spectral_local_buffers(
         plane_index = (1 << (2 * plane)) | (1 << (2 * plane + 1))
         plane_masks[plane, local_positions[plane_index]] = 1.0
 
-    product_table = torch.zeros((local_dim, local_dim, local_dim), dtype=dtype, device=device)
     sparse_product = _empty_sparse_product_buffers(dtype=dtype, device=device)
     if use_ideal_block:
         product_table = torch.zeros((1, 1, 1), dtype=dtype, device=device)
@@ -300,6 +442,7 @@ def _spectral_local_buffers(
             device=device,
         )
     else:
+        product_table = torch.zeros((local_dim, local_dim, local_dim), dtype=dtype, device=device)
         for left_position, left_index in enumerate(local_indices):
             for right_position, right_index in enumerate(local_indices):
                 output_index, sign = basis_product(left_index, right_index, axis_count, 0, 0)
@@ -335,7 +478,8 @@ def _spectral_local_buffers(
     lift_local_axes = torch.zeros((grade_count, max_local, max_grade), dtype=torch.long, device=device)
     lift_local_mask = torch.zeros((grade_count, max_local), dtype=dtype, device=device)
     lift_target_axes = torch.zeros((grade_count, max_target, max_grade), dtype=torch.long, device=device)
-    lift_target_map = torch.zeros((grade_count, max_target, output_layout.dim), dtype=dtype, device=device)
+    lift_target_positions = torch.zeros((grade_count, max_target), dtype=torch.long, device=device)
+    lift_target_mask = torch.zeros((grade_count, max_target), dtype=dtype, device=device)
 
     for grade_index, grade in enumerate(grades):
         lift_sign = 1.0 if use_ideal_block else (-1.0 if spec.p == 0 and spec.q > 0 else 1.0) ** (grade // 2)
@@ -349,7 +493,8 @@ def _spectral_local_buffers(
                     device=device,
                 )
         for target_slot, (target_position, target_axes) in enumerate(target_blades_by_grade[grade]):
-            lift_target_map[grade_index, target_slot, target_position] = lift_sign
+            lift_target_positions[grade_index, target_slot] = target_position
+            lift_target_mask[grade_index, target_slot] = lift_sign
             if grade:
                 lift_target_axes[grade_index, target_slot, :grade] = torch.tensor(
                     target_axes,
@@ -367,13 +512,12 @@ def _spectral_local_buffers(
         dtype=dtype,
         device=device,
     )
-    nilpotent_to_local = _nilpotent_to_local_map(
+    nilpotent_input_positions, nilpotent_local_positions = _nilpotent_to_local_positions(
         input_layout,
         local_positions,
         local_nondegenerate_dim,
         int(ideal_dim),
         spec,
-        dtype=dtype,
         device=device,
     )
     ideal_basis = torch.zeros((int(ideal_dim), spec.n), dtype=dtype, device=device)
@@ -396,14 +540,17 @@ def _spectral_local_buffers(
         "plane_output_positions": plane_buffers["output_positions"],
         "plane_coefficients": plane_buffers["coefficients"],
         "plane_to_local": plane_buffers["to_local"],
-        "nilpotent_to_local": nilpotent_to_local,
+        "nilpotent_input_positions": nilpotent_input_positions,
+        "nilpotent_local_positions": nilpotent_local_positions,
         "ideal_basis": ideal_basis,
         "lift_grades": lift_grades,
+        "lift_grade_values": tuple(grades),
         "lift_local_positions": lift_local_positions,
         "lift_local_axes": lift_local_axes,
         "lift_local_mask": lift_local_mask,
         "lift_target_axes": lift_target_axes,
-        "lift_target_map": lift_target_map,
+        "lift_target_positions": lift_target_positions,
+        "lift_target_mask": lift_target_mask,
     }
 
 
@@ -412,6 +559,15 @@ def _empty_sparse_product_buffers(*, dtype: torch.dtype, device) -> dict[str, to
         "left_positions": torch.zeros(0, dtype=torch.long, device=device),
         "right_positions": torch.zeros(0, dtype=torch.long, device=device),
         "output_positions": torch.zeros(0, dtype=torch.long, device=device),
+        "coefficients": torch.zeros(0, dtype=dtype, device=device),
+    }
+
+
+def _empty_generator_entries(*, dtype: torch.dtype, device) -> dict[str, torch.Tensor]:
+    return {
+        "input_positions": torch.zeros(0, dtype=torch.long, device=device),
+        "row_positions": torch.zeros(0, dtype=torch.long, device=device),
+        "col_positions": torch.zeros(0, dtype=torch.long, device=device),
         "coefficients": torch.zeros(0, dtype=dtype, device=device),
     }
 
@@ -426,26 +582,53 @@ def _sparse_product_buffers(
     dtype: torch.dtype,
     device,
 ) -> dict[str, torch.Tensor]:
-    positions = {index: position for position, index in enumerate(basis_indices)}
-    left_positions: list[int] = []
-    right_positions: list[int] = []
-    output_positions: list[int] = []
-    coefficients: list[float] = []
-    for left_position, left_index in enumerate(basis_indices):
-        for right_position, right_index in enumerate(basis_indices):
-            output_index, sign = basis_product(left_index, right_index, p, q, r)
-            output_position = positions.get(output_index)
-            if output_position is None or sign == 0.0:
-                continue
-            left_positions.append(left_position)
-            right_positions.append(right_position)
-            output_positions.append(output_position)
-            coefficients.append(float(sign))
+    basis = torch.tensor(basis_indices, dtype=torch.long)
+    dim = basis.numel()
+    lookup = torch.full((1 << int(axis_count),), -1, dtype=torch.long)
+    lookup[basis] = torch.arange(dim, dtype=torch.long)
+    parity_lookup = torch.tensor([index.bit_count() & 1 for index in range(1 << int(axis_count))], dtype=torch.bool)
+    right_indices = basis.view(1, dim)
+    right_positions_template = torch.arange(dim, dtype=torch.long).view(1, dim)
+    negative_mask = sum(1 << bit for bit in range(int(p), int(p) + int(q)))
+    null_mask = sum(1 << bit for bit in range(int(p) + int(q), int(axis_count)))
+
+    left_position_chunks: list[torch.Tensor] = []
+    right_position_chunks: list[torch.Tensor] = []
+    output_position_chunks: list[torch.Tensor] = []
+    coefficient_chunks: list[torch.Tensor] = []
+    rows_per_chunk = max(1, min(dim, 262_144 // max(dim, 1)))
+    for start in range(0, dim, rows_per_chunk):
+        stop = min(start + rows_per_chunk, dim)
+        left_indices = basis[start:stop].view(-1, 1)
+        outputs = torch.bitwise_xor(left_indices, right_indices)
+        valid = lookup[outputs] >= 0
+        if null_mask:
+            valid = valid & (torch.bitwise_and(torch.bitwise_and(left_indices, right_indices), null_mask) == 0)
+        swap_parity = torch.zeros_like(outputs, dtype=torch.bool)
+        for bit in range(int(axis_count)):
+            left_has_bit = torch.bitwise_and(left_indices, 1 << bit) != 0
+            lower_right_parity = parity_lookup[torch.bitwise_and(right_indices, (1 << bit) - 1)]
+            swap_parity = swap_parity ^ (left_has_bit & lower_right_parity)
+        if negative_mask:
+            metric_parity = parity_lookup[torch.bitwise_and(torch.bitwise_and(left_indices, right_indices), negative_mask)]
+            swap_parity = swap_parity ^ metric_parity
+
+        left_positions = torch.arange(start, stop, dtype=torch.long).view(-1, 1).expand(-1, dim)
+        right_positions = right_positions_template.expand(stop - start, -1)
+        left_position_chunks.append(left_positions[valid])
+        right_position_chunks.append(right_positions[valid])
+        output_position_chunks.append(lookup[outputs][valid])
+        coefficient_chunks.append(torch.where(swap_parity[valid], -torch.ones((), dtype=dtype), torch.ones((), dtype=dtype)))
+
+    left_positions = torch.cat(left_position_chunks) if left_position_chunks else torch.zeros(0, dtype=torch.long)
+    right_positions = torch.cat(right_position_chunks) if right_position_chunks else torch.zeros(0, dtype=torch.long)
+    output_positions = torch.cat(output_position_chunks) if output_position_chunks else torch.zeros(0, dtype=torch.long)
+    coefficients = torch.cat(coefficient_chunks) if coefficient_chunks else torch.zeros(0, dtype=dtype)
     return {
-        "left_positions": torch.tensor(left_positions, dtype=torch.long, device=device),
-        "right_positions": torch.tensor(right_positions, dtype=torch.long, device=device),
-        "output_positions": torch.tensor(output_positions, dtype=torch.long, device=device),
-        "coefficients": torch.tensor(coefficients, dtype=dtype, device=device),
+        "left_positions": left_positions.to(device=device),
+        "right_positions": right_positions.to(device=device),
+        "output_positions": output_positions.to(device=device),
+        "coefficients": coefficients.to(device=device),
     }
 
 
@@ -516,20 +699,21 @@ def _plane_exp_buffers(
     }
 
 
-def _nilpotent_to_local_map(
+def _nilpotent_to_local_positions(
     input_layout: GradeLayout,
     local_positions: dict[int, int],
     local_nondegenerate_dim: int,
     ideal_dim: int,
     spec: AlgebraSpec,
     *,
-    dtype: torch.dtype,
     device,
-) -> torch.Tensor:
-    output = torch.zeros((input_layout.dim, len(local_positions)), dtype=dtype, device=device)
+) -> tuple[torch.Tensor, torch.Tensor]:
     if ideal_dim < 2:
-        return output
+        empty = torch.zeros(0, dtype=torch.long, device=device)
+        return empty, empty
     nondegenerate_dim = spec.p + spec.q
+    input_positions: list[int] = []
+    output_positions: list[int] = []
     for input_position, input_index in enumerate(input_layout.basis_indices):
         bits = _basis_bits(input_index, spec.n)
         if len(bits) != 2 or bits[0] < nondegenerate_dim or bits[1] < nondegenerate_dim:
@@ -539,8 +723,12 @@ def _nilpotent_to_local_map(
             local_index |= 1 << (local_nondegenerate_dim + bit - nondegenerate_dim)
         local_position = local_positions.get(local_index)
         if local_position is not None:
-            output[input_position, local_position] = 1.0
-    return output
+            input_positions.append(input_position)
+            output_positions.append(local_position)
+    return (
+        torch.tensor(input_positions, dtype=torch.long, device=device),
+        torch.tensor(output_positions, dtype=torch.long, device=device),
+    )
 
 
 def _metric_signs(spec: AlgebraSpec, *, dtype: torch.dtype, device) -> torch.Tensor:
@@ -640,27 +828,6 @@ def _bivector_to_mixed_generator(
     return output
 
 
-def _nondegenerate_generator_to_bivector(
-    input_layout: GradeLayout,
-    spec: AlgebraSpec,
-    *,
-    dtype: torch.dtype,
-    device,
-) -> torch.Tensor:
-    nondegenerate_dim = spec.p + spec.q
-    output = torch.zeros((nondegenerate_dim, nondegenerate_dim, input_layout.dim), dtype=dtype, device=device)
-    input_positions = {index: position for position, index in enumerate(input_layout.basis_indices)}
-
-    for i in range(nondegenerate_dim):
-        for j in range(i + 1, nondegenerate_dim):
-            bivector_position = input_positions.get((1 << i) | (1 << j))
-            if bivector_position is None:
-                continue
-            metric_sign = 1.0 if i < spec.p else -1.0
-            output[j, i, bivector_position] = metric_sign
-    return output
-
-
 def _vector_generator_coefficient(bivector_index: int, vector_index: int, spec: AlgebraSpec) -> float:
     return -0.5 * operation_coefficient(bivector_index, vector_index, spec.p, spec.q, spec.r, "commutator")
 
@@ -686,8 +853,202 @@ def _layout_map(source: GradeLayout | None, target: GradeLayout, *, dtype: torch
     for source_position, index in enumerate(source.basis_indices):
         target_position = target_positions.get(index)
         if target_position is not None:
-            matrix[source_position, target_position] = 1.0
+                matrix[source_position, target_position] = 1.0
     return matrix
+
+
+def _bivector_to_nondegenerate_generator_entries(
+    input_layout: GradeLayout,
+    spec: AlgebraSpec,
+    *,
+    dtype: torch.dtype,
+    device,
+) -> dict[str, torch.Tensor]:
+    nondegenerate_dim = spec.p + spec.q
+    vector_indices = [1 << axis for axis in range(nondegenerate_dim)]
+    vector_positions = {index: position for position, index in enumerate(vector_indices)}
+    input_positions: list[int] = []
+    row_positions: list[int] = []
+    col_positions: list[int] = []
+    coefficients: list[float] = []
+
+    for bivector_position, bivector_index in enumerate(input_layout.basis_indices):
+        bits = _basis_bits(bivector_index, spec.n)
+        if len(bits) != 2 or bits[0] >= nondegenerate_dim or bits[1] >= nondegenerate_dim:
+            continue
+        for input_position, input_index in enumerate(vector_indices):
+            output_index = bivector_index ^ input_index
+            output_position = vector_positions.get(output_index)
+            if output_position is None:
+                continue
+            input_positions.append(bivector_position)
+            row_positions.append(output_position)
+            col_positions.append(input_position)
+            coefficients.append(_vector_generator_coefficient(bivector_index, input_index, spec))
+
+    return {
+        "input_positions": torch.tensor(input_positions, dtype=torch.long, device=device),
+        "row_positions": torch.tensor(row_positions, dtype=torch.long, device=device),
+        "col_positions": torch.tensor(col_positions, dtype=torch.long, device=device),
+        "coefficients": torch.tensor(coefficients, dtype=dtype, device=device),
+    }
+
+
+def _bivector_to_mixed_generator_entries(
+    input_layout: GradeLayout,
+    spec: AlgebraSpec,
+    *,
+    dtype: torch.dtype,
+    device,
+) -> dict[str, torch.Tensor]:
+    nondegenerate_dim = spec.p + spec.q
+    if spec.r == 0 or nondegenerate_dim == 0:
+        return _empty_generator_entries(dtype=dtype, device=device)
+
+    nondegenerate_indices = [1 << axis for axis in range(nondegenerate_dim)]
+    ideal_positions = {1 << (nondegenerate_dim + axis): axis for axis in range(spec.r)}
+    input_positions: list[int] = []
+    row_positions: list[int] = []
+    col_positions: list[int] = []
+    coefficients: list[float] = []
+
+    for bivector_position, bivector_index in enumerate(input_layout.basis_indices):
+        bits = _basis_bits(bivector_index, spec.n)
+        if len(bits) != 2 or not (bits[0] < nondegenerate_dim <= bits[1]):
+            continue
+        for input_position, input_index in enumerate(nondegenerate_indices):
+            output_index = bivector_index ^ input_index
+            output_position = ideal_positions.get(output_index)
+            if output_position is None:
+                continue
+            input_positions.append(bivector_position)
+            row_positions.append(output_position)
+            col_positions.append(input_position)
+            coefficients.append(_vector_generator_coefficient(bivector_index, input_index, spec))
+
+    return {
+        "input_positions": torch.tensor(input_positions, dtype=torch.long, device=device),
+        "row_positions": torch.tensor(row_positions, dtype=torch.long, device=device),
+        "col_positions": torch.tensor(col_positions, dtype=torch.long, device=device),
+        "coefficients": torch.tensor(coefficients, dtype=dtype, device=device),
+    }
+
+
+def spectral_exp_angle_diagnostics(
+    angle_spectrum: torch.Tensor,
+    *,
+    max_planes: int = SPECTRAL_LOCAL_MAX_PLANES,
+    sort: bool = True,
+) -> SpectralExpAngleDiagnostics:
+    """Return tail-bound and GVC diagnostics for an actual angle spectrum.
+
+    The strict tail guard follows ``||exp(B_tail) - I||_inf <= sum(abs(theta_tail))``.
+    ``geometric_variance_captured`` is the retained squared angle energy divided by
+    the total squared angle energy. By default, angles are sorted by absolute value
+    before selecting the dominant planes.
+
+    .. note::
+        This function internally detaches the input tensor to ensure diagnostics are
+         not tracked in autograd.
+    """
+    if angle_spectrum.ndim == 0:
+        raise ValueError("angle_spectrum must have at least one dimension")
+    if int(max_planes) <= 0:
+        raise ValueError(f"max_planes must be positive, got {max_planes}")
+
+    angles = angle_spectrum.detach().abs()
+    if sort:
+        angles = torch.sort(angles, dim=-1, descending=True).values
+
+    total_planes = int(angles.shape[-1])
+    selected_planes = min(int(max_planes), total_planes, SPECTRAL_LOCAL_MAX_PLANES)
+    kept = angles[..., :selected_planes]
+    tail = angles[..., selected_planes:]
+    kept_energy = (kept * kept).sum(dim=-1)
+    total_energy = (angles * angles).sum(dim=-1)
+    gvc = torch.where(total_energy > 0.0, kept_energy / total_energy, torch.ones_like(total_energy))
+    return SpectralExpAngleDiagnostics(
+        selected_planes=selected_planes,
+        total_planes=total_planes,
+        sorted_abs_angles=angles,
+        tail_angle_sum_bound=tail.sum(dim=-1),
+        geometric_variance_captured=gvc,
+        truncates=selected_planes < total_planes,
+    )
+
+
+def spectral_exp_uniform_tail_stress(
+    signatures: Iterable[AlgebraSpec | tuple[int, int] | tuple[int, int, int]],
+    *,
+    max_planes: int = SPECTRAL_LOCAL_MAX_PLANES,
+    bivector_norm: float = 1.0,
+) -> tuple[SpectralExpUniformTailStress, ...]:
+    """Estimate worst-case spectral-local clipping for static signatures.
+
+    This static stress model assumes angle energy is uniformly distributed across
+    ``M = n // 2`` orthogonal planes, so each angle has magnitude
+    ``abs(bivector_norm) / sqrt(M)``. It is intentionally conservative for
+    degenerate signatures; use :func:`spectral_exp_angle_diagnostics` on the
+    actual solver spectrum for runtime supervision.
+    """
+    if int(max_planes) <= 0:
+        raise ValueError(f"max_planes must be positive, got {max_planes}")
+    if float(bivector_norm) < 0.0:
+        raise ValueError(f"bivector_norm must be non-negative, got {bivector_norm}")
+
+    rows: list[SpectralExpUniformTailStress] = []
+    for signature in signatures:
+        spec = _coerce_algebra_spec(signature)
+        total_planes = spec.n // 2
+        selected_planes = min(int(max_planes), total_planes, SPECTRAL_LOCAL_MAX_PLANES)
+        clipped_planes = max(total_planes - selected_planes, 0)
+        if total_planes == 0:
+            uniform_angle = 0.0
+            tail_bound = 0.0
+            gvc = 1.0
+        else:
+            uniform_angle = abs(float(bivector_norm)) / float(total_planes) ** 0.5
+            tail_bound = float(clipped_planes) * uniform_angle
+            gvc = 1.0 if float(bivector_norm) == 0.0 else float(selected_planes) / float(total_planes)
+        rows.append(
+            SpectralExpUniformTailStress(
+                spec=spec,
+                max_planes=int(max_planes),
+                total_planes=total_planes,
+                selected_planes=selected_planes,
+                clipped_planes=clipped_planes,
+                bivector_norm=float(bivector_norm),
+                uniform_angle=uniform_angle,
+                tail_angle_sum_bound=tail_bound,
+                geometric_variance_captured=gvc,
+                truncates=clipped_planes > 0,
+            )
+        )
+    return tuple(rows)
+
+
+def format_spectral_exp_uniform_tail_stress(rows: Iterable[SpectralExpUniformTailStress]) -> str:
+    """Format static spectral-local truncation stress rows as a compact table."""
+    header = "signature | planes | kept | clipped | theta_uniform | tail_bound | GVC"
+    lines = [header, "-" * len(header)]
+    for row in rows:
+        signature = f"Cl({row.spec.p},{row.spec.q},{row.spec.r})"
+        lines.append(
+            f"{signature} | {row.total_planes} | {row.selected_planes} | {row.clipped_planes} | "
+            f"{row.uniform_angle:.6g} | {row.tail_angle_sum_bound:.6g} | "
+            f"{row.geometric_variance_captured:.6g}"
+        )
+    return "\n".join(lines)
+
+
+def _coerce_algebra_spec(signature: AlgebraSpec | tuple[int, int] | tuple[int, int, int]) -> AlgebraSpec:
+    if isinstance(signature, AlgebraSpec):
+        return signature
+    if len(signature) == 2:
+        return AlgebraSpec(int(signature[0]), int(signature[1]), 0)
+    if len(signature) == 3:
+        return AlgebraSpec(int(signature[0]), int(signature[1]), int(signature[2]))
+    raise ValueError(f"signature must be AlgebraSpec, (p, q), or (p, q, r), got {signature!r}")
 
 
 def spectral_exp_preselection(
@@ -699,6 +1060,7 @@ def spectral_exp_preselection(
     tol_abs: float | None = None,
     tol_rel: float = 0.0,
     dominant_rel: float | None = None,
+    transition_n: int = 10,
     allow_degenerate: bool = True,
     allow_truncated_degenerate: bool = True,
 ) -> SpectralExpPreselection:
@@ -707,6 +1069,9 @@ def spectral_exp_preselection(
     full_rank_planes = nondegenerate_dim // 2
     if max_planes is not None and int(max_planes) <= 0:
         raise ValueError(f"max_planes must be positive, got {max_planes}")
+    resolved_transition_n = int(transition_n)
+    if resolved_transition_n <= 0:
+        raise ValueError(f"transition_n must be positive, got {transition_n}")
     resolved_max_planes = (
         min(full_rank_planes, SPECTRAL_LOCAL_MAX_PLANES)
         if max_planes is None
@@ -721,6 +1086,7 @@ def spectral_exp_preselection(
     if resolved_dominant_rel < 0.0:
         raise ValueError(f"dominant_rel must be non-negative, got {dominant_rel}")
 
+    device_type = torch.device(device).type
     solver_family = "symmetric" if spec.p == 0 or spec.q == 0 else "general_complex"
     if spec.n <= 5:
         return SpectralExpPreselection(
@@ -735,9 +1101,10 @@ def spectral_exp_preselection(
             solver_family,
         )
     if spec.p > 0 and spec.q > 0:
+        reason = "pseudo_euclidean_mps_cpu_matrix_exp" if device_type == "mps" else "pseudo_euclidean_matrix_exp"
         return SpectralExpPreselection(
             False,
-            "pseudo_euclidean_deferred",
+            reason,
             resolved_max_planes,
             resolved_tol_abs,
             float(tol_rel),
@@ -806,10 +1173,10 @@ def spectral_exp_preselection(
             spec.r,
             solver_family,
         )
-    if torch.device(device).type == "mps":
+    if device_type != "mps" and spec.n < resolved_transition_n:
         return SpectralExpPreselection(
             False,
-            "mps_solver_deferred",
+            "matrix_exp_below_spectral_transition",
             resolved_max_planes,
             resolved_tol_abs,
             float(tol_rel),
@@ -852,14 +1219,11 @@ def select_bivector_exp_executor_family(
     spectral_tol_abs: float | None = None,
     spectral_tol_rel: float = 0.0,
     spectral_dominant_rel: float | None = None,
+    spectral_transition_n: int = 10,
     spectral_allow_degenerate: bool = True,
     spectral_allow_truncated_degenerate: bool = True,
 ) -> str:
     """Return the planner-selected bivector-exp executor family."""
-    if spec.n <= 3:
-        return "closed_simple"
-    if spec.n <= 5:
-        return "closed_biquadratic"
     spectral = spectral_exp_preselection(
         spec,
         device,
@@ -868,9 +1232,8 @@ def select_bivector_exp_executor_family(
         tol_abs=spectral_tol_abs,
         tol_rel=spectral_tol_rel,
         dominant_rel=spectral_dominant_rel,
+        transition_n=spectral_transition_n,
         allow_degenerate=spectral_allow_degenerate,
         allow_truncated_degenerate=spectral_allow_truncated_degenerate,
     )
-    if spectral.eligible:
-        return "spectral_local"
-    return "left_matrix_exp"
+    return _executor_family_from_preselection(spec, spectral, device)
