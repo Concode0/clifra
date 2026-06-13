@@ -160,7 +160,7 @@ def _spectral_local_forward_impl(
     local_sparse_output_positions: Tensor,
     local_sparse_coefficients: Tensor,
     plane_bivector_map: Tensor,
-    plane_eye: Tensor,
+    plane_scalar_mask: Tensor,
     plane_left_positions: Tensor,
     plane_right_positions: Tensor,
     plane_output_positions: Tensor,
@@ -225,7 +225,7 @@ def _spectral_local_forward_impl(
             local_sparse_output_positions,
             local_sparse_coefficients,
             plane_bivector_map,
-            plane_eye,
+            plane_scalar_mask,
             plane_left_positions,
             plane_right_positions,
             plane_output_positions,
@@ -537,7 +537,7 @@ def _spectral_local_degenerate_from_spectrum_impl(
     local_sparse_output_positions: Tensor,
     local_sparse_coefficients: Tensor,
     plane_bivector_map: Tensor,
-    plane_eye: Tensor,
+    plane_scalar_mask: Tensor,
     plane_left_positions: Tensor,
     plane_right_positions: Tensor,
     plane_output_positions: Tensor,
@@ -567,7 +567,7 @@ def _spectral_local_degenerate_from_spectrum_impl(
         local_sparse_output_positions,
         local_sparse_coefficients,
         plane_bivector_map,
-        plane_eye,
+        plane_scalar_mask,
         plane_left_positions,
         plane_right_positions,
         plane_output_positions,
@@ -596,7 +596,7 @@ def _spectral_local_degenerate_from_spectrum_impl(
         local_sparse_output_positions,
         local_sparse_coefficients,
         plane_bivector_map,
-        plane_eye,
+        plane_scalar_mask,
         plane_left_positions,
         plane_right_positions,
         plane_output_positions,
@@ -628,7 +628,7 @@ def _spectral_local_degenerate_one_shot_impl(
     local_sparse_output_positions: Tensor,
     local_sparse_coefficients: Tensor,
     plane_bivector_map: Tensor,
-    plane_eye: Tensor,
+    plane_scalar_mask: Tensor,
     plane_left_positions: Tensor,
     plane_right_positions: Tensor,
     plane_output_positions: Tensor,
@@ -657,14 +657,13 @@ def _spectral_local_degenerate_one_shot_impl(
     )
     cx = torch.einsum("...rm,...pm->...pr", mixed, basis_x)
     cy = torch.einsum("...rm,...pm->...pr", mixed, basis_y)
-    plane_features = theta.new_empty(*theta.shape, plane_bivector_map.shape[0])
-    plane_features[..., 0] = torch.where(active > 0.0, theta, torch.zeros_like(theta))
-    plane_features[..., 1 : 1 + ideal_dim] = cx
-    plane_features[..., 1 + ideal_dim :] = cy
-    plane_bivector = plane_features @ plane_bivector_map
-    plane_factor = _spectral_local_matrix_exp_factor_impl(
-        plane_bivector,
-        plane_eye,
+    plane_factor = _spectral_local_degenerate_plane_factor_impl(
+        theta,
+        cx,
+        cy,
+        active,
+        plane_bivector_map,
+        plane_scalar_mask,
         plane_left_positions,
         plane_right_positions,
         plane_output_positions,
@@ -722,7 +721,7 @@ def _spectral_local_degenerate_projector_impl(
     local_sparse_output_positions: Tensor,
     local_sparse_coefficients: Tensor,
     plane_bivector_map: Tensor,
-    plane_eye: Tensor,
+    plane_scalar_mask: Tensor,
     plane_left_positions: Tensor,
     plane_right_positions: Tensor,
     plane_output_positions: Tensor,
@@ -807,19 +806,18 @@ def _spectral_local_degenerate_projector_impl(
         theta = torch.where(rotation_active, theta, torch.zeros_like(theta))
         cx = (mixed @ basis_x.unsqueeze(-1)).squeeze(-1)
         cy = (mixed @ basis_y.unsqueeze(-1)).squeeze(-1)
-        plane_features = theta.new_empty(*theta.shape[:-1], plane_bivector_map.shape[0])
-        plane_features[..., 0:1] = theta
-        plane_features[..., 1 : 1 + ideal_dim] = cx
-        plane_features[..., 1 + ideal_dim :] = cy
-        plane_bivector = plane_features @ plane_bivector_map
-        plane_factor = _spectral_local_matrix_exp_factor_impl(
-            plane_bivector,
-            plane_eye,
+        plane_factor = _spectral_local_degenerate_plane_factor_impl(
+            theta,
+            cx.unsqueeze(-2),
+            cy.unsqueeze(-2),
+            rotation_active.to(theta.dtype),
+            plane_bivector_map,
+            plane_scalar_mask,
             plane_left_positions,
             plane_right_positions,
             plane_output_positions,
             plane_coefficients,
-        )
+        ).squeeze(-2)
         local_factor = plane_factor @ plane_to_local[plane]
         local_rotor = _spectral_local_sparse_product_impl(
             local_rotor,
@@ -871,26 +869,110 @@ def _spectral_local_degenerate_projector_impl(
     )
 
 
-def _spectral_local_matrix_exp_factor_impl(
-    values: Tensor,
-    operator_eye: Tensor,
-    left_active_positions: Tensor,
-    right_active_positions: Tensor,
-    product_output_positions: Tensor,
-    product_coefficients: Tensor,
+def _spectral_local_degenerate_plane_factor_impl(
+    theta: Tensor,
+    mixed_x: Tensor,
+    mixed_y: Tensor,
+    active: Tensor,
+    plane_bivector_map: Tensor,
+    plane_scalar_mask: Tensor,
+    plane_left_positions: Tensor,
+    plane_right_positions: Tensor,
+    plane_output_positions: Tensor,
+    plane_coefficients: Tensor,
 ) -> Tensor:
-    columns = _sparse_product_compact_impl(
-        values.unsqueeze(-2),
-        operator_eye,
-        left_active_positions,
-        right_active_positions,
-        product_output_positions,
-        product_coefficients,
-        values.shape[-1],
+    active_theta = torch.where(active > 0.0, theta, torch.zeros_like(theta))
+    sinc = _spectral_local_sinc_impl(active_theta)
+    fast_features = torch.cat(
+        (
+            torch.sin(active_theta).unsqueeze(-1),
+            mixed_x * sinc.unsqueeze(-1),
+            mixed_y * sinc.unsqueeze(-1),
+        ),
+        dim=-1,
     )
-    operator = columns.transpose(-1, -2)
-    exp_operator = torch.matrix_exp(operator)
-    return exp_operator[..., :, 0]
+    fast_factor = torch.cos(active_theta).unsqueeze(-1) * plane_scalar_mask + fast_features @ plane_bivector_map
+    if plane_left_positions.numel() == 0:
+        return fast_factor
+
+    bivector_features = torch.cat((active_theta.unsqueeze(-1), mixed_x, mixed_y), dim=-1)
+    bivector = bivector_features @ plane_bivector_map
+    square = _sparse_product_compact_impl(
+        bivector,
+        bivector,
+        plane_left_positions,
+        plane_right_positions,
+        plane_output_positions,
+        plane_coefficients,
+        bivector.shape[-1],
+    )
+    scalar_square = -(active_theta * active_theta)
+    nilpotent_square = square - scalar_square.unsqueeze(-1) * plane_scalar_mask
+    nilpotent_fourth = _sparse_product_compact_impl(
+        nilpotent_square,
+        nilpotent_square,
+        plane_left_positions,
+        plane_right_positions,
+        plane_output_positions,
+        plane_coefficients,
+        bivector.shape[-1],
+    )
+    nilpotent_bivector = _sparse_product_compact_impl(
+        nilpotent_square,
+        bivector,
+        plane_left_positions,
+        plane_right_positions,
+        plane_output_positions,
+        plane_coefficients,
+        bivector.shape[-1],
+    )
+    nilpotent_fourth_bivector = _sparse_product_compact_impl(
+        nilpotent_fourth,
+        bivector,
+        plane_left_positions,
+        plane_right_positions,
+        plane_output_positions,
+        plane_coefficients,
+        bivector.shape[-1],
+    )
+    cos_theta = torch.cos(active_theta)
+    f2_coeff, g1_coeff, g2_coeff = _spectral_local_nilpotent_coefficients_impl(active_theta, sinc, cos_theta)
+    return (
+        cos_theta.unsqueeze(-1) * plane_scalar_mask
+        + 0.5 * sinc.unsqueeze(-1) * nilpotent_square
+        + f2_coeff.unsqueeze(-1) * nilpotent_fourth
+        + sinc.unsqueeze(-1) * bivector
+        + g1_coeff.unsqueeze(-1) * nilpotent_bivector
+        + g2_coeff.unsqueeze(-1) * nilpotent_fourth_bivector
+    )
+
+
+def _spectral_local_nilpotent_coefficients_impl(theta: Tensor, sinc: Tensor, cos_theta: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    theta_sq = theta * theta
+    theta_fourth = theta_sq * theta_sq
+    diff = sinc - cos_theta
+    active = theta_sq > torch.finfo(theta.dtype).eps
+    safe_theta_sq = torch.where(active, theta_sq, torch.ones_like(theta_sq))
+    f2_raw = diff / (8.0 * safe_theta_sq)
+    g1_raw = diff / (2.0 * safe_theta_sq)
+    g2_raw = (3.0 * diff - theta_sq * sinc) / (8.0 * safe_theta_sq * safe_theta_sq)
+    f2_series = 1.0 / 24.0 - theta_sq / 240.0 + theta_fourth / 6720.0
+    g1_series = 1.0 / 6.0 - theta_sq / 60.0 + theta_fourth / 1680.0
+    g2_series = 1.0 / 120.0 - theta_sq / 1680.0 + theta_fourth / 60480.0
+    return (
+        torch.where(active, f2_raw, f2_series),
+        torch.where(active, g1_raw, g1_series),
+        torch.where(active, g2_raw, g2_series),
+    )
+
+
+def _spectral_local_sinc_impl(theta: Tensor) -> Tensor:
+    theta_sq = theta * theta
+    theta_fourth = theta_sq * theta_sq
+    series = 1.0 - theta_sq / 6.0 + theta_fourth / 120.0 - theta_fourth * theta_sq / 5040.0
+    active = theta.abs() > torch.finfo(theta.dtype).eps
+    safe_theta = torch.where(active, theta, torch.ones_like(theta))
+    return torch.where(active, torch.sin(theta) / safe_theta, series)
 
 
 def _spectral_local_sparse_reduce_impl(
@@ -1246,7 +1328,7 @@ class BivectorExpExecutor(nn.Module):
             persistent=False,
         )
         self.register_buffer("spectral_plane_bivector_map", plan.spectral_plane_bivector_map, persistent=False)
-        self.register_buffer("spectral_plane_eye", plan.spectral_plane_eye, persistent=False)
+        self.register_buffer("spectral_plane_scalar_mask", plan.spectral_plane_scalar_mask, persistent=False)
         self.register_buffer("spectral_plane_left_positions", plan.spectral_plane_left_positions, persistent=False)
         self.register_buffer("spectral_plane_right_positions", plan.spectral_plane_right_positions, persistent=False)
         self.register_buffer("spectral_plane_output_positions", plan.spectral_plane_output_positions, persistent=False)
@@ -1328,7 +1410,7 @@ class BivectorExpExecutor(nn.Module):
             self.spectral_local_sparse_output_positions,
             self.spectral_local_sparse_coefficients,
             self.spectral_plane_bivector_map,
-            self.spectral_plane_eye,
+            self.spectral_plane_scalar_mask,
             self.spectral_plane_left_positions,
             self.spectral_plane_right_positions,
             self.spectral_plane_output_positions,

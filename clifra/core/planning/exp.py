@@ -91,7 +91,7 @@ class BivectorExpPlan:
     spectral_mixed_generator_col_positions: torch.Tensor
     spectral_mixed_generator_coefficients: torch.Tensor
     spectral_plane_bivector_map: torch.Tensor
-    spectral_plane_eye: torch.Tensor
+    spectral_plane_scalar_mask: torch.Tensor
     spectral_plane_left_positions: torch.Tensor
     spectral_plane_right_positions: torch.Tensor
     spectral_plane_output_positions: torch.Tensor
@@ -313,7 +313,7 @@ def build_bivector_exp_plan(
         spectral_mixed_generator_col_positions=spectral_mixed_entries["col_positions"],
         spectral_mixed_generator_coefficients=spectral_mixed_entries["coefficients"],
         spectral_plane_bivector_map=local_buffers["plane_bivector_map"],
-        spectral_plane_eye=local_buffers["plane_eye"],
+        spectral_plane_scalar_mask=local_buffers["plane_scalar_mask"],
         spectral_plane_left_positions=local_buffers["plane_left_positions"],
         spectral_plane_right_positions=local_buffers["plane_right_positions"],
         spectral_plane_output_positions=local_buffers["plane_output_positions"],
@@ -381,7 +381,7 @@ def _empty_spectral_local_buffers(
         "sparse_output_positions": empty_sparse["output_positions"],
         "sparse_coefficients": empty_sparse["coefficients"],
         "plane_bivector_map": torch.zeros((1, 1), dtype=dtype, device=device),
-        "plane_eye": torch.eye(1, dtype=dtype, device=device),
+        "plane_scalar_mask": torch.ones(1, dtype=dtype, device=device),
         "plane_left_positions": empty_sparse["left_positions"],
         "plane_right_positions": empty_sparse["right_positions"],
         "plane_output_positions": empty_sparse["output_positions"],
@@ -534,7 +534,7 @@ def _spectral_local_buffers(
         "sparse_output_positions": sparse_product["output_positions"],
         "sparse_coefficients": sparse_product["coefficients"],
         "plane_bivector_map": plane_buffers["bivector_map"],
-        "plane_eye": plane_buffers["eye"],
+        "plane_scalar_mask": plane_buffers["scalar_mask"],
         "plane_left_positions": plane_buffers["left_positions"],
         "plane_right_positions": plane_buffers["right_positions"],
         "plane_output_positions": plane_buffers["output_positions"],
@@ -644,13 +644,14 @@ def _plane_exp_buffers(
     device,
 ) -> dict[str, torch.Tensor]:
     if ideal_dim == 0:
+        empty_sparse = _empty_sparse_product_buffers(dtype=dtype, device=device)
         return {
             "bivector_map": torch.zeros((1, 1), dtype=dtype, device=device),
-            "eye": torch.eye(1, dtype=dtype, device=device),
-            "left_positions": torch.zeros(0, dtype=torch.long, device=device),
-            "right_positions": torch.zeros(0, dtype=torch.long, device=device),
-            "output_positions": torch.zeros(0, dtype=torch.long, device=device),
-            "coefficients": torch.zeros(0, dtype=dtype, device=device),
+            "scalar_mask": torch.ones(1, dtype=dtype, device=device),
+            "left_positions": empty_sparse["left_positions"],
+            "right_positions": empty_sparse["right_positions"],
+            "output_positions": empty_sparse["output_positions"],
+            "coefficients": empty_sparse["coefficients"],
             "to_local": torch.zeros((int(max_planes), 1, len(local_indices)), dtype=dtype, device=device),
         }
 
@@ -667,17 +668,21 @@ def _plane_exp_buffers(
         bivector_map[1 + ideal_axis, plane_positions[(1 << 0) | ideal_bit]] = feature_sign
         bivector_map[1 + ideal_dim + ideal_axis, plane_positions[(1 << 1) | ideal_bit]] = feature_sign
 
-    plane_p = 2 if spec.q == 0 else 0
-    plane_q = 2 if spec.p == 0 else 0
-    sparse_product = _sparse_product_buffers(
-        plane_indices,
-        plane_axis_count,
-        plane_p,
-        plane_q,
-        ideal_dim,
-        dtype=dtype,
-        device=device,
-    )
+    scalar_mask = torch.zeros(plane_dim, dtype=dtype, device=device)
+    scalar_mask[plane_positions[0]] = 1.0
+    sparse_product = _empty_sparse_product_buffers(dtype=dtype, device=device)
+    if ideal_dim > 1:
+        plane_p = 2 if spec.q == 0 else 0
+        plane_q = 2 if spec.p == 0 else 0
+        sparse_product = _sparse_product_buffers(
+            plane_indices,
+            plane_axis_count,
+            plane_p,
+            plane_q,
+            ideal_dim,
+            dtype=dtype,
+            device=device,
+        )
     to_local = torch.zeros((int(max_planes), plane_dim, len(local_indices)), dtype=dtype, device=device)
     for plane in range(int(max_planes)):
         axis_map = {0: 2 * plane, 1: 2 * plane + 1}
@@ -690,7 +695,7 @@ def _plane_exp_buffers(
 
     return {
         "bivector_map": bivector_map,
-        "eye": torch.eye(plane_dim, dtype=dtype, device=device),
+        "scalar_mask": scalar_mask,
         "left_positions": sparse_product["left_positions"],
         "right_positions": sparse_product["right_positions"],
         "output_positions": sparse_product["output_positions"],
