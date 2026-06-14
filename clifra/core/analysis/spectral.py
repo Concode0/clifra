@@ -14,6 +14,7 @@ import torch
 
 from clifra.core.foundation.module import AlgebraLike
 from clifra.core.runtime.metric import hermitian_grade_spectrum
+from clifra.utils.mps import safe_linalg_eigvals
 
 from ._types import CONSTANTS, SpectralResult
 from ._utils import (
@@ -187,7 +188,7 @@ class SpectralAnalyzer:
             **declared_full_product_kwargs(self.algebra),
         ).T
 
-        eigvals = torch.linalg.eigvals(L)  # complex
+        eigvals = safe_linalg_eigvals(L)  # complex
         magnitudes = eigvals.abs()
         return magnitudes.sort(descending=True).values
 

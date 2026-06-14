@@ -15,6 +15,7 @@ import torch
 
 from clifra.core.foundation.module import AlgebraLike
 from clifra.core.foundation.numerics import eps_like
+from clifra.utils.mps import safe_linalg_eigvals
 
 from ._types import CONSTANTS, CommutatorResult
 from ._utils import declared_full_product_kwargs, feasibility_record, full_matrix_feasibility, full_product_feasibility
@@ -177,7 +178,7 @@ class CommutatorAnalyzer:
             **declared_full_product_kwargs(self.algebra),
         ).T
 
-        eigvals = torch.linalg.eigvals(ad_mu)  # complex
+        eigvals = safe_linalg_eigvals(ad_mu)  # complex
         magnitudes = eigvals.abs()
         return magnitudes.sort(descending=True).values, skipped
 
