@@ -38,17 +38,13 @@ Homepage = "https://github.com/Concode0/clifra"
 Repository = "https://github.com/Concode0/clifra"
 
 [project.optional-dependencies]
-viz = [
-    "matplotlib>=3.8.0",
-    "seaborn>=0.13.0",
-]
 dev = [
     "pytest>=7.0.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.8.0",
 ]
 all = [
-    "clifra[viz,dev]",
+    "clifra[dev]",
 ]
 
 [build-system]

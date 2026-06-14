@@ -41,9 +41,3 @@ Optional development and documentation dependencies
 
 * pymdown-extensions (https://facelessuser.github.io/pymdown-extensions/)
   Licensed under the MIT License.
-
-* Matplotlib (https://matplotlib.org/)
-  Licensed under a Python Software Foundation compatible license.
-
-* Seaborn (https://seaborn.pydata.org/)
-  Licensed under the BSD-3-Clause License.
