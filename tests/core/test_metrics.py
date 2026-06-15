@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 # Tests for Hermitian metrics in core/metric.py
 
 import pytest

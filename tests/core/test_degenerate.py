@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Layout-first tests for degenerate signatures Cl(p, q, r)."""
 
 import pytest

@@ -1,3 +1,6 @@
+# clifra (C) 2026 Eunkyum Kim
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for GeodesicFlow and DimensionLifter in core/analysis/.
 
 Covers:
