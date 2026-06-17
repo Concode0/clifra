@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training criteria for Clifra models."""
+"""Training criteria for clifra models."""
 
 from .loss import (
     AsymmetryLoss,

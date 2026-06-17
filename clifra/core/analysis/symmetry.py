@@ -107,7 +107,7 @@ class SymmetryDetector:
         g1_coeffs = mv_data[:, g1_idx]  # [N, n]
         scores = (g1_coeffs**2).mean(dim=0)  # [n]
 
-        # Normalise so max is 1
+        # Normalize so max is 1
         smax = scores.max()
         if smax > self.algebra.eps_sq:
             scores = scores / smax
@@ -263,7 +263,7 @@ class SymmetryDetector:
         Args:
             mv_data: ``[N, dim]`` multivector data.
             commutator_result: Pre-computed commutator analysis.
-            threshold: Normalised commutator norm below which a bivector
+            threshold: Normalized commutator norm below which a bivector
                 is considered a symmetry generator.
 
         Returns:

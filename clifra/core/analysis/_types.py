@@ -37,7 +37,7 @@ class AnalysisConstants:
         bv_sq_hyperbolic_bound: Bivector square value above which the
             bivector is classified as *hyperbolic* (positive definite)
             in signature analysis.
-        continuous_symmetry_threshold: Normalised commutator norm below
+        continuous_symmetry_threshold: Normalized commutator norm below
             which a bivector is treated as a continuous-symmetry
             generator.
         reflection_score_threshold: Maximum reflection score for a

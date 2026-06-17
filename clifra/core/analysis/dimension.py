@@ -35,7 +35,7 @@ class EffectiveDimensionAnalyzer:
             Defaults to ``torch.float32``.  Pass ``torch.float64`` for
             higher-precision analyses.
         k_local: Number of neighbours for local-dimension estimation.
-        energy_threshold: Minimum normalised eigenvalue to count as
+        energy_threshold: Minimum normalized eigenvalue to count as
             active.
     """
 

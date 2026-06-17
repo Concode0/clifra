@@ -23,7 +23,7 @@ from .types import ContinuumState
 
 @dataclass(frozen=True)
 class CoordinateChart:
-    """Embed and extract coordinate tensors through a grade-1 Clifra layout."""
+    """Embed and extract coordinate tensors through a grade-1 clifra layout."""
 
     algebra: AlgebraLike
     coordinate_dim: int

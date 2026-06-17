@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compile-friendly tensor executors produced by Clifra planners."""
+"""Compile-friendly tensor executors produced by clifra planners."""
 
 from .action import (
     FullSandwichActionExecutor,
