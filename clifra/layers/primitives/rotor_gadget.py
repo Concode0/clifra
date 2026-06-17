@@ -135,7 +135,7 @@ class RotorGadget(CliffordModule):
         tag_manifold(self.bivector_right, MANIFOLD_SPIN)
         self.reset_parameters()
 
-        # Channel routing: block diagonal partitioning (paper style)
+        # Channel routing: block diagonal partitioning
         # Each rotor pair processes a subset of input channels
         self._setup_channel_routing()
 
