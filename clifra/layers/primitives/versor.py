@@ -1,11 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-
-"""Multi-versor superposition layers with universal grade parameterization.
-
-Implements versor-based transformations using weighted sums of sandwich products.
-"""
+"""Versor layers that act through learned grade-k parameters."""
 
 import torch
 import torch.nn as nn
@@ -21,30 +17,30 @@ from ._utils import (
 )
 
 
-class MultiRotorLayer(CliffordModule):
-    """Multi-versor layer with weighted superposition: x' = sum_k w_k hat(V_k) x V_k^{-1}.
+class VersorLayer(CliffordModule):
+    """Learnable versor layer with universal grade parameterization.
 
-    For grade=2 (default): each V_k = exp(-B_k/2) is a rotor, reducing to
-    x' = sum_k w_k R_k x R~_k.
-    For grade=k: each V_k is a grade-k versor applied via the general versor product.
+    For grade=2 (default): learns R = exp(-B/2) and applies the isometry x' = RxR~.
+    For grade=k: learns a grade-k element V and applies the versor product
+    x' = hat(V) x V^{-1}, where hat denotes grade involution.
+
+    Preserves origin. For grade=2, also preserves lengths and angles (isometry).
 
     Bivector exponentials are planned by the core exp executor family:
-    closed formulas, matrix exp, or spectral-local execution for eligible
-    high-dimensional signatures.
+    closed formulas for low dimensions, matrix exp by default in higher
+    dimensions, and spectral-local execution for eligible high-dimensional
+    signatures.
 
     Attributes:
-        channels (int): Input features.
-        num_rotors (int): Number of overlapping versors.
-        grade (int): Grade of the learnable parameters. Default 2 (rotors).
-        rotor_grade_weights (nn.Parameter): Grade-k coefficients [num_rotors, num_grade_elements].
-        weights (nn.Parameter): Mixing weights [channels, num_rotors].
+        channels (int): Number of versors.
+        grade (int): Grade of the learnable parameter. Default 2 (bivector → rotor).
+        grade_weights (nn.Parameter): Learnable grade-k coefficients [channels, num_grade_elements].
     """
 
     def __init__(
         self,
         algebra: AlgebraLike,
         channels: int,
-        num_rotors: int = 8,
         grade: int = 2,
         *,
         input_grades=None,
@@ -52,19 +48,18 @@ class MultiRotorLayer(CliffordModule):
         input_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
     ):
-        """Initialize a multi-rotor layer.
+        """Initialize the versor layer.
 
         Args:
             algebra: Planner-capable algebra host.
-            channels (int): Input features.
-            num_rotors (int): Number of parallel versor heads.
+            channels (int): Number of features.
             grade (int): Grade of the learnable parameter.
                 grade=2 (default): bivectors → rotors via exp(-B/2), Spin group.
+                grade=1: vectors → reflections via hat(n) x n^{-1}, Pin group.
                 grade=k: general grade-k versor product.
         """
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
-        self.num_rotors = require_positive_int(num_rotors, "num_rotors")
         self.grade = int(grade)
         self.input_contract = resolve_layer_layout_contract(algebra, layout=input_layout, grades=input_grades)
         self.output_contract = (
@@ -78,45 +73,50 @@ class MultiRotorLayer(CliffordModule):
         self.register_buffer("grade_indices", grade_indices(algebra, self.grade))
         self.num_grade_elements = self.grade_indices.numel()
         self.parameter_layout = algebra.layout((self.grade,))
-        self.action = algebra.plan_multi_versor_action(
+        self.action = algebra.plan_versor_action(
             grade=self.grade,
             input_layout=self.input_layout,
             output_layout=self.output_layout,
             parameter_layout=self.parameter_layout,
         )
 
-        self.rotor_grade_weights = nn.Parameter(torch.Tensor(self.num_rotors, self.num_grade_elements))
+        self.grade_weights = nn.Parameter(torch.Tensor(self.channels, self.num_grade_elements))
         if self.grade == 2:
-            tag_manifold(self.rotor_grade_weights, MANIFOLD_SPIN)
-
-        # Mixing weights (Euclidean — intentionally untagged)
-        self.weights = nn.Parameter(torch.Tensor(self.channels, self.num_rotors))
+            tag_manifold(self.grade_weights, MANIFOLD_SPIN)
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        """Initialize with small transforms and uniform mixing weights."""
-        nn.init.normal_(self.rotor_grade_weights, std=0.01)
-        nn.init.xavier_uniform_(self.weights)
+        """Initialize with near-identity transform (small weights)."""
+        nn.init.normal_(self.grade_weights, std=0.01)
 
-    def forward(self, x: torch.Tensor, return_invariants: bool = False) -> torch.Tensor:
-        """Apply weighted multi-versor superposition.
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply versor product x' = hat(V) x V^{-1} (= RxR~ for grade=2).
 
         Args:
             x (torch.Tensor): Input [Batch, Channels, Dim].
-            return_invariants (bool): If True, returns per-grade norms instead of output.
 
         Returns:
-            torch.Tensor: Transformed output [Batch, Channels, Dim].
+            torch.Tensor: Transformed input [Batch, Channels, Dim].
         """
         values = x if x.shape[-1] == self.input_layout.dim else self.input_layout.compact(x)
-        out = self.action(values, self.rotor_grade_weights, self.weights)
+        return self.action(values, self.grade_weights)
 
-        if return_invariants:
-            return self.algebra.grade_norms(out, layout=self.output_layout)
+    def prune_weights(self, threshold: float = 1e-4) -> int:
+        """Zero out grade weights below threshold.
 
-        return out
+        Args:
+            threshold (float): Cutoff magnitude.
+
+        Returns:
+            int: Number of pruned parameters.
+        """
+        with torch.no_grad():
+            mask = torch.abs(self.grade_weights) >= threshold
+            num_pruned = (~mask).sum().item()
+            self.grade_weights.data.mul_(mask.type_as(self.grade_weights))
+        return num_pruned
 
     def sparsity_loss(self) -> torch.Tensor:
-        """Compute L1 sparsity loss for versor weights and mixing weights."""
-        return torch.norm(self.rotor_grade_weights, p=1) + torch.norm(self.weights, p=1)
+        """Compute L1 sparsity regularization on grade weights."""
+        return torch.norm(self.grade_weights, p=1)

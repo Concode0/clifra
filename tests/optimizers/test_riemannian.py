@@ -18,7 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from clifra.core.runtime.algebra import AlgebraContext
-from clifra.layers import MultiRotorLayer, RotorGadget, RotorLayer
+from clifra.layers import MultiVersorLayer, RotorGadget, VersorLayer
 from clifra.optimizers.riemannian import (
     MANIFOLD_SPHERE,
     MANIFOLD_SPIN,
@@ -35,13 +35,13 @@ from clifra.optimizers.riemannian import (
 @pytest.fixture
 def rotor_layer(algebra_3d):
     """Simple rotor layer for testing."""
-    return RotorLayer(algebra_3d, channels=4)
+    return VersorLayer(algebra_3d, channels=4)
 
 
 @pytest.fixture
-def multi_rotor_layer(algebra_3d):
+def multi_versor_layer(algebra_3d):
     """Multi-rotor layer for testing."""
-    return MultiRotorLayer(algebra_3d, channels=4, num_rotors=2)
+    return MultiVersorLayer(algebra_3d, channels=4, num_versors=2)
 
 
 @pytest.fixture
@@ -244,7 +244,7 @@ def test_convergence_synthetic_rotation_sgd(algebra_3d):
     y_true = algebra_3d.geometric_product(algebra_3d.geometric_product(R_true, x), R_true_rev)
 
     # Train
-    layer = RotorLayer(algebra_3d, channels=1)
+    layer = VersorLayer(algebra_3d, channels=1)
     optimizer = ExponentialSGD.from_model(layer, lr=0.1, algebra=algebra_3d)
 
     for _ in range(200):
@@ -276,7 +276,7 @@ def test_convergence_synthetic_rotation_adam(algebra_3d):
     y_true = algebra_3d.geometric_product(algebra_3d.geometric_product(R_true, x), R_true_rev)
 
     # Train
-    layer = RotorLayer(algebra_3d, channels=1)
+    layer = VersorLayer(algebra_3d, channels=1)
     optimizer = RiemannianAdam.from_model(layer, lr=0.01, algebra=algebra_3d)
 
     for _ in range(200):
@@ -306,7 +306,7 @@ def test_compare_sgd_convergence(algebra_3d):
     y_target = algebra_3d.geometric_product(algebra_3d.geometric_product(R_target, x), R_target_rev)
 
     # Train with ExponentialSGD
-    layer1 = RotorLayer(algebra_3d, channels=4)
+    layer1 = VersorLayer(algebra_3d, channels=4)
     opt1 = ExponentialSGD.from_model(layer1, lr=0.01, algebra=algebra_3d)
 
     losses1 = []
@@ -319,7 +319,7 @@ def test_compare_sgd_convergence(algebra_3d):
         losses1.append(loss.item())
 
     # Train with standard SGD
-    layer2 = RotorLayer(algebra_3d, channels=4)
+    layer2 = VersorLayer(algebra_3d, channels=4)
     opt2 = torch.optim.SGD(layer2.parameters(), lr=0.01)
 
     losses2 = []
@@ -342,7 +342,7 @@ def test_compare_sgd_convergence(algebra_3d):
 @pytest.mark.slow
 def test_rotor_manifold_membership_after_optimization(algebra_3d):
     """Verify rotors remain on manifold: ~RR ~= 1 after optimization."""
-    layer = RotorLayer(algebra_3d, channels=4)
+    layer = VersorLayer(algebra_3d, channels=4)
     optimizer = RiemannianAdam.from_model(layer, lr=0.01, algebra=algebra_3d)
 
     x = torch.randn(20, 4, 8)
@@ -356,8 +356,8 @@ def test_rotor_manifold_membership_after_optimization(algebra_3d):
         loss.backward()
         optimizer.step()
 
-    # Extract rotors using the same logic as RotorLayer.forward()
-    # RotorLayer stores only bivector components, need to embed in full space
+    # Extract rotors using the same logic as VersorLayer.forward()
+    # VersorLayer stores only bivector components, need to embed in full space
     B_full = torch.zeros(layer.channels, algebra_3d.dim)
     grade_indices = layer.grade_indices.unsqueeze(0).expand(layer.channels, -1)
     B_full.scatter_(1, grade_indices, layer.grade_weights)
@@ -376,7 +376,7 @@ def test_rotor_manifold_membership_after_optimization(algebra_3d):
 @pytest.mark.slow
 def test_isometry_preservation(algebra_3d):
     """Verify rotors preserve norms: ||R.x.~R|| = ||x||."""
-    layer = RotorLayer(algebra_3d, channels=4)
+    layer = VersorLayer(algebra_3d, channels=4)
     optimizer = ExponentialSGD.from_model(layer, lr=0.01, algebra=algebra_3d)
 
     x = torch.randn(20, 4, 8)
@@ -402,9 +402,9 @@ def test_isometry_preservation(algebra_3d):
 # Integration Tests
 
 
-def test_integration_with_multi_rotor_layer(algebra_3d, multi_rotor_layer):
-    """Verify optimizers work with MultiRotorLayer."""
-    optimizer = RiemannianAdam.from_model(multi_rotor_layer, lr=0.001, algebra=algebra_3d)
+def test_integration_with_multi_versor_layer(algebra_3d, multi_versor_layer):
+    """Verify optimizers work with MultiVersorLayer."""
+    optimizer = RiemannianAdam.from_model(multi_versor_layer, lr=0.001, algebra=algebra_3d)
 
     x = torch.randn(8, 4, 8)
     y_target = torch.randn(8, 4, 8)
@@ -412,14 +412,14 @@ def test_integration_with_multi_rotor_layer(algebra_3d, multi_rotor_layer):
     # Train for a few steps
     for _ in range(20):
         optimizer.zero_grad()
-        y = multi_rotor_layer(x)
+        y = multi_versor_layer(x)
         loss = F.mse_loss(y, y_target)
         loss.backward()
         optimizer.step()
 
     # Should complete without errors and have finite parameters.
-    assert not torch.isnan(multi_rotor_layer.rotor_grade_weights).any()
-    assert not torch.isinf(multi_rotor_layer.rotor_grade_weights).any()
+    assert not torch.isnan(multi_versor_layer.grade_weights).any()
+    assert not torch.isinf(multi_versor_layer.grade_weights).any()
 
 
 def test_integration_with_rotor_gadget(algebra_3d, rotor_gadget):
@@ -450,7 +450,7 @@ def test_direct_parameter_groups_keep_standard_params_euclidean(algebra_3d):
     class MixedModel(torch.nn.Module):
         def __init__(self, algebra_3d):
             super().__init__()
-            self.rotor = RotorLayer(algebra_3d, channels=2)
+            self.rotor = VersorLayer(algebra_3d, channels=2)
             self.scalar = torch.nn.Parameter(torch.randn(2, 8))
 
         def forward(self, x):
@@ -492,7 +492,7 @@ def test_optimizer_state_dict(algebra_3d, rotor_layer):
     state_dict = optimizer.state_dict()
 
     # Create new optimizer and load state
-    new_layer = RotorLayer(algebra_3d, channels=4)
+    new_layer = VersorLayer(algebra_3d, channels=4)
     new_optimizer = RiemannianAdam.from_model(new_layer, lr=0.001, algebra=algebra_3d)
     new_optimizer.load_state_dict(state_dict)
 
@@ -524,7 +524,7 @@ def test_zero_learning_rate(algebra_3d, rotor_layer):
 def test_invalid_parameters():
     """Verify optimizers validate input parameters."""
     algebra_3d = AlgebraContext(p=3, q=0, device="cpu")
-    layer = RotorLayer(algebra_3d, channels=2)
+    layer = VersorLayer(algebra_3d, channels=2)
 
     # Invalid learning rate
     with pytest.raises(ValueError):
@@ -557,14 +557,14 @@ def test_manifold_tagging(algebra_3d):
     """Verify layers tag their parameters with correct manifold types."""
     from clifra.layers.primitives.reflection import ReflectionLayer
 
-    rotor = RotorLayer(algebra_3d, channels=4)
+    rotor = VersorLayer(algebra_3d, channels=4)
     assert getattr(rotor.grade_weights, "_manifold", None) == MANIFOLD_SPIN
 
     reflection = ReflectionLayer(algebra_3d, channels=4)
     assert getattr(reflection.vector_weights, "_manifold", None) == MANIFOLD_SPHERE
 
-    multi = MultiRotorLayer(algebra_3d, channels=4, num_rotors=2)
-    assert getattr(multi.rotor_grade_weights, "_manifold", None) == MANIFOLD_SPIN
+    multi = MultiVersorLayer(algebra_3d, channels=4, num_versors=2)
+    assert getattr(multi.grade_weights, "_manifold", None) == MANIFOLD_SPIN
     assert not hasattr(multi.weights, "_manifold")  # Euclidean, untagged
 
     gadget = RotorGadget(algebra_3d, in_channels=4, out_channels=8)
@@ -604,7 +604,7 @@ def test_from_model_groups(algebra_3d):
     class MixedModel(nn.Module):
         def __init__(self):
             super().__init__()
-            self.rotor = RotorLayer(algebra_3d, channels=4)
+            self.rotor = VersorLayer(algebra_3d, channels=4)
             self.reflection = ReflectionLayer(algebra_3d, channels=4)
             self.linear = nn.Linear(8, 8)
 
@@ -626,7 +626,7 @@ def test_from_model_groups(algebra_3d):
 
 
 def test_make_riemannian_optimizer_factory(algebra_3d):
-    layer = RotorLayer(algebra_3d, channels=4)
+    layer = VersorLayer(algebra_3d, channels=4)
 
     adam = make_riemannian_optimizer(layer, algebra_3d, optimizer="adam", lr=0.001)
     sgd = make_riemannian_optimizer(layer, algebra_3d, optimizer="exponential_sgd", lr=0.01)
@@ -720,7 +720,7 @@ def test_euclidean_no_retraction(algebra_3d):
 
 def test_direct_parameter_groups_do_not_apply_spin_retraction_implicitly(algebra_3d):
     """Direct parameter groups require an explicit manifold tag for spin clipping."""
-    layer = RotorLayer(algebra_3d, channels=4)
+    layer = VersorLayer(algebra_3d, channels=4)
     opt = RiemannianAdam(layer.parameters(), lr=0.001, algebra=algebra_3d)
 
     for g in opt.param_groups:
@@ -748,7 +748,7 @@ def test_mixed_model_convergence(algebra_3d):
     class MixedModel(nn.Module):
         def __init__(self):
             super().__init__()
-            self.rotor = RotorLayer(algebra_3d, channels=4)
+            self.rotor = VersorLayer(algebra_3d, channels=4)
             self.reflection = ReflectionLayer(algebra_3d, channels=4)
             self.scale = nn.Parameter(torch.ones(4, 1))
 

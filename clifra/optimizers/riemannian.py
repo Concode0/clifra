@@ -173,7 +173,7 @@ class ExponentialSGD(Optimizer):
 
     Example:
         >>> algebra = AlgebraContext(p=3, q=0, device='cpu')
-        >>> model = RotorLayer(algebra, channels=4)
+        >>> model = VersorLayer(algebra, channels=4)
         >>> optimizer = ExponentialSGD(
         ...     model.parameters(), lr=0.01, algebra=algebra
         ... )

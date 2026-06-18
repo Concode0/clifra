@@ -15,7 +15,7 @@ from clifra.core.config import AlgebraConfig, make_algebra, make_algebra_from_co
 from clifra.core.formatting import Multivector, format_multivector
 from clifra.core.foundation.module import CliffordModule
 from clifra.core.runtime.algebra import AlgebraContext
-from clifra.layers import CliffordLinear, RotorLayer
+from clifra.layers import CliffordLinear, VersorLayer
 
 __all__ = [
     "__version__",
@@ -26,6 +26,6 @@ __all__ = [
     "format_multivector",
     "make_algebra",
     "make_algebra_from_config",
-    "RotorLayer",
+    "VersorLayer",
     "CliffordLinear",
 ]

@@ -10,10 +10,10 @@ from clifra.layers import (
     BladeSelector,
     CliffordLayerNorm,
     CliffordLinear,
-    MultiRotorLayer,
+    MultiVersorLayer,
     ReflectionLayer,
     RotorGadget,
-    RotorLayer,
+    VersorLayer,
 )
 
 pytestmark = pytest.mark.unit
@@ -78,7 +78,7 @@ class TestLayers:
     def test_rotor_shape(self, algebra_3d):
         # Batch=4, Channels=5
         x = torch.randn(4, 5, 8)
-        layer = RotorLayer(algebra_3d, 5)
+        layer = VersorLayer(algebra_3d, 5)
         y = layer(x)
         assert y.shape == (4, 5, 8)
 
@@ -105,16 +105,16 @@ class TestLayers:
 
     def test_rotor_accepts_extra_leading_dimensions(self, algebra_3d):
         x = torch.randn(2, 3, 4, algebra_3d.dim)
-        layer = RotorLayer(algebra_3d, 4)
+        layer = VersorLayer(algebra_3d, 4)
 
         y = layer(x)
 
         assert y.shape == x.shape
 
     def test_versor_layers_store_planned_action_handles(self, algebra_3d):
-        rotor = RotorLayer(algebra_3d, 4)
+        rotor = VersorLayer(algebra_3d, 4)
         reflection = ReflectionLayer(algebra_3d, 4)
-        multi = MultiRotorLayer(algebra_3d, 4, num_rotors=2)
+        multi = MultiVersorLayer(algebra_3d, 4, num_versors=2)
         gadget = RotorGadget(algebra_3d, in_channels=4, out_channels=3, num_rotor_pairs=2)
 
         assert isinstance(rotor.action, VersorActionHandle)
@@ -128,8 +128,8 @@ class TestLayers:
         layout = context.layout((1,))
         x = torch.randn(2, 4, layout.dim)
 
-        compact_layer = RotorLayer(context, 4, input_layout=layout)
-        full_layer = RotorLayer(full_context, 4)
+        compact_layer = VersorLayer(context, 4, input_layout=layout)
+        full_layer = VersorLayer(full_context, 4)
         full_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
 
         actual = compact_layer(x)
@@ -145,8 +145,8 @@ class TestLayers:
         full_x = torch.randn(2, 3, full_context.dim)
         x = layout.compact(full_x)
 
-        compact_layer = RotorLayer(context, 3, input_layout=layout)
-        full_layer = RotorLayer(full_context, 3)
+        compact_layer = VersorLayer(context, 3, input_layout=layout)
+        full_layer = VersorLayer(full_context, 3)
         full_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
 
         actual = compact_layer(x)
@@ -160,8 +160,8 @@ class TestLayers:
         layout = full_context.layout((1,))
         x = full_context.embed_vector(torch.randn(2, 4, full_context.n))
 
-        declared_layer = RotorLayer(full_context, 4, input_layout=layout)
-        reference_layer = RotorLayer(full_context, 4)
+        declared_layer = VersorLayer(full_context, 4, input_layout=layout)
+        reference_layer = VersorLayer(full_context, 4)
         reference_layer.grade_weights.data.copy_(declared_layer.grade_weights.data)
 
         actual = declared_layer(x)
@@ -170,15 +170,15 @@ class TestLayers:
         assert actual.shape == (2, 4, layout.dim)
         assert torch.allclose(actual, expected, atol=1e-4)
 
-    def test_multi_rotor_shape(self, algebra_3d):
+    def test_multi_versor_shape(self, algebra_3d):
         x = torch.randn(4, 5, 8)
-        layer = MultiRotorLayer(algebra_3d, 5, num_rotors=4)
+        layer = MultiVersorLayer(algebra_3d, 5, num_versors=4)
         y = layer(x)
         assert y.shape == (4, 5, 8)
 
-    def test_multi_rotor_accepts_extra_leading_dimensions(self, algebra_3d):
+    def test_multi_versor_accepts_extra_leading_dimensions(self, algebra_3d):
         x = torch.randn(2, 3, 4, algebra_3d.dim)
-        layer = MultiRotorLayer(algebra_3d, 4, num_rotors=3)
+        layer = MultiVersorLayer(algebra_3d, 4, num_versors=3)
 
         y = layer(x)
         inv = layer(x, return_invariants=True)
@@ -192,9 +192,9 @@ class TestLayers:
         layout = context.layout((1,))
         x = torch.randn(2, 3, layout.dim)
 
-        compact_layer = MultiRotorLayer(context, 3, num_rotors=2, input_layout=layout)
-        full_layer = MultiRotorLayer(full_context, 3, num_rotors=2)
-        full_layer.rotor_grade_weights.data.copy_(compact_layer.rotor_grade_weights.data)
+        compact_layer = MultiVersorLayer(context, 3, num_versors=2, input_layout=layout)
+        full_layer = MultiVersorLayer(full_context, 3, num_versors=2)
+        full_layer.grade_weights.data.copy_(compact_layer.grade_weights.data)
         full_layer.weights.data.copy_(compact_layer.weights.data)
 
         actual = compact_layer(x)
@@ -203,16 +203,16 @@ class TestLayers:
         assert actual.shape == x.shape
         assert torch.allclose(actual, expected, atol=1e-4)
 
-    def test_multi_rotor_invariants(self, algebra_3d):
+    def test_multi_versor_invariants(self, algebra_3d):
         x = torch.randn(4, 5, 8)
-        layer = MultiRotorLayer(algebra_3d, 5, num_rotors=4)
+        layer = MultiVersorLayer(algebra_3d, 5, num_versors=4)
         inv = layer(x, return_invariants=True)
         # 3D algebra has 4 grades (0, 1, 2, 3)
         assert inv.shape == (4, 5, 4)
 
     def test_rotor_layer_preserves_norm(self, algebra_3d):
         x = torch.randn(4, 5, 8)
-        layer = RotorLayer(algebra_3d, 5)
+        layer = VersorLayer(algebra_3d, 5)
         y = layer(x)
 
         # Check output shape
@@ -224,8 +224,8 @@ class TestLayers:
         assert torch.allclose(x_norm, y_norm, atol=1e-4)
 
     def test_rotor_layer_repeated_evaluation_matches(self, algebra_3d):
-        layer_a = RotorLayer(algebra_3d, 3)
-        layer_b = RotorLayer(algebra_3d, 3)
+        layer_a = VersorLayer(algebra_3d, 3)
+        layer_b = VersorLayer(algebra_3d, 3)
         layer_b.grade_weights.data = layer_a.grade_weights.data.clone()
 
         x = torch.randn(2, 3, 8)
@@ -238,7 +238,7 @@ class TestLayers:
 
     def test_rotor_layer_backward(self, algebra_3d):
         x = torch.randn(2, 3, 8, requires_grad=True)
-        layer = RotorLayer(algebra_3d, 3)
+        layer = VersorLayer(algebra_3d, 3)
 
         y = layer(x)
         loss = y.sum()
@@ -251,32 +251,32 @@ class TestLayers:
         assert not torch.isnan(layer.grade_weights.grad).any()
         assert not torch.isinf(layer.grade_weights.grad).any()
 
-    def test_multi_rotor_layer_shape(self, algebra_3d):
+    def test_multi_versor_layer_shape(self, algebra_3d):
         x = torch.randn(4, 5, 8)
-        layer = MultiRotorLayer(algebra_3d, 5, num_rotors=4)
+        layer = MultiVersorLayer(algebra_3d, 5, num_versors=4)
         y = layer(x)
 
         assert y.shape == (4, 5, 8)
 
-    def test_multi_rotor_layer_backward(self, algebra_3d):
+    def test_multi_versor_layer_backward(self, algebra_3d):
         x = torch.randn(2, 3, 8, requires_grad=True)
-        layer = MultiRotorLayer(algebra_3d, 3, num_rotors=4)
+        layer = MultiVersorLayer(algebra_3d, 3, num_versors=4)
 
         y = layer(x)
         loss = y.sum()
         loss.backward()
 
         assert x.grad is not None
-        assert layer.rotor_grade_weights.grad is not None
+        assert layer.grade_weights.grad is not None
         assert layer.weights.grad is not None
         assert not torch.isnan(x.grad).any()
         assert not torch.isinf(x.grad).any()
-        assert not torch.isnan(layer.rotor_grade_weights.grad).any()
-        assert not torch.isinf(layer.rotor_grade_weights.grad).any()
+        assert not torch.isnan(layer.grade_weights.grad).any()
+        assert not torch.isinf(layer.grade_weights.grad).any()
 
     def test_rotor_layer_rotor_property(self, algebra_3d):
         """Verify that exp-produced rotors satisfy R * ~R = 1."""
-        layer = RotorLayer(algebra_3d, 2)
+        layer = VersorLayer(algebra_3d, 2)
 
         B = torch.zeros(layer.channels, algebra_3d.dim)
         indices = layer.grade_indices.unsqueeze(0).expand(layer.channels, -1)
@@ -387,13 +387,13 @@ class TestLayers:
 
     # --- Multi-rotor action-matrix equivalence ---
 
-    def test_multi_rotor_action_matrix_equivalence(self, algebra_3d):
+    def test_multi_versor_action_matrix_equivalence(self, algebra_3d):
         """Verify action-matrix sandwich matches two-GP sandwich numerically."""
         K, C, B = 4, 5, 3
-        layer = MultiRotorLayer(algebra_3d, C, num_rotors=K)
+        layer = MultiVersorLayer(algebra_3d, C, num_versors=K)
         x = torch.randn(B, C, algebra_3d.dim)
 
-        V_left, V_right = _planned_grade2_full_factors(algebra_3d, layer.rotor_grade_weights, layer.parameter_layout)
+        V_left, V_right = _planned_grade2_full_factors(algebra_3d, layer.grade_weights, layer.parameter_layout)
 
         # Action-matrix path (current implementation)
         y_action = algebra_3d.multi_rotor_sandwich(V_left, x, V_right)
@@ -435,16 +435,16 @@ class TestLayers:
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 class TestCompile:
     def test_compile_rotor_layer(self, algebra_3d):
-        """RotorLayer compiles with aot_eager fullgraph."""
-        layer = RotorLayer(algebra_3d, channels=4)
+        """VersorLayer compiles with aot_eager fullgraph."""
+        layer = VersorLayer(algebra_3d, channels=4)
         compiled = torch.compile(layer, backend="aot_eager", fullgraph=True)
         x = torch.randn(2, 4, 8)
         y = compiled(x)
         assert y.shape == (2, 4, 8)
 
-    def test_compile_multi_rotor_layer(self, algebra_3d):
-        """MultiRotorLayer compiles with aot_eager fullgraph."""
-        layer = MultiRotorLayer(algebra_3d, channels=4, num_rotors=3)
+    def test_compile_multi_versor_layer(self, algebra_3d):
+        """MultiVersorLayer compiles with aot_eager fullgraph."""
+        layer = MultiVersorLayer(algebra_3d, channels=4, num_versors=3)
         compiled = torch.compile(layer, backend="aot_eager", fullgraph=True)
         x = torch.randn(2, 4, 8)
         y = compiled(x)
@@ -457,9 +457,9 @@ class TestCompile:
         x = torch.randn(2, 4, layout.dim)
 
         layers = (
-            RotorLayer(context, channels=4, input_layout=layout),
+            VersorLayer(context, channels=4, input_layout=layout),
             ReflectionLayer(context, channels=4, input_layout=layout),
-            MultiRotorLayer(context, channels=4, num_rotors=2, input_layout=layout),
+            MultiVersorLayer(context, channels=4, num_versors=2, input_layout=layout),
         )
         for layer in layers:
             compiled = torch.compile(layer, backend="aot_eager", fullgraph=True)
@@ -467,8 +467,8 @@ class TestCompile:
             assert y.shape == x.shape
 
     def test_compile_backward(self, algebra_3d):
-        """Gradients flow through compiled RotorLayer."""
-        layer = RotorLayer(algebra_3d, channels=4)
+        """Gradients flow through compiled VersorLayer."""
+        layer = VersorLayer(algebra_3d, channels=4)
         compiled = torch.compile(layer, backend="aot_eager")
         x = torch.randn(2, 4, 8, requires_grad=True)
         y = compiled(x)
@@ -481,9 +481,9 @@ class TestCompile:
         reason="MPS not available",
     )
     def test_mps_compile_smoke(self):
-        """RotorLayer compiles and runs on MPS."""
+        """VersorLayer compiles and runs on MPS."""
         alg = AlgebraContext(3, 0, device="mps")
-        layer = RotorLayer(alg, channels=4).to("mps")
+        layer = VersorLayer(alg, channels=4).to("mps")
         compiled = torch.compile(layer, backend="aot_eager")
         x = torch.randn(2, 4, 8, device="mps")
         y = compiled(x)

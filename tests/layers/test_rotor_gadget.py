@@ -516,8 +516,8 @@ class TestIntegration:
         assert out_trad.shape == out_rotor.shape == (batch_size, out_ch, algebra_3d.dim)
 
     def test_with_rotor_layer(self, algebra_3d):
-        """Test combination with RotorLayer."""
-        from clifra.layers import RotorLayer
+        """Test combination with VersorLayer."""
+        from clifra.layers import VersorLayer
 
         # Create a small network: Linear -> Rotor
         linear = RotorGadget(
@@ -527,7 +527,7 @@ class TestIntegration:
             num_rotor_pairs=2,
         )
 
-        rotor = RotorLayer(algebra=algebra_3d, channels=8)
+        rotor = VersorLayer(algebra=algebra_3d, channels=8)
 
         x = torch.randn(2, 4, algebra_3d.dim)
 
@@ -537,9 +537,9 @@ class TestIntegration:
 
         assert out.shape == (2, 8, algebra_3d.dim)
 
-    def test_with_multi_rotor_layer(self, algebra_3d):
-        """Test combination with MultiRotorLayer."""
-        from clifra.layers import MultiRotorLayer
+    def test_with_multi_versor_layer(self, algebra_3d):
+        """Test combination with MultiVersorLayer."""
+        from clifra.layers import MultiVersorLayer
 
         linear = RotorGadget(
             algebra=algebra_3d,
@@ -548,10 +548,10 @@ class TestIntegration:
             num_rotor_pairs=2,
         )
 
-        multi_rotor = MultiRotorLayer(
+        multi_rotor = MultiVersorLayer(
             algebra=algebra_3d,
             channels=8,
-            num_rotors=2,
+            num_versors=2,
         )
 
         x = torch.randn(2, 4, algebra_3d.dim)

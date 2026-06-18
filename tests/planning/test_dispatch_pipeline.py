@@ -7,8 +7,7 @@ import torch.nn as nn
 
 from clifra.core.planning import PlanningLimits
 from clifra.core.runtime.algebra import AlgebraContext
-from clifra.layers import ProductLayer, WedgeLayer
-from clifra.layers.blocks.multi_rotor_ffn import MultiRotorFFN
+from clifra.layers import CliffordLinear, ProductLayer, WedgeLayer
 from clifra.optimizers import make_riemannian_optimizer
 
 pytestmark = pytest.mark.unit
@@ -132,14 +131,14 @@ def test_compact_layer_pipeline_trains_with_riemannian_optimizer_factory():
     assert torch.isfinite(model.scale).all()
 
 
-def test_rotor_backend_block_trains_with_riemannian_optimizer_factory():
+def test_rotor_backend_linear_trains_with_riemannian_optimizer_factory():
     algebra = AlgebraContext(p=3, q=0, device="cpu")
-    model = MultiRotorFFN(
+    model = CliffordLinear(
         algebra,
-        channels=2,
-        ffn_mult=2,
-        num_rotors=2,
-        use_rotor_backend=True,
+        in_channels=2,
+        out_channels=2,
+        backend="rotor",
+        num_rotor_pairs=2,
     )
     optimizer = make_riemannian_optimizer(model, algebra, optimizer="adam", lr=0.01)
     x = torch.randn(4, 2, algebra.dim)

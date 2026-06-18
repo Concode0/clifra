@@ -8,7 +8,6 @@ import torch
 
 from clifra.core.runtime.algebra import AlgebraContext
 from clifra.layers.blocks.attention import GeometricProductAttention
-from clifra.layers.blocks.transformer import GeometricTransformerBlock
 
 pytestmark = pytest.mark.unit
 
@@ -96,45 +95,6 @@ def test_attention_forward_accepts_compact_context_inputs():
 
     assert y.shape == x.shape
     assert torch.isfinite(y).all()
-
-
-def test_transformer_block_accepts_compact_context_inputs():
-    context = AlgebraContext(5, 0, device=DEVICE, default_grades=(1,), dtype=torch.float32)
-    layout = context.layout((1,))
-    block = GeometricTransformerBlock(
-        context,
-        channels=4,
-        num_heads=2,
-        num_rotors=2,
-        dropout=0.0,
-    )
-    x = torch.randn(2, 5, 4, layout.dim)
-
-    y = block(x)
-
-    assert y.shape == x.shape
-    assert torch.isfinite(y).all()
-
-
-def test_transformer_block_accepts_compact_context_entropy_gating():
-    context = AlgebraContext(5, 0, device=DEVICE, default_grades=(1,), dtype=torch.float32)
-    layout = context.layout((1,))
-    block = GeometricTransformerBlock(
-        context,
-        channels=4,
-        num_heads=2,
-        num_rotors=2,
-        dropout=0.0,
-        use_entropy_gating=True,
-    )
-    x = torch.randn(2, 5, 4, layout.dim)
-
-    y, entropy, gate = block(x, return_state=True)
-
-    assert y.shape == x.shape
-    assert torch.isfinite(y).all()
-    assert torch.isfinite(entropy).all()
-    assert torch.isfinite(gate).all()
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")

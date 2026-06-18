@@ -10,11 +10,9 @@ adapters live under :mod:`clifra.layers.adapters` and are imported explicitly.
 from clifra.core.foundation.module import CliffordModule
 
 from .blocks.attention import EntropyGatedAttention, GeometricProductAttention
-from .blocks.multi_rotor_ffn import MultiRotorFFN
-from .blocks.transformer import GeometricTransformerBlock
 from .primitives.activation import GeometricGELU, GeometricSquare, GradeSwish
 from .primitives.linear import CliffordLinear
-from .primitives.multi_rotor import MultiRotorLayer
+from .primitives.multi_versor import MultiVersorLayer
 from .primitives.normalization import CliffordLayerNorm
 from .primitives.product import (
     AntiCommutatorLayer,
@@ -26,16 +24,16 @@ from .primitives.product import (
 )
 from .primitives.projection import BladeSelector, GeometricNeutralizer
 from .primitives.reflection import ReflectionLayer
-from .primitives.rotor import RotorLayer
 from .primitives.rotor_gadget import RotorGadget
+from .primitives.versor import VersorLayer
 
 __all__ = [
     "CliffordModule",
     "GeometricGELU",
     "GeometricSquare",
     "GradeSwish",
-    "RotorLayer",
-    "MultiRotorLayer",
+    "VersorLayer",
+    "MultiVersorLayer",
     "CliffordLinear",
     "RotorGadget",
     "CliffordLayerNorm",
@@ -50,6 +48,4 @@ __all__ = [
     "ReflectionLayer",
     "EntropyGatedAttention",
     "GeometricProductAttention",
-    "MultiRotorFFN",
-    "GeometricTransformerBlock",
 ]

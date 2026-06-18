@@ -5,16 +5,16 @@ import pytest
 import torch
 
 from clifra.core.runtime.algebra import AlgebraContext
-from clifra.layers import RotorLayer
+from clifra.layers import VersorLayer
 
 pytestmark = pytest.mark.unit
 
 
 class TestOptimization:
     def test_rotor_pruning(self):
-        """Test that RotorLayer correctly prunes small bivector weights."""
+        """Test that VersorLayer correctly prunes small bivector weights."""
         algebra = AlgebraContext(p=3, q=0, device="cpu")
-        layer = RotorLayer(algebra, channels=1)
+        layer = VersorLayer(algebra, channels=1)
 
         # Manually set weights: one large, one small
         with torch.no_grad():
@@ -23,7 +23,7 @@ class TestOptimization:
             layer.grade_weights[0, 1] = 1e-5  # Small
 
         # Prune
-        num_pruned = layer.prune_bivectors(threshold=1e-3)
+        num_pruned = layer.prune_weights(threshold=1e-3)
 
         # p=3 has 3 bivectors (e12, e13, e23).
         # We set index 0 to 1.0, index 1 to 1e-5. Index 2 is 0.0.
@@ -35,7 +35,7 @@ class TestOptimization:
     def test_sparsity_loss(self):
         """Test that sparsity loss returns L1 norm."""
         algebra = AlgebraContext(p=2, q=0, device="cpu")
-        layer = RotorLayer(algebra, channels=1)
+        layer = VersorLayer(algebra, channels=1)
 
         with torch.no_grad():
             layer.grade_weights.fill_(0.5)

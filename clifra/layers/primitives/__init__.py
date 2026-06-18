@@ -5,7 +5,7 @@
 
 from .activation import GeometricGELU, GeometricSquare, GradeSwish
 from .linear import CliffordLinear
-from .multi_rotor import MultiRotorLayer
+from .multi_versor import MultiVersorLayer
 from .normalization import CliffordLayerNorm
 from .product import (
     AntiCommutatorLayer,
@@ -17,15 +17,15 @@ from .product import (
 )
 from .projection import BladeSelector, GeometricNeutralizer
 from .reflection import ReflectionLayer
-from .rotor import RotorLayer
 from .rotor_gadget import RotorGadget
+from .versor import VersorLayer
 
 __all__ = [
     "GeometricGELU",
     "GeometricSquare",
     "GradeSwish",
     "CliffordLinear",
-    "MultiRotorLayer",
+    "MultiVersorLayer",
     "CliffordLayerNorm",
     "ProductLayer",
     "GeometricProductLayer",
@@ -36,6 +36,6 @@ __all__ = [
     "BladeSelector",
     "GeometricNeutralizer",
     "ReflectionLayer",
-    "RotorLayer",
+    "VersorLayer",
     "RotorGadget",
 ]

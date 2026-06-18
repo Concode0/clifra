@@ -4,9 +4,9 @@
 
 ::: clifra.layers.primitives
 
-::: clifra.layers.primitives.rotor
+::: clifra.layers.primitives.versor
 
-::: clifra.layers.primitives.multi_rotor
+::: clifra.layers.primitives.multi_versor
 
 ::: clifra.layers.primitives.linear
 
@@ -25,10 +25,6 @@
 ::: clifra.layers.blocks
 
 ::: clifra.layers.blocks.attention
-
-::: clifra.layers.blocks.transformer
-
-::: clifra.layers.blocks.multi_rotor_ffn
 
 ::: clifra.layers.adapters.projective
 

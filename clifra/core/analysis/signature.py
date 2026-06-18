@@ -121,7 +121,7 @@ def _apply_biased_init(
     algebra: AlgebraLike,
     bias_type: str = "random",
 ) -> None:
-    """Biases RotorLayer bivector weights based on signature type.
+    """Biases VersorLayer bivector weights based on signature type.
 
     Uses ``algebra.bivector_squared_signs()`` to classify each basis bivector:
     - bv_sq = -1: elliptic (positive-signature base vectors)
