@@ -7,6 +7,11 @@
 Provides analyzers for effective dimension, metric signature, spectral
 structure, symmetry / null detection, and commutator (exchange) analysis,
 orchestrated by :class:`GeometricAnalyzer`.
+
+Also re-exports :class:`MetricSearch`,
+:class:`GeodesicFlow`, :class:`DimensionLifter`, and the standalone
+:func:`compute_uncertainty_and_alignment` that were previously in
+``clifra.core.search``.
 """
 
 from ._types import (
@@ -21,8 +26,9 @@ from ._types import (
     SpectralResult,
     SymmetryResult,
 )
-from .commutator import CommutatorAnalyzer
-from .dimension import EffectiveDimensionAnalyzer
+from .commutator import CommutatorAnalyzer, compute_uncertainty_and_alignment
+from .dimension import DimensionLifter, EffectiveDimensionAnalyzer
+from .geodesic import GeodesicFlow
 from .pipeline import GeometricAnalyzer
 from .policy import (
     AnalysisCostPolicy,
@@ -31,7 +37,7 @@ from .policy import (
     ProductAnalysisCost,
 )
 from .sampler import StatisticalSampler
-from .signature import SignatureSearchAnalyzer
+from .signature import MetricSearch, SignatureSearchAnalyzer
 from .spectral import SpectralAnalyzer
 from .symmetry import SymmetryDetector
 
@@ -59,5 +65,10 @@ __all__ = [
     "SpectralAnalyzer",
     "SymmetryDetector",
     "CommutatorAnalyzer",
-    "GeometricAnalyzer"
+    "GeometricAnalyzer",
+    # Legacy (from clifra.core.search)
+    "MetricSearch",
+    "GeodesicFlow",
+    "DimensionLifter",
+    "compute_uncertainty_and_alignment",
 ]
