@@ -122,6 +122,47 @@ class GradeProductExecutor(nn.Module):
         weighted_left = left_gathered * self.pairwise_coefficients
         return torch.einsum("...ljk,...rj->...lrk", weighted_left, right)
 
+    def forward_pairwise_compact_right_signed(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        right_signs: torch.Tensor,
+    ) -> torch.Tensor:
+        """Pairwise compact product with a diagonal sign applied to right lanes."""
+        if left.shape[-1] != self.left_layout.dim:
+            raise ValueError(f"left compact dimension must be {self.left_layout.dim}, got {left.shape[-1]}")
+        if right.shape[-1] != self.right_layout.dim:
+            raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
+        if right_signs.shape != (self.right_layout.dim,):
+            raise ValueError(f"right_signs shape must be {(self.right_layout.dim,)}, got {tuple(right_signs.shape)}")
+
+        prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
+        left = left.expand(*prefix, *left.shape[-2:])
+        right = right.expand(*prefix, *right.shape[-2:])
+
+        if self._pairwise_contract_left:
+            flat_positions = self.pairwise_gather_positions.reshape(-1)
+            right_gathered = torch.index_select(right, -1, flat_positions).reshape(
+                *right.shape[:-1],
+                self.left_layout.dim,
+                self.output_dim,
+            )
+            right_signs_gathered = torch.index_select(right_signs, 0, flat_positions).reshape(
+                self.left_layout.dim,
+                self.output_dim,
+            )
+            weighted_right = right_gathered * (self.pairwise_coefficients * right_signs_gathered)
+            return torch.einsum("...li,...rik->...lrk", left, weighted_right)
+
+        flat_positions = self.pairwise_gather_positions.reshape(-1)
+        left_gathered = torch.index_select(left, -1, flat_positions).reshape(
+            *left.shape[:-1],
+            self.right_layout.dim,
+            self.output_dim,
+        )
+        weighted_left = left_gathered * (self.pairwise_coefficients * right_signs.unsqueeze(-1))
+        return torch.einsum("...ljk,...rj->...lrk", weighted_left, right)
+
     def forward_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return a full ``[..., 2**n]`` lane tensor."""
         compact = self.forward(left, right)

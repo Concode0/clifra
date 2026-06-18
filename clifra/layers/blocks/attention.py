@@ -109,11 +109,10 @@ class GeometricProductAttention(CliffordModule):
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
 
-        # Q, K, V projections operate on [B*L, channels, dim]
-        self.q_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
-        self.k_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
-        self.v_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
+        self.qkv_weight = nn.Parameter(torch.empty(3, channels, channels))
+        self.qkv_bias = nn.Parameter(torch.empty(3, channels, self.lane_dim))
         self.out_proj = CliffordLinear(algebra, channels, channels, layout=self.layout)
+        self.reset_parameters()
 
         self.attn_dropout = nn.Dropout(dropout) if dropout > 0.0 else None
 
@@ -123,6 +122,12 @@ class GeometricProductAttention(CliffordModule):
             bivector_weight=bivector_weight,
             layout=self.layout,
         )
+
+    def reset_parameters(self) -> None:
+        """Initialize the fused QKV channel projections."""
+        for weight in self.qkv_weight:
+            nn.init.xavier_uniform_(weight)
+        nn.init.zeros_(self.qkv_bias)
 
     def _compute_score(
         self,
@@ -149,11 +154,12 @@ class GeometricProductAttention(CliffordModule):
         )
         B, L, C, D = x.shape
 
-        # Project Q, K, V (CliffordLinear expects [B, C, D])
-        x_flat = x.reshape(B * L, C, D)
-        Q = self.q_proj(x_flat).reshape(B, L, C, D)
-        K = self.k_proj(x_flat).reshape(B, L, C, D)
-        V = self.v_proj(x_flat).reshape(B, L, C, D)
+        qkv = torch.einsum("poi,...id->...pod", self.qkv_weight, x)
+        bias_shape = (1,) * (x.ndim - 2) + (3, C, D)
+        qkv = qkv + self.qkv_bias.view(bias_shape)
+        Q = qkv.select(-3, 0)
+        K = qkv.select(-3, 1)
+        V = qkv.select(-3, 2)
 
         H = self.num_heads
         Hc = self.head_channels
@@ -183,10 +189,7 @@ class GeometricProductAttention(CliffordModule):
         # Merge heads back: [B, L, C, D]
         output = output.permute(0, 2, 1, 3, 4).reshape(B, L, C, D)
 
-        # Output projection
-        output = self.out_proj(output.reshape(B * L, C, D)).reshape(B, L, C, D)
-
-        return output
+        return self.out_proj(output)
 
 
 class EntropyGatedAttention(CliffordModule):

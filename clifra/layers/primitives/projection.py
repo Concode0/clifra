@@ -181,6 +181,4 @@ class GeometricNeutralizer(CliffordModule):
         projection = torch.einsum("bci,cij->bcj", b_centered, weights)
         scalar_n = scalar - projection
 
-        delta = torch.zeros_like(x_flat)
-        delta[..., self.g0_idx] = scalar_n - scalar
-        return (x_flat + delta).reshape_as(x)
+        return x_flat.index_copy(-1, self.g0_idx, scalar_n).reshape_as(x)

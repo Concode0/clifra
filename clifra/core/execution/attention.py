@@ -10,6 +10,7 @@ import math
 import torch
 import torch.nn as nn
 
+from clifra.core.foundation.basis import reverse_sign
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.numerics import eps_like
 
@@ -31,14 +32,6 @@ class GeometricAttentionScoreExecutor(nn.Module):
         self.bivector_weight = float(bivector_weight)
         self.layout = layout
         self.score_output_layout = algebra.layout((0, 2))
-        self.reverse_executor = algebra.planner.unary_executor(
-            op="reverse",
-            input_grades=layout.grades,
-            output_grades=layout.grades,
-            dtype=algebra.dtype,
-            device=algebra.device,
-            cache=True,
-        )
         self.score_product = algebra.product_executor(
             left_grades=layout.grades,
             right_grades=layout.grades,
@@ -58,6 +51,15 @@ class GeometricAttentionScoreExecutor(nn.Module):
             self.score_output_layout.positions_for_grades((2,), device=algebra.device),
             persistent=False,
         )
+        self.register_buffer(
+            "_right_reverse_signs",
+            torch.tensor(
+                [reverse_sign(index) for index in layout.basis_indices],
+                dtype=algebra.dtype,
+                device=algebra.device,
+            ),
+            persistent=False,
+        )
 
     def forward(self, q_head: torch.Tensor, k_head: torch.Tensor) -> torch.Tensor:
         """Return attention scores for heads shaped ``[B, H, L, Hc, D]``."""
@@ -70,8 +72,11 @@ class GeometricAttentionScoreExecutor(nn.Module):
         Lk = k_head.shape[2]
         q_by_channel = q_head.permute(0, 1, 3, 2, 4).reshape(B, H, Hc, Lq, lane_dim)
         k_by_channel = k_head.permute(0, 1, 3, 2, 4).reshape(B, H, Hc, Lk, lane_dim)
-        k_by_channel = self.reverse_executor.forward_compact(k_by_channel)
-        product = self.score_product.forward_pairwise_compact(q_by_channel, k_by_channel)
+        product = self.score_product.forward_pairwise_compact_right_signed(
+            q_by_channel,
+            k_by_channel,
+            self._right_reverse_signs,
+        )
 
         scalar = torch.index_select(product, -1, self._score_scalar_positions)
         score_g0 = scalar.sum(dim=(2, -1))

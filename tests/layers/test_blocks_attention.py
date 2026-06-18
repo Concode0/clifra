@@ -45,6 +45,7 @@ def test_attention_full_lane_score_matches_direct_product():
     expected = _reference_attention_score(algebra, q_head, k_head, attn.bivector_weight)
 
     assert not hasattr(attn, "_g2_b_idx")
+    assert not hasattr(attn.scorer, "reverse_executor")
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
@@ -112,3 +113,16 @@ def test_attention_full_lane_score_compiles_fullgraph():
     actual = compiled(q_head, k_head)
 
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
+def test_attention_forward_compiles_fullgraph_with_causal_mask():
+    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
+    attn = GeometricProductAttention(algebra, channels=4, num_heads=2, causal=True)
+    x = torch.randn(2, 5, 4, algebra.dim)
+
+    expected = attn(x)
+    compiled = torch.compile(attn, backend="aot_eager", fullgraph=True)
+    actual = compiled(x)
+
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
