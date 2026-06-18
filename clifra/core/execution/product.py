@@ -43,6 +43,9 @@ class GradeProductExecutor(nn.Module):
         self.register_buffer("active_output_indices", plan.active_output_indices, persistent=False)
         self.register_buffer("left_active_positions", plan.left_active_positions, persistent=False)
         self.register_buffer("right_active_positions", plan.right_active_positions, persistent=False)
+        self._pairwise_contract_left = plan.pairwise_contract_left
+        self.register_buffer("pairwise_gather_positions", plan.pairwise_gather_positions, persistent=False)
+        self.register_buffer("pairwise_coefficients", plan.pairwise_coefficients, persistent=False)
 
     @property
     def output_dim(self) -> int:
@@ -100,12 +103,24 @@ class GradeProductExecutor(nn.Module):
         left = left.expand(*prefix, *left.shape[-2:])
         right = right.expand(*prefix, *right.shape[-2:])
 
-        left_terms = torch.index_select(left, -1, self.left_active_positions)
-        right_terms = torch.index_select(right, -1, self.right_active_positions)
-        terms = left_terms.unsqueeze(-2) * right_terms.unsqueeze(-3) * self._coefficients_for(left_terms, right_terms)
+        if self._pairwise_contract_left:
+            flat_positions = self.pairwise_gather_positions.reshape(-1)
+            right_gathered = torch.index_select(right, -1, flat_positions).reshape(
+                *right.shape[:-1],
+                self.left_layout.dim,
+                self.output_dim,
+            )
+            weighted_right = right_gathered * self.pairwise_coefficients
+            return torch.einsum("...li,...rik->...lrk", left, weighted_right)
 
-        output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
-        return output.index_add(-1, self.output_positions, terms)
+        flat_positions = self.pairwise_gather_positions.reshape(-1)
+        left_gathered = torch.index_select(left, -1, flat_positions).reshape(
+            *left.shape[:-1],
+            self.right_layout.dim,
+            self.output_dim,
+        )
+        weighted_left = left_gathered * self.pairwise_coefficients
+        return torch.einsum("...ljk,...rj->...lrk", weighted_left, right)
 
     def forward_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return a full ``[..., 2**n]`` lane tensor."""
@@ -180,7 +195,8 @@ class FullTableProductExecutor(nn.Module):
         left = left.expand(*prefix, *left.shape[-2:])
         right = right.expand(*prefix, *right.shape[-2:])
         right_gathered = right[..., self.cayley_indices]
-        return torch.einsum("...li,...rik,ik->...lrk", left, right_gathered, self._signs_for(left, right))
+        weighted_right = right_gathered * self._signs_for(left, right)
+        return torch.einsum("...li,...rik->...lrk", left, weighted_right)
 
     def forward_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return full-layout product lanes."""

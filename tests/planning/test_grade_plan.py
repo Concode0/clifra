@@ -84,6 +84,21 @@ def _grade_only_input(algebra, batch: int, grades: tuple[int, ...], seed: int) -
     return mv
 
 
+def _sparse_pairwise_product_reference(
+    executor: GradeProductExecutor,
+    left: torch.Tensor,
+    right: torch.Tensor,
+) -> torch.Tensor:
+    prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
+    left = left.expand(*prefix, *left.shape[-2:])
+    right = right.expand(*prefix, *right.shape[-2:])
+    left_terms = torch.index_select(left, -1, executor.left_active_positions)
+    right_terms = torch.index_select(right, -1, executor.right_active_positions)
+    terms = left_terms.unsqueeze(-2) * right_terms.unsqueeze(-3) * executor.coefficients
+    output = terms.new_zeros(*terms.shape[:-1], executor.output_dim)
+    return output.index_add(-1, executor.output_positions, terms)
+
+
 def test_grade_expansion_for_common_high_dim_paths():
     assert geometric_product_output_grades(1, 1, 16) == (0, 2)
     assert geometric_product_output_grades(2, 1, 16) == (1, 3)
@@ -409,6 +424,34 @@ def test_product_executor_compact_forward_supports_different_layout_widths():
 
     assert plan.left_layout.dim != plan.right_layout.dim
     assert torch.allclose(compact, reference, atol=1e-12, rtol=1e-12)
+
+
+def test_product_executor_pairwise_uses_factorized_smaller_lane_contraction():
+    algebra = SmallCliffordOracle(6, 0, 0)
+    plan = build_grade_product_plan(
+        algebra.p,
+        algebra.q,
+        algebra.r,
+        left_grades=(2,),
+        right_grades=(1,),
+        output_grades=(3,),
+        op="wedge",
+        device=DEVICE,
+        dtype=torch.float64,
+    )
+    product = GradeProductExecutor(plan)
+    generator = torch.Generator(device=DEVICE).manual_seed(119)
+    left = torch.randn(2, 3, plan.left_layout.dim, dtype=torch.float64, generator=generator)
+    right = torch.randn(2, 4, plan.right_layout.dim, dtype=torch.float64, generator=generator)
+
+    actual = product.forward_pairwise_compact(left, right)
+    expected = _sparse_pairwise_product_reference(product, left, right)
+
+    assert not plan.pairwise_contract_left
+    assert product.pairwise_gather_positions.shape == (plan.right_layout.dim, plan.output_dim)
+    assert product.pairwise_coefficients.shape == product.pairwise_gather_positions.shape
+    assert product.pairwise_gather_positions.numel() < plan.left_layout.dim * plan.output_dim
+    assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
 def test_multi_graded_linear_action_matches_stacked_single_actions():
@@ -1872,6 +1915,33 @@ def test_static_grade_product_compiles_fullgraph_with_aot_eager():
     actual = compiled(A, B)
 
     assert actual.shape[-1] == product.output_dim
+    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
+def test_static_grade_product_pairwise_compact_compiles_fullgraph_with_aot_eager():
+    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float32)
+    plan = build_grade_product_plan(
+        algebra.p,
+        algebra.q,
+        algebra.r,
+        left_grades=(2,),
+        right_grades=(1,),
+        output_grades=(3,),
+        op="wedge",
+        device=DEVICE,
+        dtype=torch.float32,
+    )
+    product = GradeProductExecutor(plan)
+    generator = torch.Generator(device=DEVICE).manual_seed(123)
+    left = torch.randn(2, 3, plan.left_layout.dim, dtype=torch.float32, generator=generator)
+    right = torch.randn(2, 4, plan.right_layout.dim, dtype=torch.float32, generator=generator)
+
+    compiled = torch.compile(product.forward_pairwise_compact, backend="aot_eager", fullgraph=True)
+
+    expected = product.forward_pairwise_compact(left, right)
+    actual = compiled(left, right)
+
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
 

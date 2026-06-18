@@ -48,6 +48,9 @@ class GradeProductPlan:
         right_active_positions: torch.Tensor,
         coefficients: torch.Tensor,
         active_output_indices: torch.Tensor,
+        pairwise_contract_left: bool,
+        pairwise_gather_positions: torch.Tensor,
+        pairwise_coefficients: torch.Tensor,
         tree: GradePlanTree,
     ):
         self.spec = AlgebraSpec(p, q, r)
@@ -63,6 +66,9 @@ class GradeProductPlan:
         self.right_active_positions = right_active_positions
         self.coefficients = coefficients
         self.active_output_indices = active_output_indices
+        self.pairwise_contract_left = bool(pairwise_contract_left)
+        self.pairwise_gather_positions = pairwise_gather_positions
+        self.pairwise_coefficients = pairwise_coefficients
         self.tree = tree
 
     @property
@@ -298,6 +304,20 @@ def build_grade_product_plan_from_tree(
                 plan_right_active_positions.append(right_position_by_index[right_index])
                 plan_coefficients.append(coefficient)
 
+    left_layout = spec.layout(left_grade_tuple)
+    right_layout = spec.layout(right_grade_tuple)
+    pairwise_contract_left, pairwise_gather_positions, pairwise_coefficients = _build_pairwise_contraction_buffers(
+        left_dim=left_layout.dim,
+        right_dim=right_layout.dim,
+        output_dim=len(active_outputs),
+        left_positions=plan_left_active_positions,
+        right_positions=plan_right_active_positions,
+        output_positions=plan_positions,
+        coefficients=plan_coefficients,
+        dtype=dtype,
+        device=device,
+    )
+
     return GradeProductPlan(
         p=p,
         q=q,
@@ -316,7 +336,55 @@ def build_grade_product_plan_from_tree(
         active_output_indices=basis_indices_tensor(
             active_outputs, n=n, role="active output basis indices", device=device
         ),
+        pairwise_contract_left=pairwise_contract_left,
+        pairwise_gather_positions=pairwise_gather_positions,
+        pairwise_coefficients=pairwise_coefficients,
         tree=tree,
+    )
+
+
+def _build_pairwise_contraction_buffers(
+    *,
+    left_dim: int,
+    right_dim: int,
+    output_dim: int,
+    left_positions: list[int],
+    right_positions: list[int],
+    output_positions: list[int],
+    coefficients: list[float],
+    dtype: torch.dtype,
+    device,
+) -> tuple[bool, torch.Tensor, torch.Tensor]:
+    """Return static factorized buffers for pairwise compact products.
+
+    Each Clifford basis interaction has ``output = left xor right``. For a fixed
+    output lane and one operand lane, the matching opposite operand lane is
+    therefore unique. Pairwise execution can contract over the smaller operand
+    width instead of materializing one term per planned basis interaction for
+    every pair of items.
+    """
+    contract_left = left_dim <= right_dim
+    contract_dim = left_dim if contract_left else right_dim
+    gather_rows = [[0 for _ in range(output_dim)] for _ in range(contract_dim)]
+    coefficient_rows = [[0.0 for _ in range(output_dim)] for _ in range(contract_dim)]
+
+    for left_pos, right_pos, output_pos, coefficient in zip(
+        left_positions,
+        right_positions,
+        output_positions,
+        coefficients,
+    ):
+        if contract_left:
+            gather_rows[left_pos][output_pos] = right_pos
+            coefficient_rows[left_pos][output_pos] += coefficient
+        else:
+            gather_rows[right_pos][output_pos] = left_pos
+            coefficient_rows[right_pos][output_pos] += coefficient
+
+    return (
+        contract_left,
+        torch.tensor(gather_rows, dtype=torch.long, device=device),
+        torch.tensor(coefficient_rows, dtype=dtype, device=device),
     )
 
 

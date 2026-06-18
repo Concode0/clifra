@@ -49,9 +49,10 @@ def test_product_layer_pairwise_compact_widths_match_full_lane_reference():
     left_layout = context.layout((2,))
     right_layout = context.layout((1,))
     output_layout = context.layout((3,))
+    generator = torch.Generator(device="cpu").manual_seed(43)
 
-    left = torch.randn(2, 3, left_layout.dim)
-    right = torch.randn(2, 4, right_layout.dim)
+    left = torch.randn(2, 3, left_layout.dim, generator=generator)
+    right = torch.randn(2, 4, right_layout.dim, generator=generator)
     layer = WedgeLayer(
         context,
         left_grades=(2,),
@@ -73,7 +74,7 @@ def test_product_layer_pairwise_compact_widths_match_full_lane_reference():
     expected = expected_full
 
     assert actual.shape == (2, 3, 4, output_layout.dim)
-    assert torch.allclose(actual, expected)
+    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
     assert torch.allclose(repeated, actual)
     assert cache_size == 1
     assert len(context.planner._product_executors) == cache_size
