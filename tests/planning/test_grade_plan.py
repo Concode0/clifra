@@ -603,7 +603,9 @@ def test_plan_sandwich_action_handle_covers_public_full_action_helpers():
         device=DEVICE,
     )
     assert torch.allclose(handle.action_matrices(left, right), algebra.sandwich_action_matrices(left, right))
-    assert torch.allclose(handle.batched(batch_left, values, batch_right), algebra.sandwich_product(batch_left, values, batch_right))
+    assert torch.allclose(
+        handle.batched(batch_left, values, batch_right), algebra.sandwich_product(batch_left, values, batch_right)
+    )
     assert torch.allclose(handle.per_channel(left, values, right), algebra.per_channel_sandwich(left, values, right))
     assert torch.allclose(handle.multi(left, values, right), algebra.multi_rotor_sandwich(left, values, right))
 
@@ -736,7 +738,7 @@ def test_compact_paired_bivector_action_handle_preplans_factor_products():
     assert handle.executor.right_product.executor in cached_products
 
 
-def test_compact_versor_action_handles_preplan_vector_matrix_and_lift_maps():
+def test_compact_versor_action_handles_preplan_rotor_products_and_lift_maps():
     context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float64)
     vector_layout = context.layout((1,))
     bivector_layout = context.layout((2,))
@@ -760,19 +762,27 @@ def test_compact_versor_action_handles_preplan_vector_matrix_and_lift_maps():
         parameter_layout=vector_layout,
     )
 
-    assert rotor.executor.vector_matrix is not None
-    assert rotor.executor.vector_matrix.generator is not None
-    assert rotor.executor.action.flat_positions_1.numel() == vector_layout.dim * vector_layout.dim
-    assert multi.executor.vector_matrix is not None
-    assert multi.executor.action.flat_positions_1.numel() == vector_layout.dim * vector_layout.dim
+    assert rotor.executor.use_rotor_product_action
+    assert rotor.executor.vector_matrix is None
+    assert rotor.executor.action is None
+    assert rotor.executor.bivector_exp is not None
+    assert rotor.executor.rotor_reverse is not None
+    assert rotor.executor.left_product is not None
+    assert rotor.executor.right_product is not None
+    assert multi.executor.use_rotor_product_action
+    assert multi.executor.vector_matrix is None
+    assert multi.executor.action is None
+    assert multi.executor.bivector_exp is not None
+    assert multi.executor.rotor_reverse is not None
+    assert multi.executor.left_product is not None
+    assert multi.executor.right_product is not None
     assert reflection.executor.vector_matrix.metric_signs.numel() == vector_layout.dim
     assert reflection.executor.action.flat_positions_1.numel() == vector_layout.dim * vector_layout.dim
 
 
-@pytest.mark.skipif(not _mps_available(), reason="MPS not available")
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_mps_compact_versor_action_uses_closed_rotor_products_fullgraph():
-    context = AlgebraContext(5, 0, 0, device="mps", dtype=torch.float32)
+def test_compact_versor_action_uses_closed_rotor_products_fullgraph():
+    context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float32)
     vector_layout = context.layout((1,))
     bivector_layout = context.layout((2,))
     handle = context.plan_versor_action(
@@ -787,14 +797,14 @@ def test_mps_compact_versor_action_uses_closed_rotor_products_fullgraph():
         vector_layout.dim,
         dtype=torch.float32,
         generator=torch.Generator(device="cpu").manual_seed(331),
-    ).to("mps")
+    )
     weights = (
         torch.randn(
             3,
             bivector_layout.dim,
             dtype=torch.float32,
             generator=torch.Generator(device="cpu").manual_seed(337),
-        ).to("mps")
+        )
         * 0.1
     )
 
@@ -1849,6 +1859,28 @@ def test_high_dimensional_vector_product_plan_avoids_full_basis_enumeration():
     assert vector_layout.dim == 32
     assert executor.output_dim == 1 + 32 * 31 // 2
     assert executor.pair_count == 32 * 32
+
+
+def test_high_dimensional_vector_product_plan_avoids_dense_lookup_at_int64_limit():
+    algebra = make_algebra(
+        63,
+        0,
+        0,
+        device=DEVICE,
+        dtype=torch.float32,
+        planning_limits=PlanningLimits(max_lanes=4096, max_pairs=100_000),
+    )
+    executor = algebra.planner.product_executor(
+        op="gp",
+        left_grades=(1,),
+        right_grades=(1,),
+        output_grades=(0, 2),
+        dtype=torch.float32,
+        device=DEVICE,
+    )
+
+    assert executor.output_dim == 1 + 63 * 62 // 2
+    assert executor.pair_count == 63 * 63
 
 
 def test_high_dimensional_product_plan_reports_int64_bitmask_boundary():

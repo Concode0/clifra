@@ -263,49 +263,93 @@ def build_grade_product_plan_from_tree(
     left_grade_tuple = tree.left_grades
     right_grade_tuple = tree.right_grades
     output_grade_tuple = tree.output_grades
-
-    left_basis_by_grade = {grade: basis_index_tuple_for_grades(n, (grade,)) for grade in left_grade_tuple}
-    right_basis_by_grade = {grade: basis_index_tuple_for_grades(n, (grade,)) for grade in right_grade_tuple}
-    left_position_by_index = {
-        index: position for position, index in enumerate(spec.layout(left_grade_tuple).basis_indices)
-    }
-    right_position_by_index = {
-        index: position for position, index in enumerate(spec.layout(right_grade_tuple).basis_indices)
-    }
-    active_outputs = basis_index_tuple_for_grades(n, output_grade_tuple)
-    output_position_by_index = {index: position for position, index in enumerate(active_outputs)}
-
-    plan_left: list[int] = []
-    plan_right: list[int] = []
-    plan_output: list[int] = []
-    plan_positions: list[int] = []
-    plan_left_active_positions: list[int] = []
-    plan_right_active_positions: list[int] = []
-    plan_coefficients: list[float] = []
-
-    for path in tree.paths:
-        path_output_grades = set(path.output_grades)
-        for left_index in left_basis_by_grade[path.left_grade]:
-            for right_index in right_basis_by_grade[path.right_grade]:
-                output_index = left_index ^ right_index
-                if output_index.bit_count() not in path_output_grades:
-                    continue
-                output_position = output_position_by_index.get(output_index)
-                if output_position is None:
-                    continue
-                coefficient = operation_coefficient(left_index, right_index, p, q, r, tree.op)
-                if coefficient == 0.0:
-                    continue
-                plan_left.append(left_index)
-                plan_right.append(right_index)
-                plan_output.append(output_index)
-                plan_positions.append(output_position)
-                plan_left_active_positions.append(left_position_by_index[left_index])
-                plan_right_active_positions.append(right_position_by_index[right_index])
-                plan_coefficients.append(coefficient)
-
     left_layout = spec.layout(left_grade_tuple)
     right_layout = spec.layout(right_grade_tuple)
+
+    left_basis_by_grade = {
+        grade: basis_indices_tensor(
+            basis_index_tuple_for_grades(n, (grade,)),
+            n=n,
+            role="left product basis indices",
+        )
+        for grade in left_grade_tuple
+    }
+    right_basis_by_grade = {
+        grade: basis_indices_tensor(
+            basis_index_tuple_for_grades(n, (grade,)),
+            n=n,
+            role="right product basis indices",
+        )
+        for grade in right_grade_tuple
+    }
+    left_layout_indices = basis_indices_tensor(left_layout.basis_indices, n=n, role="left layout basis indices")
+    right_layout_indices = basis_indices_tensor(right_layout.basis_indices, n=n, role="right layout basis indices")
+    active_outputs = basis_index_tuple_for_grades(n, output_grade_tuple)
+    active_output_indices = basis_indices_tensor(active_outputs, n=n, role="active output basis indices")
+
+    left_chunks: list[torch.Tensor] = []
+    right_chunks: list[torch.Tensor] = []
+    output_chunks: list[torch.Tensor] = []
+    output_position_chunks: list[torch.Tensor] = []
+    left_position_chunks: list[torch.Tensor] = []
+    right_position_chunks: list[torch.Tensor] = []
+    coefficient_chunks: list[torch.Tensor] = []
+    negative_mask = sum(1 << bit for bit in range(p, p + q))
+    null_mask = sum(1 << bit for bit in range(p + q, n))
+    pair_limit = tree.chunk_pair_limit if tree.chunk_pair_limit and tree.chunk_pair_limit > 0 else 262_144
+
+    for path in tree.paths:
+        left_basis = left_basis_by_grade[path.left_grade]
+        right_basis = right_basis_by_grade[path.right_grade]
+        if left_basis.numel() == 0 or right_basis.numel() == 0:
+            continue
+        rows_per_chunk = max(1, min(left_basis.numel(), int(pair_limit) // max(int(right_basis.numel()), 1)))
+        right = right_basis.view(1, -1)
+        right_positions_template = _positions_in_sorted_indices(right, right_layout_indices).expand(rows_per_chunk, -1)
+        allowed_output_grades = torch.tensor(path.output_grades, dtype=torch.long)
+
+        for start in range(0, left_basis.numel(), rows_per_chunk):
+            stop = min(start + rows_per_chunk, left_basis.numel())
+            left = left_basis[start:stop].view(-1, 1)
+            output_indices = torch.bitwise_xor(left, right)
+            output_positions = _positions_in_sorted_indices(output_indices, active_output_indices)
+            output_grades = _bit_count_tensor(output_indices, n)
+            valid = output_positions >= 0
+            valid = valid & (output_grades.unsqueeze(-1) == allowed_output_grades).any(dim=-1)
+            coefficients = _operation_coefficients(
+                left,
+                right,
+                output_indices,
+                op=tree.op,
+                left_grade=path.left_grade,
+                right_grade=path.right_grade,
+                n=n,
+                negative_mask=negative_mask,
+                null_mask=null_mask,
+                dtype=dtype,
+            )
+            valid = valid & (coefficients != 0)
+
+            left_indices = left.expand(-1, right_basis.numel())
+            right_indices = right.expand(stop - start, -1)
+            left_positions = _positions_in_sorted_indices(left, left_layout_indices).expand(-1, right_basis.numel())
+            right_positions = right_positions_template[: stop - start]
+
+            left_chunks.append(left_indices[valid])
+            right_chunks.append(right_indices[valid])
+            output_chunks.append(output_indices[valid])
+            output_position_chunks.append(output_positions[valid])
+            left_position_chunks.append(left_positions[valid])
+            right_position_chunks.append(right_positions[valid])
+            coefficient_chunks.append(coefficients[valid])
+
+    plan_left = _cat_long_chunks(left_chunks)
+    plan_right = _cat_long_chunks(right_chunks)
+    plan_output = _cat_long_chunks(output_chunks)
+    plan_positions = _cat_long_chunks(output_position_chunks)
+    plan_left_active_positions = _cat_long_chunks(left_position_chunks)
+    plan_right_active_positions = _cat_long_chunks(right_position_chunks)
+    plan_coefficients = _cat_float_chunks(coefficient_chunks, dtype=dtype)
     pairwise_contract_left, pairwise_gather_positions, pairwise_coefficients = _build_pairwise_contraction_buffers(
         left_dim=left_layout.dim,
         right_dim=right_layout.dim,
@@ -326,13 +370,13 @@ def build_grade_product_plan_from_tree(
         left_grades=left_grade_tuple,
         right_grades=right_grade_tuple,
         output_grades=output_grade_tuple,
-        left_indices=basis_indices_tensor(plan_left, n=n, role="left product basis indices", device=device),
-        right_indices=basis_indices_tensor(plan_right, n=n, role="right product basis indices", device=device),
-        output_indices=basis_indices_tensor(plan_output, n=n, role="output product basis indices", device=device),
-        output_positions=torch.tensor(plan_positions, dtype=torch.long, device=device),
-        left_active_positions=torch.tensor(plan_left_active_positions, dtype=torch.long, device=device),
-        right_active_positions=torch.tensor(plan_right_active_positions, dtype=torch.long, device=device),
-        coefficients=torch.tensor(plan_coefficients, dtype=dtype, device=device),
+        left_indices=plan_left.to(device=device),
+        right_indices=plan_right.to(device=device),
+        output_indices=plan_output.to(device=device),
+        output_positions=plan_positions.to(device=device),
+        left_active_positions=plan_left_active_positions.to(device=device),
+        right_active_positions=plan_right_active_positions.to(device=device),
+        coefficients=plan_coefficients.to(device=device),
         active_output_indices=basis_indices_tensor(
             active_outputs, n=n, role="active output basis indices", device=device
         ),
@@ -348,10 +392,10 @@ def _build_pairwise_contraction_buffers(
     left_dim: int,
     right_dim: int,
     output_dim: int,
-    left_positions: list[int],
-    right_positions: list[int],
-    output_positions: list[int],
-    coefficients: list[float],
+    left_positions: torch.Tensor,
+    right_positions: torch.Tensor,
+    output_positions: torch.Tensor,
+    coefficients: torch.Tensor,
     dtype: torch.dtype,
     device,
 ) -> tuple[bool, torch.Tensor, torch.Tensor]:
@@ -365,27 +409,101 @@ def _build_pairwise_contraction_buffers(
     """
     contract_left = left_dim <= right_dim
     contract_dim = left_dim if contract_left else right_dim
-    gather_rows = [[0 for _ in range(output_dim)] for _ in range(contract_dim)]
-    coefficient_rows = [[0.0 for _ in range(output_dim)] for _ in range(contract_dim)]
+    gather_rows = torch.zeros((contract_dim, output_dim), dtype=torch.long)
+    coefficient_rows = torch.zeros((contract_dim, output_dim), dtype=dtype)
 
-    for left_pos, right_pos, output_pos, coefficient in zip(
-        left_positions,
-        right_positions,
-        output_positions,
-        coefficients,
-    ):
-        if contract_left:
-            gather_rows[left_pos][output_pos] = right_pos
-            coefficient_rows[left_pos][output_pos] += coefficient
-        else:
-            gather_rows[right_pos][output_pos] = left_pos
-            coefficient_rows[right_pos][output_pos] += coefficient
-
+    if contract_left:
+        gather_rows[left_positions, output_positions] = right_positions
+        coefficient_rows.index_put_((left_positions, output_positions), coefficients, accumulate=True)
+    else:
+        gather_rows[right_positions, output_positions] = left_positions
+        coefficient_rows.index_put_((right_positions, output_positions), coefficients, accumulate=True)
     return (
         contract_left,
-        torch.tensor(gather_rows, dtype=torch.long, device=device),
-        torch.tensor(coefficient_rows, dtype=dtype, device=device),
+        gather_rows.to(device=device),
+        coefficient_rows.to(device=device),
     )
+
+
+def _positions_in_sorted_indices(values: torch.Tensor, sorted_indices: torch.Tensor) -> torch.Tensor:
+    if sorted_indices.numel() == 0:
+        return torch.full_like(values, -1)
+    positions = torch.searchsorted(sorted_indices, values)
+    clamped = positions.clamp_max(sorted_indices.numel() - 1)
+    found = (positions < sorted_indices.numel()) & (torch.index_select(sorted_indices, 0, clamped.reshape(-1)).reshape_as(values) == values)
+    return torch.where(found, positions, torch.full_like(positions, -1))
+
+
+def _bit_count_tensor(values: torch.Tensor, n: int) -> torch.Tensor:
+    counts = torch.zeros_like(values)
+    for bit in range(int(n)):
+        counts = counts + ((torch.bitwise_and(values, 1 << bit) != 0).to(torch.long))
+    return counts
+
+
+def _parity_tensor(values: torch.Tensor, n: int) -> torch.Tensor:
+    return (_bit_count_tensor(values, n) & 1).to(torch.bool)
+
+
+def _cat_long_chunks(chunks: list[torch.Tensor]) -> torch.Tensor:
+    return torch.cat(chunks) if chunks else torch.zeros(0, dtype=torch.long)
+
+
+def _cat_float_chunks(chunks: list[torch.Tensor], *, dtype: torch.dtype) -> torch.Tensor:
+    return torch.cat(chunks) if chunks else torch.zeros(0, dtype=dtype)
+
+
+def _operation_coefficients(
+    left: torch.Tensor,
+    right: torch.Tensor,
+    outputs: torch.Tensor,
+    *,
+    op: GradeProductOp,
+    left_grade: int,
+    right_grade: int,
+    n: int,
+    negative_mask: int,
+    null_mask: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    overlap = torch.bitwise_and(left, right)
+    valid = torch.ones_like(outputs, dtype=torch.bool)
+    if op == "wedge":
+        valid = overlap == 0
+    elif null_mask:
+        valid = torch.bitwise_and(overlap, null_mask) == 0
+
+    output_grade = _bit_count_tensor(outputs, n)
+    if op == "left_contraction":
+        valid = valid & (left_grade <= right_grade) & (output_grade == right_grade - left_grade)
+    elif op == "right_contraction":
+        valid = valid & (left_grade >= right_grade) & (output_grade == left_grade - right_grade)
+    elif op in {"inner", "commutator", "anti_commutator"}:
+        overlap_grade = _bit_count_tensor(overlap, n)
+        parity_odd = ((int(left_grade) * int(right_grade) - overlap_grade) & 1).to(torch.bool)
+        if op == "commutator":
+            valid = valid & parity_odd
+        else:
+            valid = valid & ~parity_odd
+    elif op not in {"gp", "wedge"}:
+        raise ValueError(f"Unsupported grade product op {op!r}")
+
+    swap_parity = torch.zeros_like(outputs, dtype=torch.bool)
+    for bit in range(n):
+        left_has_bit = torch.bitwise_and(left, 1 << bit) != 0
+        lower_right_parity = _parity_tensor(torch.bitwise_and(right, (1 << bit) - 1), bit)
+        swap_parity = swap_parity ^ (left_has_bit & lower_right_parity)
+    if negative_mask:
+        metric_parity = _parity_tensor(torch.bitwise_and(overlap, negative_mask), n)
+        swap_parity = swap_parity ^ metric_parity
+
+    factor = 2.0 if op in {"commutator", "anti_commutator"} else 1.0
+    coefficients = torch.where(
+        swap_parity,
+        torch.full((), -factor, dtype=dtype),
+        torch.full((), factor, dtype=dtype),
+    )
+    return torch.where(valid, coefficients, torch.zeros((), dtype=dtype))
 
 
 def build_full_table_product_plan_from_request(

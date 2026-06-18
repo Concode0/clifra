@@ -1133,27 +1133,64 @@ def _spectral_local_lift_impl(
         target_axes = lift_target_axes[grade_slot, :, :grade]
         local_count = local_axes.shape[0]
         target_count = target_axes.shape[0]
+        if grade == 2:
+            target_coefficients = _spectral_local_lift_grade2_impl(
+                local_coefficients,
+                v_local,
+                local_axes,
+                target_axes,
+            )
+            scatter_positions = target_positions.reshape(*((1,) * len(batch_shape)), target_count)
+            scatter_positions = scatter_positions.expand(*batch_shape, target_count)
+            output = output.scatter_add(-1, scatter_positions, target_coefficients * target_mask)
+            continue
+
         rows = torch.index_select(v_local, -2, local_axes.reshape(-1)).reshape(
             *batch_shape,
             local_count,
             grade,
             v_local.shape[-1],
         )
-        expanded = rows.unsqueeze(-3).expand(*batch_shape, local_count, target_count, grade, v_local.shape[-1])
-        column_index = target_axes.reshape(
-            *((1,) * len(batch_shape)),
-            1,
-            target_count,
-            1,
+        target_columns = target_axes.reshape(-1)
+        submatrices = torch.index_select(rows, -1, target_columns).reshape(
+            *batch_shape,
+            local_count,
             grade,
-        ).expand(*batch_shape, local_count, target_count, grade, grade)
-        submatrices = torch.gather(expanded, -1, column_index)
+            target_count,
+            grade,
+        )
+        submatrices = submatrices.transpose(-3, -2)
         determinants = _expanded_small_det_impl(submatrices)
         target_coefficients = torch.einsum("...l,...lt->...t", local_coefficients, determinants)
         scatter_positions = target_positions.reshape(*((1,) * len(batch_shape)), target_count)
         scatter_positions = scatter_positions.expand(*batch_shape, target_count)
         output = output.scatter_add(-1, scatter_positions, target_coefficients * target_mask)
     return output
+
+
+def _spectral_local_lift_grade2_impl(
+    local_coefficients: Tensor,
+    v_local: Tensor,
+    local_axes: Tensor,
+    target_axes: Tensor,
+) -> Tensor:
+    local_left = torch.index_select(v_local, -2, local_axes[:, 0])
+    local_right = torch.index_select(v_local, -2, local_axes[:, 1])
+    target_columns = target_axes.reshape(-1)
+    left_columns = torch.index_select(local_left, -1, target_columns).reshape(
+        *v_local.shape[:-2],
+        local_axes.shape[0],
+        target_axes.shape[0],
+        2,
+    )
+    right_columns = torch.index_select(local_right, -1, target_columns).reshape(
+        *v_local.shape[:-2],
+        local_axes.shape[0],
+        target_axes.shape[0],
+        2,
+    )
+    determinants = left_columns[..., 0] * right_columns[..., 1] - left_columns[..., 1] * right_columns[..., 0]
+    return torch.einsum("...l,...lt->...t", local_coefficients, determinants)
 
 
 def _expanded_small_det_impl(matrix: Tensor) -> Tensor:

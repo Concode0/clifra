@@ -430,9 +430,9 @@ class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         self.input_layout = input_layout
         self.output_layout = output_layout
         self.parameter_layout = parameter_layout
-        self.action = GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout)
         self.use_full_action = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
         self.use_rotor_product_action = _prefer_rotor_product_action(algebra, grade=self.grade, use_full_action=self.use_full_action)
+        self.action = None
         self.vector_matrix = None
         self.left_product = None
         self.right_product = None
@@ -449,6 +449,7 @@ class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         if self.grade not in {1, 2}:
             raise ValueError("planned versor execution currently supports grade=1 and grade=2")
         if not self.use_full_action and not self.use_rotor_product_action:
+            self.action = GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout)
             self.vector_matrix = VersorVectorMatrixExecutor(
                 grade=self.grade,
                 parameter_layout=parameter_layout,
@@ -521,9 +522,9 @@ class MultiVersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         self.input_layout = input_layout
         self.output_layout = output_layout
         self.parameter_layout = parameter_layout
-        self.action = GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout)
         self.use_full_action = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
         self.use_rotor_product_action = _prefer_rotor_product_action(algebra, grade=self.grade, use_full_action=self.use_full_action)
+        self.action = None
         self.vector_matrix = None
         self.left_product = None
         self.right_product = None
@@ -540,6 +541,7 @@ class MultiVersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         if self.grade not in {1, 2}:
             raise ValueError("planned multi-versor execution currently supports grade=1 and grade=2")
         if not self.use_full_action and not self.use_rotor_product_action:
+            self.action = GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout)
             self.vector_matrix = VersorVectorMatrixExecutor(
                 grade=self.grade,
                 parameter_layout=parameter_layout,
@@ -880,12 +882,7 @@ def _graded_action_plan_tensors(
 
 
 def _prefer_rotor_product_action(algebra, *, grade: int, use_full_action: bool) -> bool:
-    if int(grade) != 2 or use_full_action:
-        return False
-    device = torch.device(getattr(algebra, "device", "cpu"))
-    return device.type == "mps"
-
-
+    return int(grade) == 2 and not use_full_action
 
 
 def _layout_indices(layout: GradeLayout, *, device=None) -> torch.Tensor:
