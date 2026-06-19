@@ -60,6 +60,18 @@ uv run --group docs mkdocs build
 The docs are intentionally small: API pages come from live docstrings, and
 `docs/core-design.md` keeps the process snippets.
 
+## Research
+
+`research/continuum_solver` is a research engine built on clifra for fitting
+stable, fast continuum deformations. It uses diffeomorphism-style coordinate
+morphing over clifra charts and invertible bivector fields, inheriting clifra's
+planned algebra execution.
+
+## Contribution
+
+Found a problem or want to propose a change? Please open an Issue first,
+especially before a PR, so the scope is clear.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
@@ -73,19 +85,19 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
   url     = {https://github.com/Concode0/clifra},
   version = {1.0.2},
   year    = {2026},
-  doi     = {10.5281/zenodo.18939519},
+  doi     = {10.5281/zenodo.20759851},
   license = {Apache-2.0}
 }
 ```
 
 ## References
 
-### 1. Geometric Algebra & Layer Architectures
+### RotorGadget Layer Architectures
 This project implements the equivariant layer architectures derived from the irreducible decomposition of Clifford multivectors. 
-* *RotorGadget* implementations found in `clifra/layers/primitives` are based on:
+* *RotorGadget* implementations found in `clifra/layers/primitives/rotor_gadget.py` are based on:
   - Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers from Irreducibles." *arXiv:2507.11688*.
 
-### 2. Optimization on Manifolds
+### Optimization on Manifolds
 The core solvers and adaptive optimizers in `clifra/optimizers/` leverage Riemannian optimization techniques to handle the non-linear constraints of multivector rotors and versor transformations:
   - Absil, P.-A., Mahony, R., & Sepulchre, R. (2008). *Optimization Algorithms on Matrix Manifolds*. Princeton University Press.
   - Boumal, N. (2023). *An Introduction to Optimization on Smooth Manifolds*. Cambridge University Press.
