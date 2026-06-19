@@ -29,7 +29,7 @@ from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.planning.layouts import normalize_product_op
 from clifra.core.runtime.energy import lane_grade_norms
 from clifra.core.runtime.forms import conjugate_scalar_form_signs as _conjugate_scalar_form_signs
-from clifra.core.runtime.tensors import LaneStorage
+from clifra.core.runtime.tensors import LaneStorage, normalize_lane_storage
 
 
 class AlgebraHostMixin:
@@ -395,12 +395,15 @@ class AlgebraHostMixin:
         pairwise: bool = False,
     ):
         """Execute a planner-resolved grade-restricted product."""
+        resolved_left_storage = None if left_storage is None else normalize_lane_storage(left_storage)
+        resolved_right_storage = None if right_storage is None else normalize_lane_storage(right_storage)
+        resolved_output_storage = normalize_lane_storage(output_storage)
         if (
             left_layout is not None
             and right_layout is not None
             and output_layout is not None
-            and left_storage == LaneStorage.COMPACT
-            and right_storage == LaneStorage.COMPACT
+            and resolved_left_storage == LaneStorage.COMPACT
+            and resolved_right_storage == LaneStorage.COMPACT
         ):
             output = self._projected_product_with_explicit_layouts(
                 A,
@@ -414,6 +417,8 @@ class AlgebraHostMixin:
                 output_layout=output_layout,
                 pairwise=pairwise,
             )
+            if resolved_output_storage is LaneStorage.CANONICAL:
+                output = output_layout.full(output)
             return (output, output_layout) if return_layout else output
 
         request = self.planner.product_request(
@@ -426,9 +431,9 @@ class AlgebraHostMixin:
             right_layout=right_layout,
             output_layout=output_layout,
             op=op,
-            left_storage=left_storage,
-            right_storage=right_storage,
-            output_storage=output_storage,
+            left_storage=resolved_left_storage,
+            right_storage=resolved_right_storage,
+            output_storage=resolved_output_storage,
         )
         executor = self.planner.product_executor_for_request(request)
         request.left.validate(A, name="left")

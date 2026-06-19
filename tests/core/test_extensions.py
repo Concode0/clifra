@@ -37,7 +37,7 @@ class TestExtensions:
         assert torch.allclose(x, x_recon, atol=1e-5), "Reconstructed x should match original"
 
     def test_cga_compact_grade1_roundtrip(self):
-        """CGA embedding can use active grade-1 lanes only."""
+        """CGA embedding can use compact grade-1 lanes only."""
         algebra = AlgebraContext(p=4, q=1, device="cpu")
         layout = algebra.layout((1,))
         embed = ConformalEmbedding(algebra, euclidean_dim=3, layout=layout)
@@ -69,7 +69,7 @@ class TestExtensions:
         assert torch.allclose(x, x_recon, atol=1e-5)
 
     def test_pga_compact_grade1_roundtrip(self):
-        """PGA embedding can use active grade-1 lanes only."""
+        """PGA embedding can use compact grade-1 lanes only."""
         algebra = AlgebraContext(p=3, q=0, r=1, device="cpu")
         layout = algebra.layout((1,))
         embed = ProjectiveEmbedding(algebra, euclidean_dim=3, layout=layout)

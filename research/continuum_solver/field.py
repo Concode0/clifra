@@ -65,7 +65,7 @@ class CoordinateChart:
         )
 
     def embed(self, coordinates: torch.Tensor) -> torch.Tensor:
-        """Embed ``[..., coordinate_dim]`` coordinates into grade-1 active lanes."""
+        """Embed ``[..., coordinate_dim]`` coordinates into grade-1 compact lanes."""
         if coordinates.ndim < 1 or coordinates.shape[-1] != self.coordinate_dim:
             raise ValueError(
                 f"coordinates last dimension must be {self.coordinate_dim}, got shape {tuple(coordinates.shape)}"
