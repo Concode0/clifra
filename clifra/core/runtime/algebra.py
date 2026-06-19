@@ -141,15 +141,15 @@ class AlgebraContext(AlgebraHostMixin):
         return output.index_copy(-1, self._basis_vector_indices(vectors.device), vectors)
 
     def reverse(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Reverse full-lane or active multivector coefficients."""
+        """Reverse full-lane or compact multivector coefficients."""
         return self.planned_unary(mv, op="reverse", **kwargs)
 
     def grade_involution(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply grade involution to full-lane or active multivector coefficients."""
+        """Apply grade involution to full-lane or compact multivector coefficients."""
         return self.planned_unary(mv, op="grade_involution", **kwargs)
 
     def clifford_conjugation(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply Clifford conjugation to full-lane or active multivector coefficients."""
+        """Apply Clifford conjugation to full-lane or compact multivector coefficients."""
         return self.planned_unary(mv, op="clifford_conjugation", **kwargs)
 
     def exp(

@@ -46,7 +46,7 @@ from clifra.core.planning.unary import (
     build_unary_request,
     normalize_unary_op,
 )
-from clifra.core.storage import ValueLayout
+from clifra.core.runtime.tensors import LaneStorage, TensorContract
 
 
 class GradePlanner:
@@ -82,7 +82,7 @@ class GradePlanner:
         return self.layout(grades).indices_tensor(device=device)
 
     def convert_values(self, values: torch.Tensor, *, source_layout: GradeLayout, target_layout: GradeLayout):
-        """Convert active values between layouts without full-lane materialization."""
+        """Convert compact values between layouts without full-lane materialization."""
         return target_layout.convert(values, source_layout)
 
     def bivector_squared_signs(self, *, device=None, dtype: torch.dtype = None) -> torch.Tensor:
@@ -176,9 +176,9 @@ class GradePlanner:
         request = ProductRequest(
             spec=self.spec,
             op=normalize_product_op(op),
-            left_value=ValueLayout.active(self.spec, self.layout(left_grades)),
-            right_value=ValueLayout.active(self.spec, self.layout(right_grades)),
-            output_value=ValueLayout.active(self.spec, self.layout(output_grades)),
+            left=TensorContract.compact(self.spec, self.layout(left_grades)),
+            right=TensorContract.compact(self.spec, self.layout(right_grades)),
+            output=TensorContract.compact(self.spec, self.layout(output_grades)),
             dtype=dtype,
             device=torch.device(device),
         )
@@ -196,8 +196,9 @@ class GradePlanner:
         left_layout: GradeLayout = None,
         right_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
-        left_active_lanes: bool = False,
-        right_active_lanes: bool = False,
+        left_storage: LaneStorage | str | None = None,
+        right_storage: LaneStorage | str | None = None,
+        output_storage: LaneStorage | str = LaneStorage.COMPACT,
     ) -> ProductRequest:
         """Normalize product intent into a static request without executing tensors."""
         left_grades = self._default_operand_grades(left_grades, left_layout)
@@ -222,8 +223,9 @@ class GradePlanner:
             left_layout=left_layout,
             right_layout=right_layout,
             output_layout=output_layout,
-            left_active_lanes=left_active_lanes,
-            right_active_lanes=right_active_lanes,
+            left_storage=left_storage,
+            right_storage=right_storage,
+            output_storage=output_storage,
         )
         validate_product_request(self.algebra, request)
         return request
@@ -284,9 +286,9 @@ class GradePlanner:
             request = ProductRequest(
                 spec=self.spec,
                 op=normalized_op,
-                left_value=ValueLayout.active(self.spec, left_layout),
-                right_value=ValueLayout.active(self.spec, right_layout),
-                output_value=ValueLayout.active(self.spec, output_layout),
+                left=TensorContract.compact(self.spec, left_layout),
+                right=TensorContract.compact(self.spec, right_layout),
+                output=TensorContract.compact(self.spec, output_layout),
                 dtype=dtype,
                 device=resolved_device,
             )
@@ -312,7 +314,8 @@ class GradePlanner:
         output_grades=None,
         input_layout: GradeLayout = None,
         output_layout: GradeLayout = None,
-        input_active_lanes: bool = False,
+        input_storage: LaneStorage | str | None = None,
+        output_storage: LaneStorage | str = LaneStorage.COMPACT,
     ) -> UnaryRequest:
         """Normalize unary intent into a static request without executing tensors."""
         if not (op == "grade_projection" and output_grades is not None):
@@ -325,7 +328,8 @@ class GradePlanner:
             output_grades=output_grades,
             input_layout=input_layout,
             output_layout=output_layout,
-            input_active_lanes=input_active_lanes,
+            input_storage=input_storage,
+            output_storage=output_storage,
         )
         validate_unary_request(self.algebra, request)
         return request
@@ -349,8 +353,8 @@ class GradePlanner:
         request = UnaryRequest(
             spec=self.spec,
             op=op,
-            input_value=ValueLayout.active(self.spec, input_layout),
-            output_value=ValueLayout.active(self.spec, output_layout),
+            input=TensorContract.compact(self.spec, input_layout),
+            output=TensorContract.compact(self.spec, output_layout),
             dtype=dtype,
             device=torch.device(device),
         )

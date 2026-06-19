@@ -11,6 +11,7 @@ import torch
 
 from clifra.core.foundation.device import resolve_dtype
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
+from clifra.core.runtime.tensors import LaneStorage
 
 from .policy import (
     AnalysisFeasibility,
@@ -19,7 +20,6 @@ from .policy import (
     build_product_analysis_cost,
     evaluate_matrix_cost,
     evaluate_product_cost,
-    feasibility_record,
 )
 
 
@@ -186,12 +186,12 @@ def action_matrix_feasibility_for_spec(
     return AnalysisFeasibility(verdict.supported, verdict.reason, details)
 
 
-def declared_full_product_kwargs(algebra) -> dict[str, Iterable[int]]:
-    """Return explicit full-grade metadata for planned full-lane products."""
+def declared_full_product_kwargs(algebra) -> dict[str, object]:
+    """Return explicit full-grade metadata for planned compact product outputs."""
     grades = full_grades(algebra)
     return {
         "left_grades": grades,
         "right_grades": grades,
         "output_grades": grades,
-        "active_output": True,
+        "output_storage": LaneStorage.COMPACT,
     }

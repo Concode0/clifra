@@ -11,7 +11,7 @@ from clifra.core.execution.attention import GeometricAttentionScoreExecutor
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import eps_like
-from clifra.core.storage import resolve_layer_layout_contract
+from clifra.core.runtime.tensors import resolve_contract
 
 from ..primitives.linear import CliffordLinear
 
@@ -105,7 +105,7 @@ class GeometricProductAttention(CliffordModule):
         self.head_channels = channels // num_heads
         self.causal = causal
         self.bivector_weight = bivector_weight
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
 
@@ -196,7 +196,7 @@ class EntropyGatedAttention(CliffordModule):
     """Geometric attention with an example bivector-entropy gate.
 
     This is intentionally implemented as a layout-first block: inputs and
-    outputs use the active lanes declared by ``layout`` or ``grades``.
+    outputs use the compact lanes declared by ``layout`` or ``grades``.
     """
 
     def __init__(
@@ -215,7 +215,7 @@ class EntropyGatedAttention(CliffordModule):
         self.channels = channels
         self.eta = eta
         self.H_base = H_base
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.base_attention = GeometricProductAttention(
             algebra,

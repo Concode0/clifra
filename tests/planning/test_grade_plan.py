@@ -6,12 +6,10 @@ import torch
 
 from clifra.core.config import make_algebra
 from clifra.core.execution.action import (
-    BivectorVectorGeneratorExecutor,
     FullSandwichActionExecutor,
     apply_graded_linear_action,
     apply_multi_graded_linear_action,
 )
-from clifra.core.execution.exp import BivectorExpExecutor, _filtered_symmetric_eigh_op
 from clifra.core.execution.handles import (
     FullSandwichActionHandle,
     MultiVersorActionHandle,
@@ -33,11 +31,6 @@ from clifra.core.foundation.basis import (
     product_output_grades,
 )
 from clifra.core.foundation.layout import AlgebraSpec
-from clifra.core.planning.exp import (
-    BivectorExpExecutionPolicy,
-    select_bivector_exp_executor_family,
-    spectral_exp_preselection,
-)
 from clifra.core.planning.flow import GradeFlow
 from clifra.core.planning.layouts import build_product_request
 from clifra.core.planning.planner import GradePlanner
@@ -46,6 +39,7 @@ from clifra.core.planning.product import build_grade_product_plan
 from clifra.core.planning.tree import build_grade_plan_tree
 from clifra.core.planning.unary import build_unary_request
 from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.runtime.tensors import LaneStorage
 from tests.helpers.small_oracle import SmallCliffordOracle
 
 pytestmark = pytest.mark.unit
@@ -92,8 +86,8 @@ def _sparse_pairwise_product_reference(
     prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
     left = left.expand(*prefix, *left.shape[-2:])
     right = right.expand(*prefix, *right.shape[-2:])
-    left_terms = torch.index_select(left, -1, executor.left_active_positions)
-    right_terms = torch.index_select(right, -1, executor.right_active_positions)
+    left_terms = torch.index_select(left, -1, executor.left_compact_positions)
+    right_terms = torch.index_select(right, -1, executor.right_compact_positions)
     terms = left_terms.unsqueeze(-2) * right_terms.unsqueeze(-3) * executor.coefficients
     output = terms.new_zeros(*terms.shape[:-1], executor.output_dim)
     return output.index_add(-1, executor.output_positions, terms)
@@ -173,8 +167,8 @@ def test_product_request_infers_declared_layouts_and_output_grades():
     assert request.left_grades == (1,)
     assert request.right_grades == (1,)
     assert request.output_grades == (0, 2)
-    assert request.left_uses_active_lanes
-    assert request.right_uses_active_lanes
+    assert request.left_uses_compact_storage
+    assert request.right_uses_compact_storage
 
 
 def test_product_request_detects_active_lane_tensors_from_layout_shape():
@@ -193,8 +187,8 @@ def test_product_request_detects_active_lane_tensors_from_layout_shape():
         op="gp",
     )
 
-    assert request.left_uses_active_lanes
-    assert request.right_uses_active_lanes
+    assert request.left_uses_compact_storage
+    assert request.right_uses_compact_storage
 
 
 def test_unary_request_infers_projection_layout_without_full_layout():
@@ -211,7 +205,7 @@ def test_unary_request_infers_projection_layout_without_full_layout():
 
     assert request.input_grades == (1,)
     assert request.output_grades == (1,)
-    assert request.input_uses_active_lanes
+    assert request.input_uses_compact_storage
 
 
 def test_grade_flow_propagates_embedding_unary_product_and_merge():
@@ -299,9 +293,9 @@ def test_wedge_full_and_planned_paths_are_exterior_product_for_higher_grades():
         left_layout=layout_2,
         right_layout=layout_1,
         output_grades=(3,),
-        left_active_lanes=True,
-        right_active_lanes=True,
-        active_output=True,
+        left_storage=LaneStorage.COMPACT,
+        right_storage=LaneStorage.COMPACT,
+        output_storage=LaneStorage.COMPACT,
     )
 
     assert torch.allclose(full, oracle.product(e12, e3, op="wedge"), atol=1e-12, rtol=1e-12)
@@ -392,8 +386,8 @@ def test_product_plan_owns_active_lane_position_buffers():
     expected_left = torch.tensor([left_positions[int(index)] for index in plan.left_indices], dtype=torch.long)
     expected_right = torch.tensor([right_positions[int(index)] for index in plan.right_indices], dtype=torch.long)
 
-    assert torch.equal(plan.left_active_positions.cpu(), expected_left)
-    assert torch.equal(plan.right_active_positions.cpu(), expected_right)
+    assert torch.equal(plan.left_compact_positions.cpu(), expected_left)
+    assert torch.equal(plan.right_compact_positions.cpu(), expected_right)
     assert torch.allclose(
         product.forward_compact(plan.left_layout.compact(A), plan.right_layout.compact(B)),
         product(A, B),
@@ -854,7 +848,7 @@ def test_action_plan_handles_split_checked_validation_from_fast_forward():
         handle.checked(values, weights[:3])
 
 
-def test_algebra_projected_product_matches_small_oracle_and_active_output():
+def test_algebra_projected_product_matches_small_oracle_and_compact_output():
     algebra = AlgebraContext(4, 1, 1, device=DEVICE, dtype=torch.float64)
     oracle = _oracle_for(algebra)
     vector_layout = algebra.layout((1,))
@@ -1277,8 +1271,8 @@ def test_context_planned_unary_compact_reverse():
     actual, output_layout = algebra.reverse(
         values,
         input_layout=layout,
-        input_active_lanes=True,
-        active_output=True,
+        input_storage=LaneStorage.COMPACT,
+        output_storage=LaneStorage.COMPACT,
         return_layout=True,
     )
 
@@ -1574,8 +1568,8 @@ def test_planner_unary_handles_compact_layouts():
     actual, output_layout = algebra.reverse(
         values,
         input_layout=layout,
-        input_active_lanes=True,
-        active_output=True,
+        input_storage=LaneStorage.COMPACT,
+        output_storage=LaneStorage.COMPACT,
         return_layout=True,
     )
 
@@ -1596,7 +1590,7 @@ def test_active_geometric_product_stays_active_in_high_dimensions():
         right,
         left_layout=vector_layout,
         right_layout=vector_layout,
-        active_output=True,
+        output_storage=LaneStorage.COMPACT,
         return_layout=True,
     )
 
@@ -1649,7 +1643,7 @@ def test_context_default_grades_drive_compact_product_without_callsite_metadata(
     values, output_layout = algebra.geometric_product(
         left,
         right,
-        active_output=True,
+        output_storage=LaneStorage.COMPACT,
         return_layout=True,
     )
 
@@ -1671,7 +1665,7 @@ def test_context_declared_grades_infer_compact_operand_shapes():
         right,
         left_grades=(1,),
         right_grades=(1,),
-        active_output=True,
+        output_storage=LaneStorage.COMPACT,
         return_layout=True,
     )
 
@@ -1693,7 +1687,7 @@ def test_context_projected_product_pairwise_mixed_compact_widths():
         right_layout=right_layout,
         output_grades=(3,),
         pairwise=True,
-        active_output=True,
+        output_storage=LaneStorage.COMPACT,
         return_layout=True,
     )
     executor = algebra.product_executor(
@@ -1724,7 +1718,7 @@ def test_context_projected_product_suggests_pairwise_for_mismatched_item_axes():
             left_layout=left_layout,
             right_layout=right_layout,
             output_grades=(3,),
-            active_output=True,
+            output_storage=LaneStorage.COMPACT,
         )
 
 
@@ -1741,11 +1735,11 @@ def test_context_pairwise_projected_product_requires_item_axes():
             right_layout=right_layout,
             output_grades=(3,),
             pairwise=True,
-            active_output=True,
+            output_storage=LaneStorage.COMPACT,
         )
 
 
-def test_context_declared_product_returns_active_output_without_full_materialization():
+def test_context_declared_product_returns_compact_output_without_full_materialization():
     algebra = make_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32)
     vector_layout = algebra.layout((1,))
     left = torch.zeros(1, vector_layout.dim)
@@ -1826,7 +1820,7 @@ def test_context_static_product_cost_limits_raise_before_executor_build():
             right,
             left_layout=layout,
             right_layout=layout,
-            active_output=True,
+            output_storage=LaneStorage.COMPACT,
         )
 
 
@@ -1849,7 +1843,7 @@ def test_context_static_layout_cost_limit_raises_before_basis_materialization():
     limits = PlanningLimits(warn_lanes=32, max_lanes=64, warn_pairs=512, max_pairs=1024)
     algebra = make_algebra(32, 0, 0, device=DEVICE, dtype=torch.float32, planning_limits=limits)
 
-    with pytest.raises(ValueError, match="active lanes"):
+    with pytest.raises(ValueError, match="compact lanes"):
         algebra.layout((1, 2))
 
 
@@ -1933,7 +1927,7 @@ def test_context_static_product_cost_warns_near_configured_limits():
             right,
             left_layout=layout,
             right_layout=layout,
-            active_output=True,
+            output_storage=LaneStorage.COMPACT,
         )
 
     assert values.shape[-1] == algebra.layout((0, 2)).dim
@@ -2051,9 +2045,9 @@ def test_context_projected_product_compiles_fullgraph_from_cold_planner_cache():
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(0, 2),
-            left_active_lanes=True,
-            right_active_lanes=True,
-            active_output=True,
+            left_storage=LaneStorage.COMPACT,
+            right_storage=LaneStorage.COMPACT,
+            output_storage=LaneStorage.COMPACT,
         )
 
     assert not algebra.planner._product_executors

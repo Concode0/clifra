@@ -9,7 +9,7 @@ import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
-from clifra.core.storage import resolve_layer_layout_contract
+from clifra.core.runtime.tensors import resolve_contract
 from clifra.functional.activation import geometric_gelu, geometric_square, grade_swish
 
 from ._utils import require_positive_int
@@ -22,7 +22,7 @@ class GeometricGELU(CliffordModule):
         """Initialize Geometric GELU."""
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.bias = nn.Parameter(torch.zeros(self.channels))
 
@@ -43,7 +43,7 @@ class GeometricSquare(CliffordModule):
         """Initialize gated geometric self-product."""
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.gate_logit = nn.Parameter(torch.full((self.channels,), -2.0))
 
@@ -64,7 +64,7 @@ class GradeSwish(CliffordModule):
         """Initialize grade-wise Swish activation."""
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.n_grades = self.algebra.n + 1
 

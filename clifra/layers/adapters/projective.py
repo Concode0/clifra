@@ -8,13 +8,13 @@ import torch
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import signed_clamp_min
-from clifra.core.storage import resolve_layer_layout
+from clifra.core.runtime.tensors import resolve_layout
 
 from ._layout import basis_positions
 
 
 class ProjectiveEmbedding(CliffordModule):
-    """Example projective embedding over a declared active-lane layout.
+    """Example projective embedding over a declared compact-lane layout.
 
     Maps Euclidean R^d points to grade-1 elements of Cl(d, 0, 1) and back.
     The output lane width is ``layout.dim`` rather than always ``algebra.dim``.
@@ -59,7 +59,7 @@ class ProjectiveEmbedding(CliffordModule):
                 f"Projective embedding needs Cl(>={d}, 0, >=1), got Cl({algebra.p},{algebra.q},{algebra.r})"
             )
         self.euclidean_dim = d
-        self.layout = resolve_layer_layout(algebra, layout=layout, grades=grades)
+        self.layout = resolve_layout(algebra, layout=layout, grades=grades)
         self.lane_dim = self.layout.dim
 
         g1_basis = [1 << bit for bit in range(d)]

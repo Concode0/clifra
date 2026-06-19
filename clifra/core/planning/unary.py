@@ -13,7 +13,12 @@ import torch
 
 from clifra.core.foundation.basis import normalize_grades, reverse_sign
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.storage import ValueLayout, check_layout_spec, resolve_value_layout
+from clifra.core.runtime.tensors import (
+    LaneStorage,
+    TensorContract,
+    check_layout_spec,
+    infer_contract,
+)
 
 GradeUnaryOp = Literal["identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"]
 _VALID_UNARY_OPS = {"identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"}
@@ -25,25 +30,25 @@ class UnaryRequest:
 
     spec: AlgebraSpec
     op: GradeUnaryOp
-    input_value: ValueLayout
-    output_value: ValueLayout
+    input: TensorContract
+    output: TensorContract
     dtype: torch.dtype
     device: torch.device
 
     @property
     def input_layout(self) -> GradeLayout:
         """Return the resolved input layout."""
-        return self.input_value.layout
+        return self.input.layout
 
     @property
     def output_layout(self) -> GradeLayout:
         """Return the resolved output layout."""
-        return self.output_value.layout
+        return self.output.layout
 
     @property
-    def input_uses_active_lanes(self) -> bool:
+    def input_uses_compact_storage(self) -> bool:
         """Return whether the input tensor is already compact."""
-        return self.input_value.uses_active_lanes
+        return self.input.uses_compact_storage
 
     @property
     def input_grades(self) -> tuple[int, ...]:
@@ -110,36 +115,37 @@ def build_unary_request(
     output_grades=None,
     input_layout: Optional[GradeLayout] = None,
     output_layout: Optional[GradeLayout] = None,
-    input_active_lanes: bool = False,
+    input_storage: LaneStorage | str | None = None,
+    output_storage: LaneStorage | str = LaneStorage.COMPACT,
 ) -> UnaryRequest:
     """Resolve caller input into a static unary request."""
     op = normalize_unary_op(op)
-    if op == "grade_projection" and input_grades is None and input_layout is None and not input_active_lanes:
+    if op == "grade_projection" and input_grades is None and input_layout is None and input_storage is None:
         if output_layout is not None:
             input_layout = output_layout
         elif output_grades is not None:
             input_grades = output_grades
-    input_value = resolve_value_layout(
+    input_contract = infer_contract(
         spec,
         values,
         grades=input_grades,
         layout=input_layout,
-        active_lanes=input_active_lanes,
+        storage=input_storage,
         side="input",
     )
     output_layout = resolve_unary_output_layout(
         spec,
         op=op,
-        input_layout=input_value.layout,
+        input_layout=input_contract.layout,
         output_grades=output_grades,
         output_layout=output_layout,
     )
-    output_value = ValueLayout.active(spec, output_layout)
+    output_contract = TensorContract(spec=spec, layout=output_layout, storage=output_storage)
     return UnaryRequest(
         spec=spec,
         op=op,
-        input_value=input_value,
-        output_value=output_value,
+        input=input_contract,
+        output=output_contract,
         dtype=values.dtype,
         device=values.device,
     )

@@ -5,7 +5,7 @@
 """Pure loss and regularization formulas.
 
 Multivector losses use the final axis as the Clifford lane axis. Full-lane
-multivectors are ``[..., D]`` and active layout values are ``[..., L]``. Lane
+multivectors are ``[..., D]`` and compact layout values are ``[..., L]``. Lane
 masks and metric vectors are shaped ``[D]`` or ``[L]``. Non-Clifford task
 tensors document their ordinary axes locally.
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from clifra.core.runtime.metric import hermitian_grade_spectrum
+from clifra.core.runtime.energy import lane_grade_distribution
 
 
 def geometric_mse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -56,15 +56,14 @@ def bivector_regularization(algebra, values: torch.Tensor, *, grade: int = 2) ->
     return (residual**2).sum(dim=-1).mean()
 
 
-def hermitian_grade_regularization(algebra, features: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """Return MSE between actual and target Hermitian grade distributions.
+def grade_energy_regularization(algebra, features: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Return MSE between actual and target positive grade-energy distributions.
 
     ``features`` are full-lane multivectors with shape ``[..., D]`` and ``target``
     is a grade distribution with shape ``[G]``.
     """
     flat = features.reshape(-1, features.shape[-1])
-    spectrum = hermitian_grade_spectrum(algebra, flat)
-    dist = spectrum / (spectrum.sum(dim=-1, keepdim=True) + 1e-8)
+    dist = lane_grade_distribution(algebra, flat)
     return F.mse_loss(dist.mean(dim=0), target)
 
 

@@ -14,7 +14,7 @@ import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
-from clifra.core.storage import resolve_layer_layout_contract
+from clifra.core.runtime.tensors import resolve_contract
 
 from ._utils import require_choice, require_positive_int
 
@@ -70,7 +70,7 @@ class CliffordLinear(CliffordModule):
         self.in_channels = require_positive_int(in_channels, "in_channels")
         self.out_channels = require_positive_int(out_channels, "out_channels")
         self.backend = require_choice(backend, "backend", ("traditional", "rotor"))
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
         self.output_layout = self.layout

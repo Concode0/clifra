@@ -49,7 +49,7 @@ class GradePlanTree:
 
     @property
     def path_count(self) -> int:
-        """Number of active homogeneous product routes."""
+        """Number of selected homogeneous product routes."""
         return len(self.paths)
 
     @property
@@ -65,7 +65,7 @@ class GradePlanTree:
         return sum(math.ceil(path.estimated_pairs / self.chunk_pair_limit) for path in self.paths)
 
     def path_for_grades(self, left_grade: int, right_grade: int) -> Optional[GradePathNode]:
-        """Return the active path for a homogeneous grade pair."""
+        """Return the selected path for a homogeneous grade pair."""
         for path in self.paths:
             if path.left_grade == left_grade and path.right_grade == right_grade:
                 return path

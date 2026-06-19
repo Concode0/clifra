@@ -31,7 +31,7 @@ class ProductPlanHandle(nn.Module):
         return self.executor.forward_compact(left, right)
 
     def pairwise(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Execute pairwise item-axis product for active-lane tensors."""
+        """Execute pairwise item-axis product for compact-lane tensors."""
         return self.executor.forward_pairwise_compact(left, right)
 
 
@@ -131,7 +131,7 @@ class FullSandwichActionHandle(nn.Module):
 
 
 class VersorActionHandle(nn.Module):
-    """Grade-1 or grade-2 versor action handle for active-lane values."""
+    """Grade-1 or grade-2 versor action handle for compact-lane values."""
 
     def __init__(self, executor: nn.Module):
         super().__init__()
@@ -154,7 +154,7 @@ class VersorActionHandle(nn.Module):
 
 
 class MultiVersorActionHandle(nn.Module):
-    """Weighted multi-versor action handle for active-lane values."""
+    """Weighted multi-versor action handle for compact-lane values."""
 
     def __init__(self, executor: nn.Module):
         super().__init__()
@@ -177,7 +177,7 @@ class MultiVersorActionHandle(nn.Module):
 
 
 class PairedBivectorActionHandle(nn.Module):
-    """Independent left/right bivector action handle for active-lane values."""
+    """Independent left/right bivector action handle for compact-lane values."""
 
     def __init__(self, executor: nn.Module):
         super().__init__()

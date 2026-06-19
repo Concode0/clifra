@@ -2,10 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Runtime algebra host."""
+"""Runtime algebra host and helper modules."""
 
-from .algebra import AlgebraContext
-
-__all__ = [
-    "AlgebraContext",
-]
+__all__: list[str] = []

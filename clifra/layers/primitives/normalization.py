@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
-from clifra.core.storage import resolve_layer_layout_contract
+from clifra.core.runtime.tensors import resolve_contract
 
 from ._utils import require_positive_int
 
@@ -52,7 +52,7 @@ class CliffordLayerNorm(CliffordModule):
             raise ValueError(f"eps must be positive, got {eps}")
         self.eps = eps
         self.recover = recover
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
 

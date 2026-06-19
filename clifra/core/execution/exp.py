@@ -95,14 +95,14 @@ def _filtered_eigenvalue_cauchy_inverse(eigenvalues: Tensor, tolerances: Tensor)
 def _sparse_product_compact_impl(
     left: Tensor,
     right: Tensor,
-    left_active_positions: Tensor,
-    right_active_positions: Tensor,
+    left_compact_positions: Tensor,
+    right_compact_positions: Tensor,
     output_positions: Tensor,
     coefficients: Tensor,
     output_dim: int,
 ) -> Tensor:
-    left_terms = torch.index_select(left, -1, left_active_positions)
-    right_terms = torch.index_select(right, -1, right_active_positions)
+    left_terms = torch.index_select(left, -1, left_compact_positions)
+    right_terms = torch.index_select(right, -1, right_compact_positions)
     left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
     terms = left_terms * right_terms * coefficients
     output = terms.new_zeros(*terms.shape[:-1], output_dim)
@@ -977,8 +977,8 @@ def _spectral_local_sinc_impl(theta: Tensor) -> Tensor:
 
 def _spectral_local_sparse_reduce_impl(
     local_factors: Tensor,
-    left_active_positions: Tensor,
-    right_active_positions: Tensor,
+    left_compact_positions: Tensor,
+    right_compact_positions: Tensor,
     output_positions: Tensor,
     coefficients: Tensor,
 ) -> Tensor:
@@ -989,8 +989,8 @@ def _spectral_local_sparse_reduce_impl(
         return _spectral_local_sparse_product_impl(
             local_factors[..., 0, :],
             local_factors[..., 1, :],
-            left_active_positions,
-            right_active_positions,
+            left_compact_positions,
+            right_compact_positions,
             output_positions,
             coefficients,
         )
@@ -998,40 +998,40 @@ def _spectral_local_sparse_reduce_impl(
         first = _spectral_local_sparse_product_impl(
             local_factors[..., 0, :],
             local_factors[..., 1, :],
-            left_active_positions,
-            right_active_positions,
+            left_compact_positions,
+            right_compact_positions,
             output_positions,
             coefficients,
         )
         return _spectral_local_sparse_product_impl(
             first,
             local_factors[..., 2, :],
-            left_active_positions,
-            right_active_positions,
+            left_compact_positions,
+            right_compact_positions,
             output_positions,
             coefficients,
         )
     first = _spectral_local_sparse_product_impl(
         local_factors[..., 0, :],
         local_factors[..., 1, :],
-        left_active_positions,
-        right_active_positions,
+        left_compact_positions,
+        right_compact_positions,
         output_positions,
         coefficients,
     )
     second = _spectral_local_sparse_product_impl(
         local_factors[..., 2, :],
         local_factors[..., 3, :],
-        left_active_positions,
-        right_active_positions,
+        left_compact_positions,
+        right_compact_positions,
         output_positions,
         coefficients,
     )
     return _spectral_local_sparse_product_impl(
         first,
         second,
-        left_active_positions,
-        right_active_positions,
+        left_compact_positions,
+        right_compact_positions,
         output_positions,
         coefficients,
     )
@@ -1040,16 +1040,16 @@ def _spectral_local_sparse_reduce_impl(
 def _spectral_local_sparse_product_impl(
     left: Tensor,
     right: Tensor,
-    left_active_positions: Tensor,
-    right_active_positions: Tensor,
+    left_compact_positions: Tensor,
+    right_compact_positions: Tensor,
     output_positions: Tensor,
     coefficients: Tensor,
 ) -> Tensor:
     return _sparse_product_compact_impl(
         left,
         right,
-        left_active_positions,
-        right_active_positions,
+        left_compact_positions,
+        right_compact_positions,
         output_positions,
         coefficients,
         left.shape[-1],
@@ -1059,8 +1059,8 @@ def _spectral_local_sparse_product_impl(
 def _spectral_local_nilpotent_exp_impl(
     nilpotent: Tensor,
     scalar_mask: Tensor,
-    left_active_positions: Tensor,
-    right_active_positions: Tensor,
+    left_compact_positions: Tensor,
+    right_compact_positions: Tensor,
     output_positions: Tensor,
     coefficients: Tensor,
     ideal_dim: int,
@@ -1075,8 +1075,8 @@ def _spectral_local_nilpotent_exp_impl(
         term = _spectral_local_sparse_product_impl(
             term,
             nilpotent,
-            left_active_positions,
-            right_active_positions,
+            left_compact_positions,
+            right_compact_positions,
             output_positions,
             coefficients,
         )

@@ -44,10 +44,10 @@ class GradeProductPlan:
         right_indices: torch.Tensor,
         output_indices: torch.Tensor,
         output_positions: torch.Tensor,
-        left_active_positions: torch.Tensor,
-        right_active_positions: torch.Tensor,
+        left_compact_positions: torch.Tensor,
+        right_compact_positions: torch.Tensor,
         coefficients: torch.Tensor,
-        active_output_indices: torch.Tensor,
+        output_basis_indices: torch.Tensor,
         pairwise_contract_left: bool,
         pairwise_gather_positions: torch.Tensor,
         pairwise_coefficients: torch.Tensor,
@@ -62,10 +62,10 @@ class GradeProductPlan:
         self.right_indices = right_indices
         self.output_indices = output_indices
         self.output_positions = output_positions
-        self.left_active_positions = left_active_positions
-        self.right_active_positions = right_active_positions
+        self.left_compact_positions = left_compact_positions
+        self.right_compact_positions = right_compact_positions
         self.coefficients = coefficients
-        self.active_output_indices = active_output_indices
+        self.output_basis_indices = output_basis_indices
         self.pairwise_contract_left = bool(pairwise_contract_left)
         self.pairwise_gather_positions = pairwise_gather_positions
         self.pairwise_coefficients = pairwise_coefficients
@@ -119,7 +119,7 @@ class GradeProductPlan:
     @property
     def output_dim(self) -> int:
         """Return the compact output lane count."""
-        return int(self.active_output_indices.numel())
+        return int(self.output_basis_indices.numel())
 
     @property
     def is_empty(self) -> bool:
@@ -284,8 +284,8 @@ def build_grade_product_plan_from_tree(
     }
     left_layout_indices = basis_indices_tensor(left_layout.basis_indices, n=n, role="left layout basis indices")
     right_layout_indices = basis_indices_tensor(right_layout.basis_indices, n=n, role="right layout basis indices")
-    active_outputs = basis_index_tuple_for_grades(n, output_grade_tuple)
-    active_output_indices = basis_indices_tensor(active_outputs, n=n, role="active output basis indices")
+    output_basis = basis_index_tuple_for_grades(n, output_grade_tuple)
+    output_basis_indices = basis_indices_tensor(output_basis, n=n, role="compact output basis indices")
 
     left_chunks: list[torch.Tensor] = []
     right_chunks: list[torch.Tensor] = []
@@ -312,7 +312,7 @@ def build_grade_product_plan_from_tree(
             stop = min(start + rows_per_chunk, left_basis.numel())
             left = left_basis[start:stop].view(-1, 1)
             output_indices = torch.bitwise_xor(left, right)
-            output_positions = _positions_in_sorted_indices(output_indices, active_output_indices)
+            output_positions = _positions_in_sorted_indices(output_indices, output_basis_indices)
             output_grades = _bit_count_tensor(output_indices, n)
             valid = output_positions >= 0
             valid = valid & (output_grades.unsqueeze(-1) == allowed_output_grades).any(dim=-1)
@@ -347,15 +347,15 @@ def build_grade_product_plan_from_tree(
     plan_right = _cat_long_chunks(right_chunks)
     plan_output = _cat_long_chunks(output_chunks)
     plan_positions = _cat_long_chunks(output_position_chunks)
-    plan_left_active_positions = _cat_long_chunks(left_position_chunks)
-    plan_right_active_positions = _cat_long_chunks(right_position_chunks)
+    plan_left_compact_positions = _cat_long_chunks(left_position_chunks)
+    plan_right_compact_positions = _cat_long_chunks(right_position_chunks)
     plan_coefficients = _cat_float_chunks(coefficient_chunks, dtype=dtype)
     pairwise_contract_left, pairwise_gather_positions, pairwise_coefficients = _build_pairwise_contraction_buffers(
         left_dim=left_layout.dim,
         right_dim=right_layout.dim,
-        output_dim=len(active_outputs),
-        left_positions=plan_left_active_positions,
-        right_positions=plan_right_active_positions,
+        output_dim=len(output_basis),
+        left_positions=plan_left_compact_positions,
+        right_positions=plan_right_compact_positions,
         output_positions=plan_positions,
         coefficients=plan_coefficients,
         dtype=dtype,
@@ -374,11 +374,11 @@ def build_grade_product_plan_from_tree(
         right_indices=plan_right.to(device=device),
         output_indices=plan_output.to(device=device),
         output_positions=plan_positions.to(device=device),
-        left_active_positions=plan_left_active_positions.to(device=device),
-        right_active_positions=plan_right_active_positions.to(device=device),
+        left_compact_positions=plan_left_compact_positions.to(device=device),
+        right_compact_positions=plan_right_compact_positions.to(device=device),
         coefficients=plan_coefficients.to(device=device),
-        active_output_indices=basis_indices_tensor(
-            active_outputs, n=n, role="active output basis indices", device=device
+        output_basis_indices=basis_indices_tensor(
+            output_basis, n=n, role="compact output basis indices", device=device
         ),
         pairwise_contract_left=pairwise_contract_left,
         pairwise_gather_positions=pairwise_gather_positions,

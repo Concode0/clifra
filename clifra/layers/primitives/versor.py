@@ -9,7 +9,7 @@ import torch.nn as nn
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
-from clifra.core.storage import resolve_layer_layout_contract
+from clifra.core.runtime.tensors import resolve_contract
 
 from ._utils import (
     grade_indices,
@@ -61,9 +61,9 @@ class VersorLayer(CliffordModule):
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
         self.grade = int(grade)
-        self.input_contract = resolve_layer_layout_contract(algebra, layout=input_layout, grades=input_grades)
+        self.input_contract = resolve_contract(algebra, layout=input_layout, grades=input_grades)
         self.output_contract = (
-            resolve_layer_layout_contract(algebra, layout=output_layout, grades=output_grades)
+            resolve_contract(algebra, layout=output_layout, grades=output_grades)
             if output_layout is not None or output_grades is not None
             else self.input_contract
         )

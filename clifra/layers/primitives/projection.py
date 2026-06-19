@@ -9,7 +9,7 @@ import torch.nn as nn
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import covariance_regularizer
-from clifra.core.storage import resolve_layer_layout_contract
+from clifra.core.runtime.tensors import resolve_contract
 from clifra.utils.mps import safe_linalg_solve
 
 from ._utils import require_positive_int
@@ -33,7 +33,7 @@ class BladeSelector(CliffordModule):
         """
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
 
@@ -101,7 +101,7 @@ class GeometricNeutralizer(CliffordModule):
         self.momentum = momentum
         if not 0.0 <= momentum <= 1.0:
             raise ValueError(f"momentum must be in [0, 1], got {momentum}")
-        self.layout_contract = resolve_layer_layout_contract(algebra, layout=layout, grades=grades)
+        self.layout_contract = resolve_contract(algebra, layout=layout, grades=grades)
         self.layout = self.layout_contract.layout
         self.lane_dim = self.layout_contract.lane_dim
 

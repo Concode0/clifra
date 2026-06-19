@@ -8,13 +8,13 @@ import torch
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import signed_clamp_min
-from clifra.core.storage import resolve_layer_layout
+from clifra.core.runtime.tensors import resolve_layout
 
 from ._layout import basis_positions
 
 
 class ConformalEmbedding(CliffordModule):
-    """Example conformal embedding over a declared active-lane layout.
+    """Example conformal embedding over a declared compact-lane layout.
 
     Maps Euclidean R^d vectors to grade-1 conformal points in Cl(d+1, 1) and
     back. The output lane width is ``layout.dim`` rather than always
@@ -55,7 +55,7 @@ class ConformalEmbedding(CliffordModule):
                 f"Conformal embedding needs Cl(>={d + 1}, >=1), got Cl({algebra.p},{algebra.q},{algebra.r})"
             )
         self.euclidean_dim = d
-        self.layout = resolve_layer_layout(algebra, layout=layout, grades=grades)
+        self.layout = resolve_layout(algebra, layout=layout, grades=grades)
         self.scalar_layout = algebra.layout((0,))
         self.lane_dim = self.layout.dim
 

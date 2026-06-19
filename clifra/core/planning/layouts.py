@@ -13,12 +13,12 @@ import torch
 
 from clifra.core.foundation.basis import GradeProductOp, expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.storage import (
-    ValueLayout,
+from clifra.core.runtime.tensors import (
+    LaneStorage,
+    TensorContract,
     check_layout_spec,
-    resolve_operand_layout,
-    resolve_value_layout,
-    tensor_uses_active_lanes,
+    infer_contract,
+    normalize_lane_storage,
 )
 
 _VALID_PRODUCT_OPS = {
@@ -36,9 +36,7 @@ __all__ = [
     "build_product_request",
     "check_layout_spec",
     "normalize_product_op",
-    "resolve_operand_layout",
     "resolve_output_layout",
-    "tensor_uses_active_lanes",
 ]
 
 
@@ -54,36 +52,36 @@ class ProductRequest:
 
     spec: AlgebraSpec
     op: GradeProductOp
-    left_value: ValueLayout
-    right_value: ValueLayout
-    output_value: ValueLayout
+    left: TensorContract
+    right: TensorContract
+    output: TensorContract
     dtype: torch.dtype
     device: torch.device
 
     @property
     def left_layout(self) -> GradeLayout:
         """Return the resolved layout for the left operand."""
-        return self.left_value.layout
+        return self.left.layout
 
     @property
     def right_layout(self) -> GradeLayout:
         """Return the resolved layout for the right operand."""
-        return self.right_value.layout
+        return self.right.layout
 
     @property
     def output_layout(self) -> GradeLayout:
         """Return the resolved layout for the product output."""
-        return self.output_value.layout
+        return self.output.layout
 
     @property
-    def left_uses_active_lanes(self) -> bool:
+    def left_uses_compact_storage(self) -> bool:
         """Return whether the left tensor is already compact."""
-        return self.left_value.uses_active_lanes
+        return self.left.uses_compact_storage
 
     @property
-    def right_uses_active_lanes(self) -> bool:
+    def right_uses_compact_storage(self) -> bool:
         """Return whether the right tensor is already compact."""
-        return self.right_value.uses_active_lanes
+        return self.right.uses_compact_storage
 
     @property
     def left_grades(self) -> tuple[int, ...]:
@@ -126,43 +124,44 @@ def build_product_request(
     left_layout: Optional[GradeLayout] = None,
     right_layout: Optional[GradeLayout] = None,
     output_layout: Optional[GradeLayout] = None,
-    left_active_lanes: bool = False,
-    right_active_lanes: bool = False,
+    left_storage: LaneStorage | str | None = None,
+    right_storage: LaneStorage | str | None = None,
+    output_storage: LaneStorage | str = LaneStorage.COMPACT,
 ) -> ProductRequest:
     """Resolve caller input into a static product request."""
     normalized_op = normalize_product_op(op)
-    left_value = resolve_value_layout(
+    left_contract = infer_contract(
         spec,
         left,
         grades=left_grades,
         layout=left_layout,
-        active_lanes=left_active_lanes,
+        storage=left_storage,
         side="left",
     )
-    right_value = resolve_value_layout(
+    right_contract = infer_contract(
         spec,
         right,
         grades=right_grades,
         layout=right_layout,
-        active_lanes=right_active_lanes,
+        storage=right_storage,
         side="right",
     )
     output_layout = resolve_output_layout(
         spec,
         op=normalized_op,
-        left_layout=left_value.layout,
-        right_layout=right_value.layout,
+        left_layout=left_contract.layout,
+        right_layout=right_contract.layout,
         output_grades=output_grades,
         output_layout=output_layout,
     )
-    output_value = ValueLayout.active(spec, output_layout)
+    output_contract = TensorContract(spec=spec, layout=output_layout, storage=normalize_lane_storage(output_storage))
 
     return ProductRequest(
         spec=spec,
         op=normalized_op,
-        left_value=left_value,
-        right_value=right_value,
-        output_value=output_value,
+        left=left_contract,
+        right=right_contract,
+        output=output_contract,
         dtype=torch.promote_types(left.dtype, right.dtype),
         device=left.device,
     )

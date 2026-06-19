@@ -13,17 +13,18 @@ from typing import Optional
 import torch
 
 from clifra.core.foundation.module import AlgebraLike
-from clifra.core.runtime.metric import hermitian_grade_spectrum
+from clifra.core.runtime.energy import lane_grade_energy
+from clifra.core.runtime.tensors import LaneStorage
 from clifra.utils.mps import safe_linalg_eigvals
 
 from ._types import CONSTANTS, SpectralResult
 from ._utils import (
     declared_full_product_kwargs,
-    feasibility_record,
     full_grades,
     full_matrix_feasibility,
     full_product_feasibility,
 )
+from .policy import feasibility_record
 
 
 class SpectralAnalyzer:
@@ -31,8 +32,8 @@ class SpectralAnalyzer:
 
     Three independent analyses are combined:
 
-    1. **Grade energy spectrum** -- population-level distribution of
-       Hermitian grade energy across all grades.
+    1. **Grade energy spectrum** -- population-level distribution of positive
+       coefficient lane energy across all grades.
     2. **Bivector field spectrum** -- norm of the mean bivector field.
     3. **GP operator spectrum** -- eigenvalues of the left-multiplication
        operator :math:`L_x(y) = x \\cdot y` (only for small algebras).
@@ -93,7 +94,7 @@ class SpectralAnalyzer:
         )
 
     def grade_energy_spectrum(self, mv_data: torch.Tensor) -> torch.Tensor:
-        """Mean Hermitian grade energy across the batch.
+        """Mean positive lane grade energy across the batch.
 
         Args:
             mv_data: ``[N, C, dim]`` multivector data.
@@ -101,10 +102,8 @@ class SpectralAnalyzer:
         Returns:
             ``[n+1]`` tensor of mean grade energies.
         """
-        # hermitian_grade_spectrum expects [..., dim]
-        # Average over channels first to get [N, dim]
         flat = mv_data.mean(dim=1)  # [N, dim]
-        spectrum = hermitian_grade_spectrum(self.algebra, flat, grades=full_grades(self.algebra))  # [N, n+1]
+        spectrum = lane_grade_energy(self.algebra, flat, grades=full_grades(self.algebra))  # [N, n+1]
         return spectrum.mean(dim=0)  # [n+1]
 
     def bivector_field_spectrum(self, mv_data: torch.Tensor) -> tuple:
@@ -140,7 +139,7 @@ class SpectralAnalyzer:
 
         # Extract grade-2 (bivector) part
         bv_layout = self.algebra.layout((2,))
-        mean_bv_compact = self.algebra.grade_projection(mean_mv, 2, active_output=True)
+        mean_bv_compact = self.algebra.grade_projection(mean_mv, 2, output_storage=LaneStorage.COMPACT)
         mean_bv = bv_layout.full(mean_bv_compact)
 
         bv_norm = mean_bv_compact.norm()

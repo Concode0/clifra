@@ -77,7 +77,7 @@ class GradeLayout:
 
     @property
     def basis_indices(self) -> tuple[int, ...]:
-        """Canonical basis indices represented by this active layout."""
+        """Canonical basis indices represented by this compact layout."""
         return self._basis_indices
 
     @property
@@ -145,13 +145,13 @@ class GradeLayout:
         return output.index_copy(-1, scatter, copied)
 
     def compact(self, full: torch.Tensor) -> torch.Tensor:
-        """Gather active lanes from a full-lane multivector tensor."""
+        """Gather compact lanes from a full-lane multivector tensor."""
         if full.shape[-1] != self.full_dim:
             raise ValueError(f"full last dimension must be {self.full_dim}, got {full.shape[-1]}")
         return torch.index_select(full, -1, self.indices_tensor(device=full.device))
 
     def full(self, values: torch.Tensor) -> torch.Tensor:
-        """Materialize active lane values into a full-lane multivector tensor."""
+        """Materialize compact lane values into a full-lane multivector tensor."""
         if values.shape[-1] != self.dim:
             raise ValueError(f"values last dimension must be {self.dim}, got {values.shape[-1]}")
         output = values.new_zeros(*values.shape[:-1], self.full_dim)

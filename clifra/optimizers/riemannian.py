@@ -36,6 +36,19 @@ from clifra.core.foundation.manifold import (
 )
 from clifra.core.foundation.numerics import eps_like
 
+__all__ = [
+    "ExponentialSGD",
+    "RiemannianAdam",
+    "project_to_tangent_space",
+    "exponential_retraction",
+    "tag_manifold",
+    "group_parameters_by_manifold",
+    "make_riemannian_optimizer",
+    "MANIFOLD_SPIN",
+    "MANIFOLD_SPHERE",
+    "MANIFOLD_EUCLIDEAN",
+]
+
 
 def group_parameters_by_manifold(
     model: nn.Module,

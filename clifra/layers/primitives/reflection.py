@@ -10,7 +10,7 @@ from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPHERE, tag_manifold
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import eps_like
-from clifra.core.storage import resolve_layer_layout_contract
+from clifra.core.runtime.tensors import resolve_contract
 
 from ._utils import (
     grade_indices,
@@ -53,9 +53,9 @@ class ReflectionLayer(CliffordModule):
         """
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
-        self.input_contract = resolve_layer_layout_contract(algebra, layout=input_layout, grades=input_grades)
+        self.input_contract = resolve_contract(algebra, layout=input_layout, grades=input_grades)
         self.output_contract = (
-            resolve_layer_layout_contract(algebra, layout=output_layout, grades=output_grades)
+            resolve_contract(algebra, layout=output_layout, grades=output_grades)
             if output_layout is not None or output_grades is not None
             else self.input_contract
         )

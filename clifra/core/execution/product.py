@@ -14,7 +14,7 @@ from clifra.core.planning.product import FullTableProductPlan, GradeProductPlan
 class GradeProductExecutor(nn.Module):
     """Compile-friendly grade-restricted product using a static interaction plan.
 
-    ``forward`` returns compact output lanes ordered by ``active_output_indices``.
+    ``forward`` returns compact output lanes ordered by ``output_basis_indices``.
     ``forward_full`` materializes into the canonical all-grades layout.
     """
 
@@ -40,9 +40,9 @@ class GradeProductExecutor(nn.Module):
         self.register_buffer("output_indices", plan.output_indices, persistent=False)
         self.register_buffer("output_positions", plan.output_positions, persistent=False)
         self.register_buffer("coefficients", plan.coefficients, persistent=False)
-        self.register_buffer("active_output_indices", plan.active_output_indices, persistent=False)
-        self.register_buffer("left_active_positions", plan.left_active_positions, persistent=False)
-        self.register_buffer("right_active_positions", plan.right_active_positions, persistent=False)
+        self.register_buffer("output_basis_indices", plan.output_basis_indices, persistent=False)
+        self.register_buffer("left_compact_positions", plan.left_compact_positions, persistent=False)
+        self.register_buffer("right_compact_positions", plan.right_compact_positions, persistent=False)
         self._pairwise_contract_left = plan.pairwise_contract_left
         self.register_buffer("pairwise_gather_positions", plan.pairwise_gather_positions, persistent=False)
         self.register_buffer("pairwise_coefficients", plan.pairwise_coefficients, persistent=False)
@@ -79,8 +79,8 @@ class GradeProductExecutor(nn.Module):
         if right.shape[-1] != self.right_layout.dim:
             raise ValueError(f"right compact dimension must be {self.right_layout.dim}, got {right.shape[-1]}")
 
-        left_terms = torch.index_select(left, -1, self.left_active_positions)
-        right_terms = torch.index_select(right, -1, self.right_active_positions)
+        left_terms = torch.index_select(left, -1, self.left_compact_positions)
+        right_terms = torch.index_select(right, -1, self.right_compact_positions)
         left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
         terms = left_terms * right_terms * self._coefficients_for(left_terms, right_terms)
 
@@ -167,7 +167,7 @@ class GradeProductExecutor(nn.Module):
         """Return a full ``[..., 2**n]`` lane tensor."""
         compact = self.forward(left, right)
         output = compact.new_zeros(*compact.shape[:-1], self.dim)
-        return output.index_copy(-1, self.active_output_indices, compact)
+        return output.index_copy(-1, self.output_basis_indices, compact)
 
     def _coefficients_for(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         return self.coefficients
@@ -216,7 +216,7 @@ class FullTableProductExecutor(nn.Module):
         return self.forward_compact(left, right)
 
     def forward_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Return full-layout product lanes for full-layout active values."""
+        """Return full-layout product lanes for full-layout compact values."""
         if left.shape[-1] != self.dim:
             raise ValueError(f"left full dimension must be {self.dim}, got {left.shape[-1]}")
         if right.shape[-1] != self.dim:

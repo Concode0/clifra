@@ -64,7 +64,7 @@ class AlgebraLike(Protocol):
         """Return canonical basis indices for ``grades``."""
         ...
 
-    def hermitian_signs(
+    def conjugate_scalar_form_signs(
         self,
         layout: Optional[GradeLayout] = None,
         *,
@@ -72,7 +72,7 @@ class AlgebraLike(Protocol):
         device=None,
         dtype: Optional[torch.dtype] = None,
     ) -> torch.Tensor:
-        """Return Hermitian signs for a full-lane or active layout."""
+        """Return signs for the signed Clifford-conjugation scalar form."""
         ...
 
     def projected_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -80,23 +80,23 @@ class AlgebraLike(Protocol):
         ...
 
     def plan_product(self, **kwargs):
-        """Return a hot-path product handle for active-lane values."""
+        """Return a hot-path product handle for compact-lane values."""
         ...
 
     def plan_unary(self, **kwargs):
-        """Return a hot-path unary handle for active-lane values."""
+        """Return a hot-path unary handle for compact-lane values."""
         ...
 
     def plan_norm_sq(self, **kwargs):
-        """Return a diagonal norm executor for active-lane values."""
+        """Return a diagonal norm executor for compact-lane values."""
         ...
 
     def plan_dual(self, **kwargs):
-        """Return a dual/pseudoscalar executor for active-lane values."""
+        """Return a dual/pseudoscalar executor for compact-lane values."""
         ...
 
     def plan_exp(self, **kwargs):
-        """Return a bivector exponential executor for active-lane values."""
+        """Return a bivector exponential executor for compact-lane values."""
         ...
 
     def plan_sandwich_action(self, **kwargs):
@@ -196,7 +196,7 @@ class AlgebraLike(Protocol):
         ...
 
     def planned_linear_action(self, values: torch.Tensor, matrix: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply a vector-space linear action to full-lane or active grade lanes."""
+        """Apply a vector-space linear action to full-lane or compact grade lanes."""
         ...
 
     def sandwich_action_matrices(self, left: torch.Tensor, right: torch.Tensor = None, **kwargs) -> torch.Tensor:

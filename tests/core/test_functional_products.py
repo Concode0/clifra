@@ -4,6 +4,7 @@
 import pytest
 import torch
 
+from clifra.core.runtime.tensors import LaneStorage
 from clifra.functional import (
     anti_commutator,
     commutator,
@@ -29,7 +30,7 @@ def test_functional_products_match_algebra_full_lanes(algebra_3d):
     assert torch.allclose(anti_commutator(algebra_3d, left, right), algebra_3d.anti_commutator(left, right))
 
 
-def test_functional_projected_product_active_output(algebra_3d):
+def test_functional_projected_product_compact_output(algebra_3d):
     left = algebra_3d.embed_vector(torch.randn(4, algebra_3d.n))
     right = algebra_3d.embed_vector(torch.randn(4, algebra_3d.n))
     layout = algebra_3d.layout((2,))
@@ -41,7 +42,7 @@ def test_functional_projected_product_active_output(algebra_3d):
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(2,),
-        active_output=True,
+        output_storage=LaneStorage.COMPACT,
     )
     expected = layout.compact(algebra_3d.wedge(left, right))
 

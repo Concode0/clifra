@@ -27,8 +27,9 @@ from clifra.core.foundation.basis import expand_output_grades, normalize_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.planning.layouts import normalize_product_op
-from clifra.core.storage import compact_grade_norms
-from clifra.core.storage import hermitian_signs as _hermitian_signs
+from clifra.core.runtime.energy import lane_grade_norms
+from clifra.core.runtime.forms import conjugate_scalar_form_signs as _conjugate_scalar_form_signs
+from clifra.core.runtime.tensors import LaneStorage
 
 
 class AlgebraHostMixin:
@@ -76,7 +77,7 @@ class AlgebraHostMixin:
             device = getattr(self, "device", None)
         return self.layout(grades).indices_tensor(device=device)
 
-    def hermitian_signs(
+    def conjugate_scalar_form_signs(
         self,
         layout: Optional[GradeLayout] = None,
         *,
@@ -84,8 +85,8 @@ class AlgebraHostMixin:
         device=None,
         dtype: Optional[torch.dtype] = None,
     ) -> torch.Tensor:
-        """Return Hermitian signs for a declared layout."""
-        return _hermitian_signs(self, layout=layout, grades=grades, device=device, dtype=dtype)
+        """Return signs for the signed Clifford-conjugation scalar form."""
+        return _conjugate_scalar_form_signs(self, layout=layout, grades=grades, device=device, dtype=dtype)
 
     def product_executor(
         self,
@@ -127,7 +128,7 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ) -> ProductPlanHandle:
-        """Return an active-lane product handle with no runtime request inference."""
+        """Return an compact-lane product handle with no runtime request inference."""
         if dtype is None:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
@@ -164,7 +165,7 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ) -> UnaryPlanHandle:
-        """Return an active-lane unary handle with no runtime request inference."""
+        """Return an compact-lane unary handle with no runtime request inference."""
         if dtype is None:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
@@ -192,7 +193,7 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ):
-        """Return a diagonal norm executor for declared active-lane values."""
+        """Return a diagonal norm executor for declared compact-lane values."""
         if input_grades is None:
             input_grades = grades
         if input_layout is None:
@@ -220,7 +221,7 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ):
-        """Return a dual/pseudoscalar permutation executor for active-lane values."""
+        """Return a dual/pseudoscalar permutation executor for compact-lane values."""
         if dtype is None:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
@@ -253,7 +254,7 @@ class AlgebraHostMixin:
         spectral_allow_degenerate: Optional[bool] = None,
         spectral_allow_truncated_degenerate: Optional[bool] = None,
     ):
-        """Return a bivector exponential executor for active-lane values."""
+        """Return a bivector exponential executor for compact-lane values."""
         if dtype is None:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
@@ -387,9 +388,9 @@ class AlgebraHostMixin:
         right_layout=None,
         output_layout=None,
         op: str = "gp",
-        left_active_lanes: bool = True,
-        right_active_lanes: bool = True,
-        active_output: bool = True,
+        left_storage: LaneStorage | str | None = None,
+        right_storage: LaneStorage | str | None = None,
+        output_storage: LaneStorage | str = LaneStorage.COMPACT,
         return_layout: bool = False,
         pairwise: bool = False,
     ):
@@ -398,8 +399,8 @@ class AlgebraHostMixin:
             left_layout is not None
             and right_layout is not None
             and output_layout is not None
-            and left_active_lanes
-            and right_active_lanes
+            and left_storage == LaneStorage.COMPACT
+            and right_storage == LaneStorage.COMPACT
         ):
             output = self._projected_product_with_explicit_layouts(
                 A,
@@ -425,20 +426,23 @@ class AlgebraHostMixin:
             right_layout=right_layout,
             output_layout=output_layout,
             op=op,
-            left_active_lanes=left_active_lanes,
-            right_active_lanes=right_active_lanes,
+            left_storage=left_storage,
+            right_storage=right_storage,
+            output_storage=output_storage,
         )
         executor = self.planner.product_executor_for_request(request)
-        request.left_value.validate_tensor(A, name="left")
-        request.right_value.validate_tensor(B, name="right")
-        left_values = request.left_value.active_values(A)
-        right_values = request.right_value.active_values(B)
+        request.left.validate(A, name="left")
+        request.right.validate(B, name="right")
+        left_values = request.left.to_compact(A)
+        right_values = request.right.to_compact(B)
         if pairwise:
             self._check_pairwise_prefix(left_values, right_values)
             output = executor.forward_pairwise_compact(left_values, right_values)
         else:
             self._check_elementwise_prefix(left_values, right_values)
             output = executor.forward_compact(left_values, right_values)
+        if request.output.uses_canonical_storage:
+            output = request.output.layout.full(output)
         return (output, request.output_layout) if return_layout else output
 
     def _projected_product_with_explicit_layouts(
@@ -475,8 +479,8 @@ class AlgebraHostMixin:
             dtype=torch.promote_types(left.dtype, right.dtype),
             device=left.device,
         )
-        left_values = self._active_values_for_layout(left, left_layout, "left")
-        right_values = self._active_values_for_layout(right, right_layout, "right")
+        left_values = self._compact_values_for_layout(left, left_layout, "left")
+        right_values = self._compact_values_for_layout(right, right_layout, "right")
         if pairwise:
             self._check_pairwise_prefix(left_values, right_values)
             return executor.forward_pairwise_compact(left_values, right_values)
@@ -528,8 +532,8 @@ class AlgebraHostMixin:
         output_grades=None,
         input_layout: Optional[GradeLayout] = None,
         output_layout: Optional[GradeLayout] = None,
-        input_active_lanes: bool = True,
-        active_output: bool = True,
+        input_storage: LaneStorage | str | None = None,
+        output_storage: LaneStorage | str = LaneStorage.COMPACT,
         return_layout: bool = False,
     ):
         """Execute a unary operation through the planner."""
@@ -540,10 +544,13 @@ class AlgebraHostMixin:
             output_grades=output_grades,
             input_layout=input_layout,
             output_layout=output_layout,
-            input_active_lanes=input_active_lanes,
+            input_storage=input_storage,
+            output_storage=output_storage,
         )
         executor = self.planner.unary_executor_for_request(request)
-        output = executor.forward_compact(request.input_value.active_values(values))
+        output = executor.forward_compact(request.input.to_compact(values))
+        if request.output.uses_canonical_storage:
+            output = request.output.layout.full(output)
         return (output, request.output_layout) if return_layout else output
 
     def norm_sq(
@@ -561,7 +568,7 @@ class AlgebraHostMixin:
         if input_layout is None:
             input_layout = layout
         resolved = self._declared_layout(input_grades, input_layout)
-        active_values = self._active_values_for_layout(values, resolved, "norm_sq values")
+        active_values = self._compact_values_for_layout(values, resolved, "norm_sq values")
         executor = self.planner.norm_sq_executor_for_layout(
             input_layout=resolved,
             dtype=active_values.dtype,
@@ -582,7 +589,7 @@ class AlgebraHostMixin:
         """Apply right-pseudoscalar multiplication through a planned permutation."""
         input_layout = self._declared_layout(input_grades, input_layout)
         output_layout = self._optional_layout(output_grades, output_layout)
-        active_values = self._active_values_for_layout(values, input_layout, "dual values")
+        active_values = self._compact_values_for_layout(values, input_layout, "dual values")
         executor = self.planner.dual_executor_for_layout(
             input_layout=input_layout,
             output_layout=output_layout,
@@ -621,7 +628,7 @@ class AlgebraHostMixin:
             input_layout=input_layout,
             output_layout=output_layout,
         )
-        active_values = self._active_values_for_layout(values, input_layout, "exp values")
+        active_values = self._compact_values_for_layout(values, input_layout, "exp values")
         executor = self.planner.bivector_exp_executor_for_layouts(
             input_layout=input_layout,
             output_layout=output_layout,
@@ -654,7 +661,7 @@ class AlgebraHostMixin:
         if input_layout is None:
             input_layout = layout
         resolved = self._declared_layout(input_grades, input_layout)
-        active_blade = self._active_values_for_layout(blade, resolved, "blade_inverse values")
+        active_blade = self._compact_values_for_layout(blade, resolved, "blade_inverse values")
         blade_rev = self.planned_unary(
             active_blade,
             op="reverse",
@@ -682,8 +689,8 @@ class AlgebraHostMixin:
         input_layout = self._declared_layout(input_grades, input_layout)
         blade_layout = self._declared_layout(blade_grades, blade_layout)
         output_layout = self._optional_layout(output_grades, output_layout) or input_layout
-        active_values = self._active_values_for_layout(values, input_layout, "blade_project values")
-        active_blade = self._active_values_for_layout(blade, blade_layout, "blade_project blade")
+        active_values = self._compact_values_for_layout(values, input_layout, "blade_project values")
+        active_blade = self._compact_values_for_layout(blade, blade_layout, "blade_project blade")
         inner_layout = self.layout(expand_output_grades(input_layout.grades, blade_layout.grades, self.n, op="inner"))
         inner = self.inner_product(
             active_values,
@@ -720,7 +727,7 @@ class AlgebraHostMixin:
         output_layout = self._optional_layout(output_grades, output_layout) or input_layout
         if output_layout != input_layout:
             raise ValueError("blade_reject output_layout must match input_layout for subtraction")
-        active_values = self._active_values_for_layout(values, input_layout, "blade_reject values")
+        active_values = self._compact_values_for_layout(values, input_layout, "blade_reject values")
         projection = self.blade_project(
             active_values,
             blade,
@@ -775,8 +782,8 @@ class AlgebraHostMixin:
         versor_layout = self._declared_layout(versor_grades, versor_layout)
         input_layout = self._declared_layout(input_grades, input_layout)
         output_layout = self._optional_layout(output_grades, output_layout) or input_layout
-        active_versor = self._active_values_for_layout(versor, versor_layout, "versor_product versor")
-        active_values = self._active_values_for_layout(values, input_layout, "versor_product values")
+        active_versor = self._compact_values_for_layout(versor, versor_layout, "versor_product versor")
+        active_values = self._compact_values_for_layout(values, input_layout, "versor_product values")
         versor_hat = self.grade_involution(
             active_versor,
             input_layout=versor_layout,
@@ -809,8 +816,6 @@ class AlgebraHostMixin:
         output_grades=None,
         input_layout: Optional[GradeLayout] = None,
         output_layout: Optional[GradeLayout] = None,
-        input_active_lanes: bool = True,
-        active_output: bool = True,
         return_layout: bool = False,
     ):
         """Execute a planned vector-space linear action."""
@@ -832,11 +837,11 @@ class AlgebraHostMixin:
     ) -> torch.Tensor:
         """Return full-layout sandwich action matrices through the planner."""
         layout = self._full_sandwich_layout(layout)
-        left = self._active_values_for_layout(left, layout, "sandwich_action_matrices left")
+        left = self._compact_values_for_layout(left, layout, "sandwich_action_matrices left")
         if right is None:
             right = self.reverse(left, input_layout=layout, output_layout=layout)
         else:
-            right = self._active_values_for_layout(right, layout, "sandwich_action_matrices right")
+            right = self._compact_values_for_layout(right, layout, "sandwich_action_matrices right")
         left, right = self._promote_action_tensors(left, right)
         handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
         return handle.checked_action_matrices(left, right)
@@ -851,12 +856,12 @@ class AlgebraHostMixin:
     ) -> torch.Tensor:
         """Apply one full-layout sandwich action per leading batch item."""
         layout = self._full_sandwich_layout(layout)
-        left = self._active_values_for_layout(left, layout, "sandwich_product left")
-        values = self._active_values_for_layout(values, layout, "sandwich_product values")
+        left = self._compact_values_for_layout(left, layout, "sandwich_product left")
+        values = self._compact_values_for_layout(values, layout, "sandwich_product values")
         if right is None:
             right = self.reverse(left, input_layout=layout, output_layout=layout)
         else:
-            right = self._active_values_for_layout(right, layout, "sandwich_product right")
+            right = self._compact_values_for_layout(right, layout, "sandwich_product right")
         left, values, right = self._promote_action_tensors(left, values, right)
         handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
         return handle.checked_batched(left, values, right)
@@ -871,12 +876,12 @@ class AlgebraHostMixin:
     ) -> torch.Tensor:
         """Apply one full-layout sandwich action per channel."""
         layout = self._full_sandwich_layout(layout)
-        left = self._active_values_for_layout(left, layout, "per_channel_sandwich left")
-        values = self._active_values_for_layout(values, layout, "per_channel_sandwich values")
+        left = self._compact_values_for_layout(left, layout, "per_channel_sandwich left")
+        values = self._compact_values_for_layout(values, layout, "per_channel_sandwich values")
         if right is None:
             right = self.reverse(left, input_layout=layout, output_layout=layout)
         else:
-            right = self._active_values_for_layout(right, layout, "per_channel_sandwich right")
+            right = self._compact_values_for_layout(right, layout, "per_channel_sandwich right")
         left, values, right = self._promote_action_tensors(left, values, right)
         handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
         return handle.checked_per_channel(left, values, right)
@@ -891,12 +896,12 @@ class AlgebraHostMixin:
     ) -> torch.Tensor:
         """Apply every full-layout sandwich action to every input channel."""
         layout = self._full_sandwich_layout(layout)
-        left = self._active_values_for_layout(left, layout, "multi_rotor_sandwich left")
-        values = self._active_values_for_layout(values, layout, "multi_rotor_sandwich values")
+        left = self._compact_values_for_layout(left, layout, "multi_rotor_sandwich left")
+        values = self._compact_values_for_layout(values, layout, "multi_rotor_sandwich values")
         if right is None:
             right = self.reverse(left, input_layout=layout, output_layout=layout)
         else:
-            right = self._active_values_for_layout(right, layout, "multi_rotor_sandwich right")
+            right = self._compact_values_for_layout(right, layout, "multi_rotor_sandwich right")
         left, values, right = self._promote_action_tensors(left, values, right)
         handle = self.plan_sandwich_action(layout=layout, dtype=left.dtype, device=left.device)
         return handle.checked_multi(left, values, right)
@@ -954,7 +959,7 @@ class AlgebraHostMixin:
     def grade_norms(self, values: torch.Tensor, *, input_grades=None, layout: GradeLayout = None) -> torch.Tensor:
         """Return per-grade coefficient norms for declared-layout values."""
         resolved = self._declared_layout(input_grades, layout)
-        return compact_grade_norms(self, values, resolved)
+        return lane_grade_norms(self, values, layout=resolved)
 
     def multivector(self, values: torch.Tensor, **kwargs):
         """Return a debug-only multivector formatter for ``values``."""
@@ -1065,7 +1070,7 @@ class AlgebraHostMixin:
             raise ValueError(f"{side}_layout and {side}_grades disagree")
 
     @staticmethod
-    def _active_values_for_layout(values: torch.Tensor, layout: GradeLayout, name: str) -> torch.Tensor:
+    def _compact_values_for_layout(values: torch.Tensor, layout: GradeLayout, name: str) -> torch.Tensor:
         if values.ndim < 1:
             raise ValueError(f"{name} must include a coefficient lane dimension, got shape {tuple(values.shape)}")
         if values.shape[-1] == layout.dim:

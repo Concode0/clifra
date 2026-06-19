@@ -6,9 +6,8 @@
 Provides Clifford algebra hosts, layout contracts, planner/executor utilities,
 metric functions, and signature search utilities.
 
-The ``clifra.core.analysis`` sub-package (``MetricSearch``, ``GeodesicFlow``,
-``GeometricAnalyzer``, etc.) is **lazily imported** - it is not loaded
-until first access, keeping ``import clifra.core`` lightweight.
+Analysis tools live under ``clifra.core.analysis`` and should be imported from
+their owning modules.
 """
 
 from .config import AlgebraConfig, make_algebra, make_algebra_from_config
@@ -80,37 +79,37 @@ from .planning.unary import GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_un
 from .runtime.algebra import AlgebraContext
 from .runtime.metric import (
     clifford_conjugate,
-    geometric_distance,
-    grade_hermitian_norm,
+    conjugate_form_distance_like,
+    conjugate_form_magnitude,
+    conjugate_grade_magnitude_spectrum,
+    conjugate_scalar_form,
+    conjugate_scalar_form_signs,
     grade_purity,
-    hermitian_angle,
-    hermitian_distance,
-    hermitian_grade_spectrum,
-    hermitian_inner_product,
-    hermitian_norm,
-    induced_norm,
-    inner_product,
-    mean_active_grade,
+    lane_distance,
+    lane_energy,
+    lane_grade_distribution,
+    lane_grade_energy,
+    lane_grade_norms,
+    lane_inner_product,
+    lane_norm,
+    mean_grade,
+    scalar_product,
+    signature_distance_like,
+    signature_magnitude,
     signature_norm_squared,
     signature_trace_form,
 )
-from .storage import (
-    ExecutionBoundary,
-    ExecutorPath,
-    LaneFormat,
-    LayerLayout,
-    ValueLayout,
-    active_values,
-    compact_grade_norms,
-    hermitian_signs,
-    layout_for_values,
-    materialize_full,
+from .runtime.tensors import (
+    LaneStorage,
+    TensorContract,
+    canonical_values,
+    check_layout_spec,
+    compact_values,
+    infer_contract,
     metric_self_signs,
-    resolve_layer_layout,
-    resolve_layer_layout_contract,
-    resolve_operand_layout,
-    resolve_output_boundary,
-    resolve_value_layout,
+    normalize_lane_storage,
+    resolve_contract,
+    resolve_layout,
 )
 
 __all__ = [
@@ -134,11 +133,8 @@ __all__ = [
     "AlgebraSpec",
     "GradeLayout",
     "GradePlanner",
-    "LaneFormat",
-    "ExecutorPath",
-    "ValueLayout",
-    "LayerLayout",
-    "ExecutionBoundary",
+    "LaneStorage",
+    "TensorContract",
     "BivectorExpExecutor",
     "BivectorExpPlan",
     "BivectorExpExecutionPolicy",
@@ -166,31 +162,34 @@ __all__ = [
     "check_channels",
     "basis_blade_label",
     "format_multivector",
-    "resolve_value_layout",
-    "resolve_operand_layout",
-    "resolve_output_boundary",
-    "layout_for_values",
-    "resolve_layer_layout",
-    "resolve_layer_layout_contract",
+    "normalize_lane_storage",
+    "check_layout_spec",
+    "resolve_layout",
+    "resolve_contract",
+    "infer_contract",
     # metric
-    "inner_product",
-    "induced_norm",
-    "geometric_distance",
+    "scalar_product",
+    "signature_magnitude",
+    "signature_distance_like",
     "grade_purity",
-    "mean_active_grade",
+    "mean_grade",
     "clifford_conjugate",
-    "hermitian_inner_product",
-    "hermitian_norm",
-    "hermitian_distance",
-    "hermitian_angle",
-    "grade_hermitian_norm",
-    "hermitian_grade_spectrum",
+    "lane_inner_product",
+    "lane_energy",
+    "lane_norm",
+    "lane_distance",
+    "lane_grade_energy",
+    "lane_grade_norms",
+    "lane_grade_distribution",
+    "conjugate_scalar_form_signs",
+    "conjugate_scalar_form",
+    "conjugate_form_magnitude",
+    "conjugate_form_distance_like",
+    "conjugate_grade_magnitude_spectrum",
     "signature_trace_form",
     "signature_norm_squared",
-    "active_values",
-    "compact_grade_norms",
-    "hermitian_signs",
-    "materialize_full",
+    "compact_values",
+    "canonical_values",
     "metric_self_signs",
     # static executor planning
     "GradeProductOp",
@@ -231,41 +230,4 @@ __all__ = [
     "operation_may_be_nonzero",
     "product_output_grades",
     "reverse_sign",
-    # analysis (lazy)
-    "MetricSearch",
-    "GeodesicFlow",
-    "DimensionLifter",
-    "GeometricAnalyzer",
-    "AnalysisReport",
 ]
-
-# Lazy imports for the analysis sub-package.
-# These names are only resolved when first accessed, keeping
-# ``import clifra.core`` fast and avoiding circular-import issues.
-_ANALYSIS_NAMES = {
-    "MetricSearch",
-    "GeodesicFlow",
-    "DimensionLifter",
-    "GeometricAnalyzer",
-    "AnalysisReport",
-    "compute_uncertainty_and_alignment",
-    "SignatureSearchAnalyzer",
-    "EffectiveDimensionAnalyzer",
-    "SpectralAnalyzer",
-    "SymmetryDetector",
-    "CommutatorAnalyzer",
-    "StatisticalSampler",
-    "SamplingConfig",
-    "AnalysisConfig",
-}
-
-
-def __getattr__(name: str):
-    if name in _ANALYSIS_NAMES:
-        from . import analysis as _analysis  # noqa: F811
-
-        obj = getattr(_analysis, name)
-        # Cache on the module to avoid repeated __getattr__ calls
-        globals()[name] = obj
-        return obj
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -7,7 +7,7 @@ Assertion helpers use ``assert`` so they are free under ``python -O``.
 Set ``VALIDATE = False`` to disable even without the -O flag.
 
 Public boundary validators raise ``ValueError``. They intentionally remain
-active outside the hot unchecked executor paths.
+enabled outside the hot unchecked executor paths.
 """
 
 import torch

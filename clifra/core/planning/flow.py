@@ -22,7 +22,7 @@ class GradeFlow:
 
     @classmethod
     def from_grades(cls, spec: AlgebraSpec, grades: Iterable[int]) -> "GradeFlow":
-        """Create a flow from active grades."""
+        """Create a flow from selected grades."""
         return cls(spec=spec, layout=spec.layout(grades))
 
     @classmethod
@@ -51,11 +51,11 @@ class GradeFlow:
         return self.layout.dim
 
     def project(self, grades: Iterable[int]) -> "GradeFlow":
-        """Narrow the flow to a subset of active grades."""
+        """Narrow the flow to a subset of selected grades."""
         projected = normalize_grades(grades, self.spec.n, name="grades")
         missing = tuple(grade for grade in projected if grade not in self.grades)
         if missing:
-            raise ValueError(f"Cannot project missing grades {missing} from active grades {self.grades}")
+            raise ValueError(f"Cannot project missing grades {missing} from selected grades {self.grades}")
         return GradeFlow.from_grades(self.spec, projected)
 
     def unary(self, op: str, output_grades: Optional[Iterable[int]] = None) -> "GradeFlow":

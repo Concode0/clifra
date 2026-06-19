@@ -15,15 +15,16 @@ import torch
 from clifra.core.foundation.basis import operation_coefficient
 from clifra.core.foundation.module import AlgebraLike
 from clifra.core.foundation.numerics import eps_like
+from clifra.core.runtime.tensors import LaneStorage
 
 from ._types import CONSTANTS, CommutatorResult, SymmetryResult
 from ._utils import (
-    feasibility_record,
     full_grades,
     full_layout_for_analysis,
     grade_layout_for_analysis,
     product_feasibility,
 )
+from .policy import feasibility_record
 
 
 class SymmetryDetector:
@@ -132,7 +133,7 @@ class SymmetryDetector:
         alpha = self.algebra.grade_involution(
             mv_data,
             input_grades=full_grades(self.algebra),
-            active_output=True,
+            output_storage=LaneStorage.COMPACT,
         )  # [N, dim]
         odd_part = (mv_data - alpha) / 2.0
         odd_energy = (odd_part**2).sum(dim=-1)

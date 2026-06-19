@@ -32,7 +32,7 @@ class NormSquaredPlan:
 
     @property
     def input_dim(self) -> int:
-        """Return the active input lane count."""
+        """Return the compact input lane count."""
         return self.input_layout.dim
 
 

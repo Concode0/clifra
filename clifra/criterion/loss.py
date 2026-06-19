@@ -14,7 +14,7 @@ from clifra.functional.loss import (
     chamfer_distance,
     conservative_force_loss,
     geometric_mse,
-    hermitian_grade_regularization,
+    grade_energy_regularization,
     involution_consistency_loss,
     isometry_loss,
     physics_informed_loss,
@@ -89,8 +89,8 @@ class BivectorRegularization(CliffordModule):
         return bivector_regularization(self.algebra, x, grade=self.grade)
 
 
-class HermitianGradeRegularization(CliffordModule):
-    """Regularize Hermitian grade spectrum toward a target distribution."""
+class GradeEnergyRegularization(CliffordModule):
+    """Regularize positive lane grade energy toward a target distribution."""
 
     def __init__(self, algebra, target_spectrum=None):
         """Initialize grade regularization."""
@@ -104,8 +104,8 @@ class HermitianGradeRegularization(CliffordModule):
         self.register_buffer("target", target)
 
     def forward(self, features):
-        """Compute grade spectrum regularization."""
-        return hermitian_grade_regularization(self.algebra, features, self.target)
+        """Compute grade-energy distribution regularization."""
+        return grade_energy_regularization(self.algebra, features, self.target)
 
 
 class ChamferDistance(nn.Module):

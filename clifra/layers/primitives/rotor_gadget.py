@@ -21,7 +21,7 @@ from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.validation import check_channels, check_multivector
-from clifra.core.storage import LayerLayout, resolve_layer_layout, resolve_layer_layout_contract
+from clifra.core.runtime.tensors import TensorContract, resolve_contract
 
 from ._utils import (
     channel_mix,
@@ -100,9 +100,9 @@ class RotorGadget(CliffordModule):
 
         if algebra.num_grades <= 2:
             raise ValueError(f"Algebra has no bivectors. RotorGadget requires at least one bivector for rotation.")
-        self.input_contract = resolve_layer_layout_contract(algebra, layout=input_layout, grades=input_grades)
+        self.input_contract = resolve_contract(algebra, layout=input_layout, grades=input_grades)
         resolved_output_layout = (
-            resolve_layer_layout(algebra, layout=output_layout, grades=output_grades)
+            resolve_contract(algebra, layout=output_layout, grades=output_grades).layout
             if output_layout is not None or output_grades is not None
             else None
         )
@@ -112,7 +112,7 @@ class RotorGadget(CliffordModule):
             output_layout=resolved_output_layout,
             parameter_layout=self.parameter_layout,
         )
-        self.output_contract = LayerLayout(algebra, self.action_plan.output_layout)
+        self.output_contract = TensorContract.compact(self.input_contract.spec, self.action_plan.output_layout)
         self.input_layout = self.input_contract.layout
         self.output_layout = self.output_contract.layout
         self.rotor_layout = self.action_plan.rotor_layout

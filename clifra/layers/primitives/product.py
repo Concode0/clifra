@@ -12,7 +12,7 @@ import torch
 from clifra.core.foundation.basis import normalize_grades
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import CliffordModule
-from clifra.core.storage import check_layout_spec
+from clifra.core.runtime.tensors import LaneStorage, check_layout_spec
 from clifra.functional.products import canonical_product_op, product
 
 
@@ -91,7 +91,7 @@ class ProductLayer(CliffordModule):
         if self.output_layout is not None:
             kwargs["output_layout"] = self.output_layout
         if kwargs:
-            kwargs["active_output"] = True
+            kwargs["output_storage"] = LaneStorage.COMPACT
         if self.pairwise:
             kwargs["pairwise"] = True
         return kwargs

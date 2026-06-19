@@ -15,10 +15,12 @@ import torch
 
 from clifra.core.foundation.module import AlgebraLike
 from clifra.core.foundation.numerics import eps_like
+from clifra.core.runtime.tensors import LaneStorage
 from clifra.utils.mps import safe_linalg_eigvals
 
 from ._types import CONSTANTS, CommutatorResult
-from ._utils import declared_full_product_kwargs, feasibility_record, full_matrix_feasibility, full_product_feasibility
+from ._utils import declared_full_product_kwargs, full_matrix_feasibility, full_product_feasibility
+from .policy import feasibility_record
 
 
 class CommutatorAnalyzer:
@@ -111,9 +113,9 @@ class CommutatorAnalyzer:
             left_grades=(1,),
             right_grades=(1,),
             output_grades=(2,),
-            left_active_lanes=True,
-            right_active_lanes=True,
-            active_output=True,
+            left_storage=LaneStorage.COMPACT,
+            right_storage=LaneStorage.COMPACT,
+            output_storage=LaneStorage.COMPACT,
         )
         vals = comm.norm(dim=-1).mean(dim=-1)  # [n_pairs]
 
@@ -210,9 +212,9 @@ class CommutatorAnalyzer:
                 left_grades=(1,),
                 right_grades=(1,),
                 output_grades=(2,),
-                left_active_lanes=True,
-                right_active_lanes=True,
-                active_output=True,
+                left_storage=LaneStorage.COMPACT,
+                right_storage=LaneStorage.COMPACT,
+                output_storage=LaneStorage.COMPACT,
             )
             return comm.norm(dim=-1).mean().item()
 
@@ -247,7 +249,7 @@ class CommutatorAnalyzer:
             }
 
         # Extract compact grade-2 part of mean per-sample
-        bv_data = self.algebra.grade_projection(mv_data, 2, active_output=True)  # [N, grade2_dim]
+        bv_data = self.algebra.grade_projection(mv_data, 2, output_storage=LaneStorage.COMPACT)  # [N, grade2_dim]
         mean_bv = bv_data.mean(dim=0)  # [grade2_dim]
 
         bv_blade_indices = self.algebra.grade_indices((2,), device=device)
@@ -279,9 +281,9 @@ class CommutatorAnalyzer:
             left_grades=(2,),
             right_grades=(2,),
             output_grades=(2,),
-            left_active_lanes=True,
-            right_active_lanes=True,
-            active_output=True,
+            left_storage=LaneStorage.COMPACT,
+            right_storage=LaneStorage.COMPACT,
+            output_storage=LaneStorage.COMPACT,
         )  # [n_pairs, grade2_dim]
 
         # Project onto basis: coeffs[p, c] = <bracket_bv_p, B_c>
@@ -339,9 +341,9 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
         left_grades=(1,),
         right_grades=(1,),
         output_grades=(2,),
-        left_active_lanes=True,
-        right_active_lanes=True,
-        active_output=True,
+        left_storage=LaneStorage.COMPACT,
+        right_storage=LaneStorage.COMPACT,
+        output_storage=LaneStorage.COMPACT,
     )
 
     U = torch.norm(comm, p=2, dim=-1).mean().item()

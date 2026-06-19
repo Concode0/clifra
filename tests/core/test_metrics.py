@@ -1,366 +1,163 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-# Tests for Hermitian metrics in core/metric.py
-
 import pytest
 import torch
 
 from clifra.core.config import make_algebra
-from clifra.core.runtime.algebra import AlgebraContext
-
-pytestmark = pytest.mark.unit
 from clifra.core.runtime.metric import (
-    _hermitian_signs,
     clifford_conjugate,
-    grade_hermitian_norm,
-    hermitian_angle,
-    hermitian_distance,
-    hermitian_grade_spectrum,
-    hermitian_inner_product,
-    hermitian_norm,
-    induced_norm,
-    inner_product,
+    conjugate_form_distance_like,
+    conjugate_form_magnitude,
+    conjugate_grade_magnitude_spectrum,
+    conjugate_scalar_form,
+    conjugate_scalar_form_signs,
+    grade_purity,
+    lane_distance,
+    lane_grade_distribution,
+    lane_grade_energy,
+    lane_inner_product,
+    lane_norm,
+    mean_grade,
+    scalar_product,
+    signature_magnitude,
     signature_norm_squared,
     signature_trace_form,
 )
 
-
-class TestHermitianSigns:
-    def test_scalar_positive(self, algebra_3d):
-        """Scalar component (grade 0) always has sign +1."""
-        signs = _hermitian_signs(algebra_3d)
-        assert signs[0] == 1.0
-
-    def test_shape(self, algebra_minkowski):
-        signs = _hermitian_signs(algebra_minkowski)
-        assert signs.shape == (algebra_minkowski.dim,)
-
-    def test_layout_signs_are_generated(self, algebra_minkowski):
-        """Hermitian signs are generated from the declared layout."""
-        s1 = _hermitian_signs(algebra_minkowski)
-        s2 = algebra_minkowski.hermitian_signs(algebra_minkowski.default_layout())
-        assert not hasattr(algebra_minkowski, "_hermitian_signs")
-        assert torch.allclose(s1, s2)
-
-    def test_values_are_pm1(self, algebra_conformal):
-        signs = _hermitian_signs(algebra_conformal)
-        assert torch.all(torch.abs(signs) == 1.0)
-
-    def test_matches_geometric_product(self, algebra_minkowski):
-        """Verify signed IP matches <bar{A} B>_0 via full geometric product."""
-        torch.manual_seed(42)
-        A = torch.randn(algebra_minkowski.dim)
-        B = torch.randn(algebra_minkowski.dim)
-
-        # Method 1: signed coefficient formula
-        signs = _hermitian_signs(algebra_minkowski)
-        ip_signed = (signs * A * B).sum()
-
-        # Method 2: full geometric product of conjugate with B
-        A_bar = clifford_conjugate(algebra_minkowski, A)
-        prod = algebra_minkowski.geometric_product(A_bar.unsqueeze(0), B.unsqueeze(0))
-        ip_gp = prod[0, 0]  # scalar part
-
-        assert torch.allclose(ip_signed, ip_gp, atol=1e-5), f"Signed IP {ip_signed.item():.6f} != GP {ip_gp.item():.6f}"
-
-    def test_matches_gp_conformal(self, algebra_conformal):
-        """Same verification for Cl(4,1)."""
-        torch.manual_seed(123)
-        A = torch.randn(algebra_conformal.dim)
-        B = torch.randn(algebra_conformal.dim)
-
-        signs = _hermitian_signs(algebra_conformal)
-        ip_signed = (signs * A * B).sum()
-
-        A_bar = clifford_conjugate(algebra_conformal, A)
-        prod = algebra_conformal.geometric_product(A_bar.unsqueeze(0), B.unsqueeze(0))
-        ip_gp = prod[0, 0]
-
-        assert torch.allclose(ip_signed, ip_gp, atol=1e-4), f"Signed IP {ip_signed.item():.6f} != GP {ip_gp.item():.6f}"
+pytestmark = pytest.mark.unit
 
 
-class TestCliffordConjugate:
-    def test_scalar_unchanged(self, algebra_3d):
-        mv = torch.zeros(algebra_3d.dim)
-        mv[0] = 3.0
-        conj = clifford_conjugate(algebra_3d, mv)
-        assert torch.allclose(conj[0], mv[0])
+class TestLaneGeometry:
+    def test_lane_norm_is_positive_definite_for_mixed_signature(self, algebra_minkowski):
+        values = torch.randn(8, algebra_minkowski.dim)
+        norms = lane_norm(algebra_minkowski, values)
 
-    def test_double_conjugate_is_identity(self, algebra_minkowski):
-        mv = torch.randn(algebra_minkowski.dim)
-        conj2 = clifford_conjugate(algebra_minkowski, clifford_conjugate(algebra_minkowski, mv))
-        assert torch.allclose(conj2, mv, atol=1e-6)
+        assert torch.all(norms >= 0)
+        assert torch.allclose(lane_norm(algebra_minkowski, torch.zeros_like(values)), torch.zeros(8, 1))
 
-    def test_batch(self, algebra_3d):
-        mv = torch.randn(5, algebra_3d.dim)
-        conj = clifford_conjugate(algebra_3d, mv)
-        assert conj.shape == mv.shape
-
-
-class TestHermitianInnerProduct:
-    def test_matches_bar_gp_euclidean(self, algebra_3d):
-        """Hermitian IP should match <bar{A}B>_0 via geometric product."""
-        torch.manual_seed(42)
-        A = torch.randn(algebra_3d.dim)
-        B = torch.randn(algebra_3d.dim)
-        ip = hermitian_inner_product(algebra_3d, A, B)
-        A_bar = clifford_conjugate(algebra_3d, A)
-        prod = algebra_3d.geometric_product(A_bar.unsqueeze(0), B.unsqueeze(0))
-        assert torch.allclose(ip.squeeze(), prod[0, 0], atol=1e-5)
-
-    def test_positive_for_pure_scalars(self, algebra_3d):
-        """For pure scalars, <bar{s}s>_0 = s^2 >= 0."""
-        mv = torch.zeros(algebra_3d.dim)
-        mv[0] = 5.0
-        ip = hermitian_inner_product(algebra_3d, mv, mv)
-        assert ip > 0
-
-    def test_zero_for_zero(self, algebra_minkowski):
-        mv = torch.zeros(algebra_minkowski.dim)
-        ip = hermitian_inner_product(algebra_minkowski, mv, mv)
-        assert torch.allclose(ip, torch.tensor([0.0]))
-
-    def test_symmetry(self, algebra_minkowski):
-        a = torch.randn(algebra_minkowski.dim)
-        b = torch.randn(algebra_minkowski.dim)
-        assert torch.allclose(
-            hermitian_inner_product(algebra_minkowski, a, b),
-            hermitian_inner_product(algebra_minkowski, b, a),
-            atol=1e-6,
-        )
-
-    def test_linearity(self, algebra_minkowski):
+    def test_lane_distance_is_a_euclidean_coefficient_distance(self, algebra_minkowski):
         a = torch.randn(algebra_minkowski.dim)
         b = torch.randn(algebra_minkowski.dim)
         c = torch.randn(algebra_minkowski.dim)
-        alpha = 2.5
-        lhs = hermitian_inner_product(algebra_minkowski, alpha * a + b, c)
-        rhs = alpha * hermitian_inner_product(algebra_minkowski, a, c) + hermitian_inner_product(
+
+        assert torch.allclose(lane_distance(algebra_minkowski, a, a), torch.zeros(1))
+        assert torch.allclose(lane_distance(algebra_minkowski, a, b), lane_distance(algebra_minkowski, b, a))
+        assert lane_distance(algebra_minkowski, a, c) <= lane_distance(algebra_minkowski, a, b) + lane_distance(
             algebra_minkowski, b, c
-        )
-        assert torch.allclose(lhs, rhs, atol=1e-4)
+        ) + 1e-6
 
-    def test_has_negative_signs(self, algebra_minkowski):
-        """Cl(2,1) should have some negative signs in the Hermitian form."""
-        signs = _hermitian_signs(algebra_minkowski)
-        has_negative = (signs < 0).any()
-        assert has_negative, "Cl(2,1) should have negative signs"
+    def test_lane_inner_product_matches_coefficient_dot_product(self, algebra_3d):
+        a = torch.randn(4, algebra_3d.dim)
+        b = torch.randn(4, algebra_3d.dim)
 
-    def test_compact_context_matches_full_lane_active_lanes(self):
-        full_context = AlgebraContext(3, 1, 0, device="cpu", dtype=torch.float64)
-        context = make_algebra(3, 1, 0, device="cpu", dtype=torch.float64)
-        layout = context.layout((1, 2))
-        generator = torch.Generator(device="cpu").manual_seed(719)
-        A = torch.randn(5, layout.dim, dtype=torch.float64, generator=generator)
-        B = torch.randn(5, layout.dim, dtype=torch.float64, generator=generator)
+        assert torch.allclose(lane_inner_product(algebra_3d, a, b), (a * b).sum(dim=-1, keepdim=True))
 
-        actual = hermitian_inner_product(context, A, B, layout=layout)
-        expected = hermitian_inner_product(full_context, layout.full(A), layout.full(B))
-
-        assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
-
-
-class TestHermitianNorm:
-    def test_non_negative(self, algebra_minkowski):
-        mv = torch.randn(20, algebra_minkowski.dim)
-        norms = hermitian_norm(algebra_minkowski, mv)
-        assert (norms >= -1e-6).all()
-
-    def test_zero_for_zero(self, algebra_3d):
-        mv = torch.zeros(algebra_3d.dim)
-        n = hermitian_norm(algebra_3d, mv)
-        assert torch.allclose(n, torch.tensor([0.0]))
-
-    def test_positive_for_nonzero(self, algebra_3d):
-        mv = torch.randn(algebra_3d.dim)
-        assert hermitian_norm(algebra_3d, mv) > 0
-
-    def test_homogeneity(self, algebra_3d):
-        """||alpha*A||_H = |alpha| * ||A||_H for Euclidean."""
-        mv = torch.randn(algebra_3d.dim)
-        alpha = 3.0
-        n1 = hermitian_norm(algebra_3d, alpha * mv)
-        n2 = alpha * hermitian_norm(algebra_3d, mv)
-        assert torch.allclose(n1, n2, atol=1e-4)
-
-
-class TestHermitianDistance:
-    def test_zero_self_distance(self, algebra_minkowski):
-        mv = torch.randn(algebra_minkowski.dim)
-        d = hermitian_distance(algebra_minkowski, mv, mv)
-        assert torch.allclose(d, torch.tensor([0.0]), atol=1e-6)
-
-    def test_symmetry(self, algebra_minkowski):
-        a = torch.randn(algebra_minkowski.dim)
-        b = torch.randn(algebra_minkowski.dim)
-        d1 = hermitian_distance(algebra_minkowski, a, b)
-        d2 = hermitian_distance(algebra_minkowski, b, a)
-        assert torch.allclose(d1, d2, atol=1e-5)
-
-    def test_triangle_inequality(self, algebra_3d):
-        """Triangle inequality holds for Euclidean (all signs +1)."""
-        a = torch.randn(algebra_3d.dim)
-        b = torch.randn(algebra_3d.dim)
-        c = torch.randn(algebra_3d.dim)
-        d_ab = hermitian_distance(algebra_3d, a, b)
-        d_bc = hermitian_distance(algebra_3d, b, c)
-        d_ac = hermitian_distance(algebra_3d, a, c)
-        assert d_ac <= d_ab + d_bc + 1e-5
-
-    def test_positive_for_different(self, algebra_3d):
-        a = torch.randn(algebra_3d.dim)
-        b = a + torch.randn(algebra_3d.dim) * 0.1
-        d = hermitian_distance(algebra_3d, a, b)
-        assert d > 0
-
-
-class TestHermitianAngle:
-    def test_zero_angle_same(self, algebra_3d):
-        torch.manual_seed(42)
-        mv = torch.randn(algebra_3d.dim)
-        angle = hermitian_angle(algebra_3d, mv, mv)
-        # float32 acos near cos=1 has ~sqrt(2*eps_machine) ~= 5e-4 rad error;
-        # use atol=1e-3 to be robust across platforms
-        assert torch.allclose(angle, torch.tensor([0.0]), atol=1e-3)
-
-    def test_angle_range(self, algebra_3d):
-        a = torch.randn(algebra_3d.dim)
-        b = torch.randn(algebra_3d.dim)
-        angle = hermitian_angle(algebra_3d, a, b)
-        assert angle >= 0 and angle <= torch.pi + 1e-5
-
-    def test_orthogonal(self, algebra_3d):
-        a = torch.zeros(algebra_3d.dim)
-        b = torch.zeros(algebra_3d.dim)
-        a[0] = 1.0  # scalar
-        b[1] = 1.0  # e1
-        angle = hermitian_angle(algebra_3d, a, b)
-        assert torch.allclose(angle, torch.tensor([torch.pi / 2]), atol=1e-5)
-
-
-class TestGradeHermitianNorm:
-    def test_scalar_grade(self, algebra_3d):
-        mv = torch.zeros(algebra_3d.dim)
-        mv[0] = 5.0
-        n = grade_hermitian_norm(algebra_3d, mv, grade=0)
-        assert torch.allclose(n, torch.tensor([5.0]), atol=1e-6)
-
-    def test_zero_for_wrong_grade(self, algebra_3d):
-        mv = torch.zeros(algebra_3d.dim)
-        mv[0] = 5.0  # Only scalar
-        n = grade_hermitian_norm(algebra_3d, mv, grade=1)
-        assert torch.allclose(n, torch.tensor([0.0]), atol=1e-6)
-
-    def test_grade_decomposition(self, algebra_3d):
-        """Grade spectrum elements should correspond to per-grade Hermitian IPs."""
-        mv = torch.randn(algebra_3d.dim)
-        spec = hermitian_grade_spectrum(algebra_3d, mv)
-        for k in range(algebra_3d.n + 1):
-            layout = algebra_3d.layout((k,))
-            mk = algebra_3d.grade_projection(mv, k)
-            expected = torch.abs(hermitian_inner_product(algebra_3d, mk, mk, layout=layout).squeeze())
-            assert torch.allclose(spec[k], expected, atol=1e-5)
-
-
-class TestHermitianGradeSpectrum:
-    def test_shape(self, algebra_3d):
-        mv = torch.randn(algebra_3d.dim)
-        spec = hermitian_grade_spectrum(algebra_3d, mv)
-        assert spec.shape == (algebra_3d.n + 1,)
-
-    def test_all_non_negative(self, algebra_minkowski):
-        mv = torch.randn(algebra_minkowski.dim)
-        spec = hermitian_grade_spectrum(algebra_minkowski, mv)
-        assert (spec >= -1e-6).all()
-
-    def test_scalar_only(self, algebra_3d):
-        mv = torch.zeros(algebra_3d.dim)
-        mv[0] = 3.0
-        spec = hermitian_grade_spectrum(algebra_3d, mv)
-        assert torch.allclose(spec[0], torch.tensor(9.0), atol=1e-5)
-        assert torch.allclose(spec[1:], torch.zeros(algebra_3d.n), atol=1e-6)
-
-    def test_sums_to_total_abs(self, algebra_3d):
-        """Spectrum entries are |<A_k, A_k>_H|, sum should be consistent."""
-        mv = torch.randn(algebra_3d.dim)
-        spec = hermitian_grade_spectrum(algebra_3d, mv)
-        # Each entry is abs of per-grade signed IP
-        for k in range(algebra_3d.n + 1):
-            layout = algebra_3d.layout((k,))
-            mk = algebra_3d.grade_projection(mv, k)
-            ip_k = hermitian_inner_product(algebra_3d, mk, mk, layout=layout)
-            assert torch.allclose(spec[k], torch.abs(ip_k).squeeze(), atol=1e-5)
-
-    def test_conformal_spectrum(self, algebra_conformal):
-        mv = torch.randn(algebra_conformal.dim)
-        spec = hermitian_grade_spectrum(algebra_conformal, mv)
-        assert spec.shape == (algebra_conformal.n + 1,)
-        assert (spec >= -1e-6).all()
-
-    def test_compact_spectrum_fills_inactive_grades(self):
-        context = make_algebra(5, 0, 0, device="cpu", dtype=torch.float32)
-        layout = context.layout((1,))
-        values = torch.ones(2, layout.dim)
-
-        spec = hermitian_grade_spectrum(context, values, layout=layout)
-
-        assert spec.shape == (2, context.n + 1)
-        assert torch.allclose(spec[:, 0], torch.zeros(2))
-        assert torch.allclose(spec[:, 1], torch.full((2,), float(context.n)))
-        assert torch.allclose(spec[:, 2:], torch.zeros(2, context.n - 1))
-
-    def test_active_multivector_norm_uses_layout_without_full_materialization(self):
-        context = make_algebra(9, 0, 0, device="cpu", dtype=torch.float32)
-        layout = context.layout((1,))
+    def test_compact_layout_uses_declared_lanes_without_materializing_full_values(self):
+        algebra = make_algebra(9, 0, 0, device="cpu", dtype=torch.float32)
+        layout = algebra.layout((1,))
         values = torch.ones(3, layout.dim)
 
-        norm = hermitian_norm(context, values, layout=layout)
+        assert torch.allclose(lane_norm(algebra, values, layout=layout), torch.full((3, 1), algebra.n**0.5))
 
-        assert norm.shape == (3, 1)
-        assert torch.allclose(norm, torch.full((3, 1), context.n**0.5))
+    def test_lane_grade_energy_and_distribution_fill_absent_grades(self, algebra_3d):
+        values = torch.zeros(algebra_3d.dim)
+        values[0] = 2.0
+        values[algebra_3d.layout((1,)).indices_tensor()] = 1.0
+
+        energy = lane_grade_energy(algebra_3d, values)
+        distribution = lane_grade_distribution(algebra_3d, values)
+
+        assert torch.allclose(energy, torch.tensor([4.0, 3.0, 0.0, 0.0]))
+        assert torch.allclose(distribution.sum(), torch.tensor(1.0))
+
+    def test_grade_purity_and_mean_grade_use_lane_energy(self, algebra_3d):
+        values = torch.zeros(algebra_3d.dim)
+        values[0] = 1.0
+        values[algebra_3d.layout((1,)).indices_tensor()] = 1.0
+
+        assert torch.allclose(grade_purity(algebra_3d, values, 1), torch.tensor(0.75))
+        assert torch.allclose(mean_grade(algebra_3d, values), torch.tensor(0.75))
+
+
+class TestConjugateScalarForm:
+    def test_signs_match_conjugate_geometric_product_scalar(self, algebra_minkowski):
+        torch.manual_seed(42)
+        a = torch.randn(algebra_minkowski.dim)
+        b = torch.randn(algebra_minkowski.dim)
+
+        signs = conjugate_scalar_form_signs(algebra_minkowski)
+        signed = (signs * a * b).sum()
+        prod = algebra_minkowski.geometric_product(clifford_conjugate(algebra_minkowski, a).unsqueeze(0), b.unsqueeze(0))
+
+        assert torch.allclose(signed, prod[0, 0], atol=1e-5)
+
+    def test_conjugate_scalar_form_matches_full_product(self, algebra_3d):
+        a = torch.randn(algebra_3d.dim)
+        b = torch.randn(algebra_3d.dim)
+
+        actual = conjugate_scalar_form(algebra_3d, a, b)
+        prod = algebra_3d.geometric_product(clifford_conjugate(algebra_3d, a).unsqueeze(0), b.unsqueeze(0))
+
+        assert torch.allclose(actual.squeeze(), prod[0, 0], atol=1e-5)
+
+    def test_compact_layout_matches_canonical_values(self):
+        algebra = make_algebra(3, 1, 0, device="cpu", dtype=torch.float64)
+        layout = algebra.layout((1, 2))
+        generator = torch.Generator(device="cpu").manual_seed(719)
+        a = torch.randn(5, layout.dim, dtype=torch.float64, generator=generator)
+        b = torch.randn(5, layout.dim, dtype=torch.float64, generator=generator)
+
+        compact = conjugate_scalar_form(algebra, a, b, layout=layout)
+        canonical = conjugate_scalar_form(algebra, layout.full(a), layout.full(b))
+
+        assert torch.allclose(compact, canonical, atol=1e-12, rtol=1e-12)
+
+    def test_magnitude_and_distance_like_are_non_negative_but_signed_form_based(self, algebra_minkowski):
+        a = torch.randn(10, algebra_minkowski.dim)
+        b = torch.randn(10, algebra_minkowski.dim)
+
+        assert torch.all(conjugate_form_magnitude(algebra_minkowski, a) >= 0)
+        assert torch.all(conjugate_form_distance_like(algebra_minkowski, a, b) >= 0)
+        assert torch.allclose(conjugate_form_distance_like(algebra_minkowski, a, a), torch.zeros(10, 1))
+
+    def test_conjugate_grade_magnitude_spectrum_has_all_grades(self, algebra_3d):
+        values = torch.randn(algebra_3d.dim)
+        spectrum = conjugate_grade_magnitude_spectrum(algebra_3d, values)
+
+        assert spectrum.shape == (algebra_3d.n + 1,)
+        assert torch.all(spectrum >= 0)
 
 
 class TestSignatureTraceForm:
-    def test_matches_standard_for_euclidean(self, algebra_3d):
+    def test_scalar_product_projects_geometric_product_to_grade_zero(self, algebra_3d):
         a = torch.randn(algebra_3d.dim)
-        trace = signature_trace_form(algebra_3d, a, a)
-        std = inner_product(algebra_3d, a, algebra_3d.reverse(a))
-        assert torch.allclose(trace, std, atol=1e-5)
+        b = torch.randn(algebra_3d.dim)
+        product = algebra_3d.geometric_product(a.unsqueeze(0), b.unsqueeze(0))
 
-    def test_can_be_negative_in_mixed(self, algebra_minkowski):
-        """Trace form can go negative in Cl(2,1)."""
+        assert torch.allclose(scalar_product(algebra_3d, a, b).squeeze(), product[0, 0], atol=1e-5)
+
+    def test_trace_form_matches_reverse_product_scalar(self, algebra_3d):
+        a = torch.randn(algebra_3d.dim)
+        product = algebra_3d.geometric_product(algebra_3d.reverse(a).unsqueeze(0), a.unsqueeze(0))
+
+        assert torch.allclose(signature_trace_form(algebra_3d, a, a).squeeze(), product[0, 0], atol=1e-5)
+
+    def test_trace_form_can_be_negative_in_mixed_signature(self, algebra_minkowski):
         found_negative = False
         for _ in range(100):
-            mv = torch.randn(algebra_minkowski.dim)
-            val = signature_trace_form(algebra_minkowski, mv, mv)
-            if val < -1e-6:
+            values = torch.randn(algebra_minkowski.dim)
+            if signature_trace_form(algebra_minkowski, values, values) < -1e-6:
                 found_negative = True
                 break
-        assert found_negative, "Expected negative trace form values in Cl(2,1)"
 
-    def test_signature_norm_squared(self, algebra_minkowski):
-        mv = torch.randn(algebra_minkowski.dim)
-        sn = signature_norm_squared(algebra_minkowski, mv)
-        tf = signature_trace_form(algebra_minkowski, mv, mv)
-        assert torch.allclose(sn, tf, atol=1e-6)
+        assert found_negative
 
+    def test_signature_norm_squared_and_magnitude_are_distinct_contracts(self, algebra_minkowski):
+        values = torch.randn(algebra_minkowski.dim)
 
-class TestComparisonHermitianVsSignature:
-    def test_euclidean_norms_agree_for_scalars(self, algebra_3d):
-        """For pure scalars, both norms should agree."""
-        mv = torch.zeros(algebra_3d.dim)
-        mv[0] = 7.0
-        h = hermitian_norm(algebra_3d, mv)
-        s = induced_norm(algebra_3d, mv)
-        assert torch.allclose(h, s, atol=1e-5)
-
-    def test_hermitian_ip_matches_bar_gp(self, algebra_3d):
-        """Hermitian IP should match <bar{A}B>_0 via geometric product."""
-        torch.manual_seed(99)
-        mv = torch.randn(algebra_3d.dim)
-        h_ip = hermitian_inner_product(algebra_3d, mv, mv)
-        mv_bar = clifford_conjugate(algebra_3d, mv)
-        prod = algebra_3d.geometric_product(mv_bar.unsqueeze(0), mv.unsqueeze(0))
-        gp_scalar = prod[0, 0]
-        assert torch.allclose(h_ip.squeeze(), gp_scalar, atol=1e-5)
+        assert torch.allclose(
+            signature_norm_squared(algebra_minkowski, values),
+            signature_trace_form(algebra_minkowski, values, values),
+        )
+        assert torch.all(signature_magnitude(algebra_minkowski, values) >= 0)

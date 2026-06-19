@@ -12,7 +12,7 @@ from clifra.core.foundation.basis import expand_output_grades, operation_coeffic
 from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.numerics import eps_like, signed_clamp_min
 from clifra.core.foundation.validation import validate_channel_values
-from clifra.core.storage import materialize_full, metric_self_signs
+from clifra.core.runtime.tensors import canonical_values, metric_self_signs
 
 
 class GradedLinearActionExecutor(nn.Module):
@@ -938,7 +938,7 @@ def full_versor_factors(
             rotor_layout=rotor_layout,
         )
         right = algebra.reverse(rotor, input_layout=rotor_layout, output_layout=rotor_layout)
-        return materialize_full(algebra, rotor, layout=rotor_layout), materialize_full(
+        return canonical_values(algebra, rotor, layout=rotor_layout), canonical_values(
             algebra,
             right,
             layout=rotor_layout,
@@ -954,7 +954,7 @@ def full_versor_factors(
 
     left = algebra.grade_involution(versor, input_layout=parameter_layout, output_layout=parameter_layout)
     right = algebra.blade_inverse(versor, input_layout=parameter_layout)
-    return materialize_full(algebra, left, layout=parameter_layout), materialize_full(
+    return canonical_values(algebra, left, layout=parameter_layout), canonical_values(
         algebra,
         right,
         layout=parameter_layout,
@@ -983,7 +983,7 @@ def full_paired_bivector_factors(
         rotor_layout=rotor_layout,
     )
     right_reverse = algebra.reverse(right_rotor, input_layout=rotor_layout, output_layout=rotor_layout)
-    return materialize_full(algebra, left_rotor, layout=rotor_layout), materialize_full(
+    return canonical_values(algebra, left_rotor, layout=rotor_layout), canonical_values(
         algebra,
         right_reverse,
         layout=rotor_layout,

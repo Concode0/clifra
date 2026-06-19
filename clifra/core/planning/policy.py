@@ -311,7 +311,7 @@ def validate_plan_cost(algebra, cost: PlanCost, *, limits: Optional[PlanningLimi
     limits = planning_limits_for(algebra) if limits is None else limits
     errors = []
     if cost.max_lanes > limits.max_lanes:
-        errors.append(f"active lanes {cost.max_lanes} exceed max_lanes={limits.max_lanes}")
+        errors.append(f"compact lanes {cost.max_lanes} exceed max_lanes={limits.max_lanes}")
     if cost.pair_count > limits.max_pairs:
         errors.append(f"basis interactions {cost.pair_count} exceed max_pairs={limits.max_pairs}")
     if errors:
@@ -320,7 +320,7 @@ def validate_plan_cost(algebra, cost: PlanCost, *, limits: Optional[PlanningLimi
 
     warnings_to_emit = []
     if cost.max_lanes >= limits.warn_lanes:
-        warnings_to_emit.append(f"active lanes {cost.max_lanes} are near max_lanes={limits.max_lanes}")
+        warnings_to_emit.append(f"compact lanes {cost.max_lanes} are near max_lanes={limits.max_lanes}")
     if cost.pair_count >= limits.warn_pairs:
         warnings_to_emit.append(f"basis interactions {cost.pair_count} are near max_pairs={limits.max_pairs}")
     if warnings_to_emit:

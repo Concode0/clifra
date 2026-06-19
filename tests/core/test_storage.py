@@ -6,26 +6,48 @@ import torch
 
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.planning.layouts import build_product_request
-from clifra.core.storage import ExecutorPath, LaneFormat, resolve_output_boundary, resolve_value_layout
+from clifra.core.runtime.tensors import LaneStorage, TensorContract, infer_contract
 
 pytestmark = pytest.mark.unit
 
 
-def test_value_layout_records_declared_layout_and_lane_format():
+def test_tensor_contract_records_declared_layout_and_storage():
     spec = AlgebraSpec(5, 0, 0)
     vector_layout = spec.layout((1,))
-    full = torch.zeros(2, spec.dim)
-    active = torch.zeros(2, vector_layout.dim)
+    compact = TensorContract.compact(spec, vector_layout)
+    canonical = TensorContract.canonical(spec, vector_layout)
 
-    full_value = resolve_value_layout(spec, full, layout=vector_layout, side="value")
-    active_value = resolve_value_layout(spec, active, layout=vector_layout, side="value")
+    assert compact.layout is vector_layout
+    assert compact.storage is LaneStorage.COMPACT
+    assert compact.lane_dim == vector_layout.dim
+    assert canonical.layout is vector_layout
+    assert canonical.storage is LaneStorage.CANONICAL
+    assert canonical.lane_dim == spec.dim
 
-    assert full_value.layout is vector_layout
-    assert full_value.lane_format is LaneFormat.FULL
-    assert full_value.lane_dim == spec.dim
-    assert active_value.layout is vector_layout
-    assert active_value.lane_format is LaneFormat.ACTIVE
-    assert active_value.lane_dim == vector_layout.dim
+
+def test_tensor_contract_converts_between_compact_and_canonical():
+    spec = AlgebraSpec(4, 0, 0)
+    layout = spec.layout((0, 2))
+    compact_contract = TensorContract.compact(spec, layout)
+    canonical_contract = TensorContract.canonical(spec, layout)
+    compact_values = torch.randn(3, layout.dim)
+    canonical_values = layout.full(compact_values)
+
+    assert torch.allclose(compact_contract.to_canonical(compact_values), canonical_values)
+    assert torch.allclose(canonical_contract.to_compact(canonical_values), compact_values)
+
+
+def test_infer_contract_detects_compact_and_canonical_storage():
+    spec = AlgebraSpec(6, 0, 0)
+    layout = spec.layout((1,))
+    compact = torch.zeros(2, layout.dim)
+    canonical = torch.zeros(2, spec.dim)
+
+    compact_contract = infer_contract(spec, compact, layout=layout, side="value")
+    canonical_contract = infer_contract(spec, canonical, layout=layout, side="value")
+
+    assert compact_contract.storage is LaneStorage.COMPACT
+    assert canonical_contract.storage is LaneStorage.CANONICAL
 
 
 def test_grade_layout_returns_compact_positions_for_grades():
@@ -40,7 +62,7 @@ def test_grade_layout_returns_compact_positions_for_grades():
     assert set(bivector_positions.tolist()).isdisjoint(scalar_positions.tolist())
 
 
-def test_product_request_carries_resolved_operand_layouts():
+def test_product_request_carries_resolved_tensor_contracts():
     spec = AlgebraSpec(6, 0, 0)
     vector_layout = spec.layout((1,))
     bivector_layout = spec.layout((2,))
@@ -53,18 +75,19 @@ def test_product_request_carries_resolved_operand_layouts():
         right,
         left_layout=vector_layout,
         right_layout=bivector_layout,
+        right_storage=LaneStorage.CANONICAL,
         op="gp",
     )
 
-    assert request.left_value.lane_format is LaneFormat.ACTIVE
-    assert request.right_value.lane_format is LaneFormat.FULL
+    assert request.left.storage is LaneStorage.COMPACT
+    assert request.right.storage is LaneStorage.CANONICAL
     assert request.left_grades == (1,)
     assert request.right_grades == (2,)
-    assert request.output_value.lane_format is LaneFormat.ACTIVE
+    assert request.output.storage is LaneStorage.COMPACT
     assert request.output_grades == (1, 3)
 
 
-def test_planned_boundary_returns_planner_output_lanes():
+def test_product_request_can_declare_canonical_output_storage():
     spec = AlgebraSpec(4, 0, 0)
     vector_layout = spec.layout((1,))
     values = torch.zeros(2, vector_layout.dim)
@@ -74,11 +97,9 @@ def test_planned_boundary_returns_planner_output_lanes():
         values,
         left_layout=vector_layout,
         right_layout=vector_layout,
+        output_storage=LaneStorage.CANONICAL,
         op="gp",
     )
 
-    active_boundary = resolve_output_boundary(request, active_output=True)
-
-    assert active_boundary.path is ExecutorPath.PLANNED_ACTIVE
-    assert active_boundary.output_value.uses_active_lanes
-    assert not active_boundary.materializes_full
+    assert request.output.uses_canonical_storage
+    assert request.output.lane_dim == spec.dim

@@ -215,7 +215,7 @@ class SpectralResult:
     """Output of :class:`SpectralAnalyzer`.
 
     Attributes:
-        grade_energy: Mean Hermitian grade energy ``[n+1]``.
+        grade_energy: Mean positive lane grade energy ``[n+1]``.
         bivector_spectrum: Norm summary of the mean bivector field.
         simple_components: Representative full-layout bivector tensors.
         gp_eigenvalues: Eigenvalues of the geometric-product left-action

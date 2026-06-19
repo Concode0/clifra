@@ -5,7 +5,7 @@
 """Pure activation formulas for multivector tensors.
 
 The final axis is the Clifford lane axis. Full-lane multivectors are ``[..., D]``
-and active layout values are ``[..., L]``. Per-channel activations use
+and compact layout values are ``[..., L]``. Per-channel activations use
 ``[..., C, D]`` or ``[..., C, L]`` with parameter vectors shaped ``[C]``.
 """
 
@@ -46,7 +46,7 @@ def geometric_square(algebra, values: torch.Tensor, gate: torch.Tensor | None = 
 
     Args:
         algebra: Algebra host.
-        values: Full-lane multivectors with shape ``[..., D]`` or active layout
+        values: Full-lane multivectors with shape ``[..., D]`` or compact layout
             values with shape ``[..., L]`` when ``layout`` is provided.
         gate: Optional per-channel gate with shape ``[C]``.
         layout: Compact layout describing the ``L`` final lanes.
