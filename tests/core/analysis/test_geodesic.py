@@ -15,7 +15,8 @@ import math
 import pytest
 import torch
 
-from clifra.core.analysis import DimensionLifter, GeodesicFlow
+from clifra.core.analysis.dimension import DimensionLifter
+from clifra.core.analysis.geodesic import GeodesicFlow
 from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit

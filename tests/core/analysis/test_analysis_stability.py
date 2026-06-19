@@ -4,10 +4,13 @@
 import pytest
 import torch
 
-from clifra.core.analysis import AnalysisConfig, CommutatorAnalyzer, GeodesicFlow, GeometricAnalyzer, SpectralAnalyzer
-from clifra.core.analysis._types import CONSTANTS
+from clifra.core.analysis._types import CONSTANTS, AnalysisConfig
 from clifra.core.analysis._utils import full_matrix_feasibility, full_product_feasibility
+from clifra.core.analysis.commutator import CommutatorAnalyzer
+from clifra.core.analysis.geodesic import GeodesicFlow
+from clifra.core.analysis.pipeline import GeometricAnalyzer
 from clifra.core.analysis.signature import MetricSearch
+from clifra.core.analysis.spectral import SpectralAnalyzer
 from clifra.core.analysis.symmetry import SymmetryDetector
 from clifra.core.config import make_algebra
 

@@ -13,22 +13,21 @@ import math
 import pytest
 import torch
 
-from clifra.core.analysis import (
+from clifra.core.analysis._types import (
     AnalysisConfig,
     AnalysisReport,
-    CommutatorAnalyzer,
     CommutatorResult,
     DimensionResult,
-    EffectiveDimensionAnalyzer,
-    GeometricAnalyzer,
     SamplingConfig,
-    SpectralAnalyzer,
     SpectralResult,
-    StatisticalSampler,
-    SymmetryDetector,
     SymmetryResult,
-    compute_uncertainty_and_alignment,
 )
+from clifra.core.analysis.commutator import CommutatorAnalyzer, compute_uncertainty_and_alignment
+from clifra.core.analysis.dimension import EffectiveDimensionAnalyzer
+from clifra.core.analysis.pipeline import GeometricAnalyzer
+from clifra.core.analysis.sampler import StatisticalSampler
+from clifra.core.analysis.spectral import SpectralAnalyzer
+from clifra.core.analysis.symmetry import SymmetryDetector
 from clifra.core.runtime.algebra import AlgebraContext
 
 DEVICE = "cpu"
