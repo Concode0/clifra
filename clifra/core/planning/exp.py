@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
 
 import torch
 
-from clifra.core.foundation.basis import basis_index_tuple_for_grades, basis_product, operation_coefficient
+from clifra.core.foundation.basis import basis_index_tuple_for_grades
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 
 SPECTRAL_LOCAL_MAX_PLANES = 4
@@ -442,13 +443,7 @@ def _spectral_local_buffers(
             device=device,
         )
     else:
-        product_table = torch.zeros((local_dim, local_dim, local_dim), dtype=dtype, device=device)
-        for left_position, left_index in enumerate(local_indices):
-            for right_position, right_index in enumerate(local_indices):
-                output_index, sign = basis_product(left_index, right_index, axis_count, 0, 0)
-                output_position = local_positions.get(output_index)
-                if output_position is not None and sign != 0.0:
-                    product_table[left_position, right_position, output_position] = float(sign)
+        product_table = _cached_even_local_product_table(axis_count, local_indices).to(dtype=dtype, device=device)
 
     output_positions_by_grade: dict[int, list[tuple[int, tuple[int, ...]]]] = {}
     for output_position, output_index in enumerate(output_layout.basis_indices):
@@ -561,6 +556,27 @@ def _empty_sparse_product_buffers(*, dtype: torch.dtype, device) -> dict[str, to
         "output_positions": torch.zeros(0, dtype=torch.long, device=device),
         "coefficients": torch.zeros(0, dtype=dtype, device=device),
     }
+
+
+@lru_cache(maxsize=8)
+def _cached_even_local_product_table(axis_count: int, local_indices: tuple[int, ...]) -> torch.Tensor:
+    local_dim = len(local_indices)
+    sparse_product = _sparse_product_buffers(
+        local_indices,
+        int(axis_count),
+        int(axis_count),
+        0,
+        0,
+        dtype=torch.float32,
+        device=torch.device("cpu"),
+    )
+    product_table = torch.zeros((local_dim, local_dim, local_dim), dtype=torch.float32)
+    product_table[
+        sparse_product["left_positions"],
+        sparse_product["right_positions"],
+        sparse_product["output_positions"],
+    ] = sparse_product["coefficients"]
+    return product_table
 
 
 def _empty_generator_entries(*, dtype: torch.dtype, device) -> dict[str, torch.Tensor]:
@@ -781,23 +797,14 @@ def _bivector_to_nondegenerate_generator(
 ) -> torch.Tensor:
     nondegenerate_dim = spec.p + spec.q
     output = torch.zeros((input_layout.dim, nondegenerate_dim, nondegenerate_dim), dtype=dtype, device=device)
-    vector_indices = [1 << axis for axis in range(nondegenerate_dim)]
-    vector_positions = {index: position for position, index in enumerate(vector_indices)}
 
     for bivector_position, bivector_index in enumerate(input_layout.basis_indices):
         bits = _basis_bits(bivector_index, spec.n)
         if len(bits) != 2 or bits[0] >= nondegenerate_dim or bits[1] >= nondegenerate_dim:
             continue
-        for input_position, input_index in enumerate(vector_indices):
-            output_index = bivector_index ^ input_index
-            output_position = vector_positions.get(output_index)
-            if output_position is None:
-                continue
-            output[bivector_position, output_position, input_position] = _vector_generator_coefficient(
-                bivector_index,
-                input_index,
-                spec,
-            )
+        left_axis, right_axis = bits
+        output[bivector_position, right_axis, left_axis] = _axis_metric_sign(left_axis, spec)
+        output[bivector_position, left_axis, right_axis] = -_axis_metric_sign(right_axis, spec)
     return output
 
 
@@ -813,32 +820,31 @@ def _bivector_to_mixed_generator(
     if spec.r == 0 or nondegenerate_dim == 0:
         return output
 
-    nondegenerate_indices = [1 << axis for axis in range(nondegenerate_dim)]
-    ideal_positions = {1 << (nondegenerate_dim + axis): axis for axis in range(spec.r)}
-
     for bivector_position, bivector_index in enumerate(input_layout.basis_indices):
         bits = _basis_bits(bivector_index, spec.n)
         if len(bits) != 2 or not (bits[0] < nondegenerate_dim <= bits[1]):
             continue
-        for input_position, input_index in enumerate(nondegenerate_indices):
-            output_index = bivector_index ^ input_index
-            output_position = ideal_positions.get(output_index)
-            if output_position is None:
-                continue
-            output[bivector_position, output_position, input_position] = _vector_generator_coefficient(
-                bivector_index,
-                input_index,
-                spec,
-            )
+        nondegenerate_axis, ideal_axis = bits[0], bits[1] - nondegenerate_dim
+        output[bivector_position, ideal_axis, nondegenerate_axis] = _axis_metric_sign(nondegenerate_axis, spec)
     return output
 
 
-def _vector_generator_coefficient(bivector_index: int, vector_index: int, spec: AlgebraSpec) -> float:
-    return -0.5 * operation_coefficient(bivector_index, vector_index, spec.p, spec.q, spec.r, "commutator")
+def _axis_metric_sign(axis: int, spec: AlgebraSpec) -> float:
+    if int(axis) < spec.p:
+        return 1.0
+    if int(axis) < spec.p + spec.q:
+        return -1.0
+    return 0.0
 
 
 def _basis_bits(index: int, n: int) -> list[int]:
-    return [bit for bit in range(n) if index & (1 << bit)]
+    value = int(index)
+    bits: list[int] = []
+    while value:
+        low_bit = value & -value
+        bits.append(low_bit.bit_length() - 1)
+        value ^= low_bit
+    return bits
 
 
 def _scalar_mask(layout: GradeLayout, *, dtype: torch.dtype, device) -> torch.Tensor:
@@ -870,8 +876,6 @@ def _bivector_to_nondegenerate_generator_entries(
     device,
 ) -> dict[str, torch.Tensor]:
     nondegenerate_dim = spec.p + spec.q
-    vector_indices = [1 << axis for axis in range(nondegenerate_dim)]
-    vector_positions = {index: position for position, index in enumerate(vector_indices)}
     input_positions: list[int] = []
     row_positions: list[int] = []
     col_positions: list[int] = []
@@ -881,15 +885,11 @@ def _bivector_to_nondegenerate_generator_entries(
         bits = _basis_bits(bivector_index, spec.n)
         if len(bits) != 2 or bits[0] >= nondegenerate_dim or bits[1] >= nondegenerate_dim:
             continue
-        for input_position, input_index in enumerate(vector_indices):
-            output_index = bivector_index ^ input_index
-            output_position = vector_positions.get(output_index)
-            if output_position is None:
-                continue
-            input_positions.append(bivector_position)
-            row_positions.append(output_position)
-            col_positions.append(input_position)
-            coefficients.append(_vector_generator_coefficient(bivector_index, input_index, spec))
+        left_axis, right_axis = bits
+        input_positions.extend((bivector_position, bivector_position))
+        row_positions.extend((right_axis, left_axis))
+        col_positions.extend((left_axis, right_axis))
+        coefficients.extend((_axis_metric_sign(left_axis, spec), -_axis_metric_sign(right_axis, spec)))
 
     return {
         "input_positions": torch.tensor(input_positions, dtype=torch.long, device=device),
@@ -910,8 +910,6 @@ def _bivector_to_mixed_generator_entries(
     if spec.r == 0 or nondegenerate_dim == 0:
         return _empty_generator_entries(dtype=dtype, device=device)
 
-    nondegenerate_indices = [1 << axis for axis in range(nondegenerate_dim)]
-    ideal_positions = {1 << (nondegenerate_dim + axis): axis for axis in range(spec.r)}
     input_positions: list[int] = []
     row_positions: list[int] = []
     col_positions: list[int] = []
@@ -921,15 +919,11 @@ def _bivector_to_mixed_generator_entries(
         bits = _basis_bits(bivector_index, spec.n)
         if len(bits) != 2 or not (bits[0] < nondegenerate_dim <= bits[1]):
             continue
-        for input_position, input_index in enumerate(nondegenerate_indices):
-            output_index = bivector_index ^ input_index
-            output_position = ideal_positions.get(output_index)
-            if output_position is None:
-                continue
-            input_positions.append(bivector_position)
-            row_positions.append(output_position)
-            col_positions.append(input_position)
-            coefficients.append(_vector_generator_coefficient(bivector_index, input_index, spec))
+        nondegenerate_axis, ideal_axis = bits[0], bits[1] - nondegenerate_dim
+        input_positions.append(bivector_position)
+        row_positions.append(ideal_axis)
+        col_positions.append(nondegenerate_axis)
+        coefficients.append(_axis_metric_sign(nondegenerate_axis, spec))
 
     return {
         "input_positions": torch.tensor(input_positions, dtype=torch.long, device=device),
