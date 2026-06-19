@@ -30,6 +30,11 @@ plugins:
 nav:
   - Home: index.md
   - Core Design: core-design.md
+  - Benchmarks:
+      - Overview: benchmarks/index.md
+      - Layout Invariants: benchmarks/layouts.md
+      - Performance: benchmarks/performance.md
+      - Correctness: benchmarks/correctness.md
   - API:
       - Package: api/index.md
       - Core: api/core.md
