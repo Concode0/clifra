@@ -71,7 +71,7 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
   author  = {Kim, Eunkyum},
   title   = {clifra: Clifford Algebra Layers for PyTorch},
   url     = {https://github.com/Concode0/clifra},
-  version = {1.0.0},
+  version = {1.0.2},
   year    = {2026},
   doi     = {10.5281/zenodo.18939519},
   license = {Apache-2.0}

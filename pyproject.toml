@@ -1,6 +1,6 @@
 [project]
 name = "clifra"
-version = "1.0.0"
+version = "1.0.2"
 description = "A PyTorch framework for Clifford geometric algebra deep learning"
 readme = "README.md"
 requires-python = ">=3.10"
