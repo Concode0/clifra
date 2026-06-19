@@ -66,18 +66,25 @@ class SolverEvaluation:
     target: CriterionResult
     policies: tuple[PolicyResult, ...]
     diagnostics: Mapping[str, MetricValue]
+    target_weight: MetricValue = 1.0
+    policy_weights: Mapping[str, MetricValue] = field(default_factory=dict)
 
     def detached_metrics(self) -> dict[str, MetricValue]:
         """Return detached metric values without forcing host scalar synchronization."""
+        target_weight = _detach_metric(self.target_weight)
         metrics: dict[str, MetricValue] = {
             "loss/total": _detach_metric(self.loss),
             f"loss/target/{self.target.name}": _detach_metric(self.target.loss),
+            f"loss/target_weighted/{self.target.name}": _detach_metric(self.target.loss * self.target_weight),
+            f"weight/target/{self.target.name}": target_weight,
         }
         for key, value in self.target.metrics.items():
             metrics[f"target/{self.target.name}/{key}"] = _detach_metric(value)
         for policy in self.policies:
+            policy_weight = self.policy_weights.get(policy.name, policy.weight)
             metrics[f"loss/policy/{policy.name}"] = _detach_metric(policy.loss)
-            metrics[f"loss/policy_weighted/{policy.name}"] = _detach_metric(policy.weighted_loss)
+            metrics[f"loss/policy_weighted/{policy.name}"] = _detach_metric(policy.loss * policy_weight)
+            metrics[f"weight/policy/{policy.name}"] = _detach_metric(policy_weight)
             for key, value in policy.metrics.items():
                 metrics[f"policy/{policy.name}/{key}"] = _detach_metric(value)
             for key, value in policy.violations.items():
