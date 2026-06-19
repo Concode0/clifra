@@ -58,6 +58,9 @@ docs = [
     "mkdocstrings[python]>=0.30.1",
     "pymdown-extensions>=10.21",
 ]
+slm = [
+    "datasets>=2.20.0",
+]
 viz = [
     "imageio>=2.37.0",
     "numpy>=2.0.0",
