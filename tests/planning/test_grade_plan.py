@@ -738,21 +738,28 @@ def test_compact_paired_bivector_action_handle_preplans_factor_products():
     assert handle.executor.right_product.executor in cached_products
 
 
-def test_compact_versor_action_handles_preplan_rotor_products_and_lift_maps():
+def test_compact_versor_action_routes_vector_actions_without_full_rotor_layouts():
     context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float64)
     vector_layout = context.layout((1,))
+    mixed_layout = context.layout((1, 2))
     bivector_layout = context.layout((2,))
 
-    rotor = context.plan_versor_action(
+    vector_rotor = context.plan_versor_action(
         grade=2,
         input_layout=vector_layout,
         output_layout=vector_layout,
         parameter_layout=bivector_layout,
     )
-    multi = context.plan_multi_versor_action(
+    vector_multi = context.plan_multi_versor_action(
         grade=2,
         input_layout=vector_layout,
         output_layout=vector_layout,
+        parameter_layout=bivector_layout,
+    )
+    mixed_rotor = context.plan_versor_action(
+        grade=2,
+        input_layout=mixed_layout,
+        output_layout=mixed_layout,
         parameter_layout=bivector_layout,
     )
     reflection = context.plan_versor_action(
@@ -762,26 +769,35 @@ def test_compact_versor_action_handles_preplan_rotor_products_and_lift_maps():
         parameter_layout=vector_layout,
     )
 
-    assert rotor.executor.use_rotor_product_action
-    assert rotor.executor.vector_matrix is None
-    assert rotor.executor.action is None
-    assert rotor.executor.bivector_exp is not None
-    assert rotor.executor.rotor_reverse is not None
-    assert rotor.executor.left_product is not None
-    assert rotor.executor.right_product is not None
-    assert multi.executor.use_rotor_product_action
-    assert multi.executor.vector_matrix is None
-    assert multi.executor.action is None
-    assert multi.executor.bivector_exp is not None
-    assert multi.executor.rotor_reverse is not None
-    assert multi.executor.left_product is not None
-    assert multi.executor.right_product is not None
+    assert not vector_rotor.executor.use_rotor_product_action
+    assert vector_rotor.executor.vector_matrix is not None
+    assert vector_rotor.executor.action is not None
+    assert vector_rotor.executor.bivector_exp is None
+    assert vector_rotor.executor.rotor_reverse is None
+    assert vector_rotor.executor.left_product is None
+    assert vector_rotor.executor.right_product is None
+    assert vector_rotor.executor.rotor_layout is None
+    assert not vector_multi.executor.use_rotor_product_action
+    assert vector_multi.executor.vector_matrix is not None
+    assert vector_multi.executor.action is not None
+    assert vector_multi.executor.bivector_exp is None
+    assert vector_multi.executor.rotor_reverse is None
+    assert vector_multi.executor.left_product is None
+    assert vector_multi.executor.right_product is None
+    assert vector_multi.executor.rotor_layout is None
+    assert mixed_rotor.executor.use_rotor_product_action
+    assert mixed_rotor.executor.vector_matrix is None
+    assert mixed_rotor.executor.action is None
+    assert mixed_rotor.executor.bivector_exp is not None
+    assert mixed_rotor.executor.rotor_reverse is not None
+    assert mixed_rotor.executor.left_product is not None
+    assert mixed_rotor.executor.right_product is not None
     assert reflection.executor.vector_matrix.metric_signs.numel() == vector_layout.dim
     assert reflection.executor.action.flat_positions_1.numel() == vector_layout.dim * vector_layout.dim
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_compact_versor_action_uses_closed_rotor_products_fullgraph():
+def test_compact_vector_bivector_action_uses_vector_matrix_fullgraph():
     context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float32)
     vector_layout = context.layout((1,))
     bivector_layout = context.layout((2,))
@@ -813,9 +829,9 @@ def test_compact_versor_action_uses_closed_rotor_products_fullgraph():
     expected = handle(values, weights)
     actual = compiled(values, weights)
 
-    assert handle.executor.use_rotor_product_action
-    assert handle.executor.vector_matrix is None
-    assert handle.executor.bivector_exp.executor_family == "closed_biquadratic"
+    assert not handle.executor.use_rotor_product_action
+    assert handle.executor.vector_matrix is not None
+    assert handle.executor.bivector_exp is None
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 

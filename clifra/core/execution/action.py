@@ -338,7 +338,9 @@ class _VersorFactorPlanMixin:
         self.full_dim = int(algebra.dim)
         self.eps_sq = float(algebra.eps_sq)
         self.rotor_layout = (
-            parameter_layout.spec.layout(range(0, parameter_layout.spec.n + 1, 2)) if int(grade) == 2 else None
+            parameter_layout.spec.layout(range(0, parameter_layout.spec.n + 1, 2))
+            if int(grade) == 2 and (self.use_full_action or getattr(self, "use_rotor_product_action", False))
+            else None
         )
         device = getattr(algebra, "device", None)
         dtype = getattr(algebra, "dtype", torch.float32)
@@ -356,6 +358,8 @@ class _VersorFactorPlanMixin:
         if not self.use_full_action and not getattr(self, "use_rotor_product_action", False):
             return
         if int(grade) == 2:
+            if self.rotor_layout is None:
+                raise RuntimeError("grade-2 rotor product actions require a rotor layout")
             self.bivector_exp = algebra.plan_exp(
                 input_layout=parameter_layout,
                 output_layout=self.rotor_layout,
@@ -431,7 +435,12 @@ class VersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         self.output_layout = output_layout
         self.parameter_layout = parameter_layout
         self.use_full_action = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
-        self.use_rotor_product_action = _prefer_rotor_product_action(algebra, grade=self.grade, use_full_action=self.use_full_action)
+        self.use_rotor_product_action = _prefer_rotor_product_action(
+            grade=self.grade,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            use_full_action=self.use_full_action,
+        )
         self.action = None
         self.vector_matrix = None
         self.left_product = None
@@ -523,7 +532,12 @@ class MultiVersorActionExecutor(_VersorFactorPlanMixin, nn.Module):
         self.output_layout = output_layout
         self.parameter_layout = parameter_layout
         self.use_full_action = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
-        self.use_rotor_product_action = _prefer_rotor_product_action(algebra, grade=self.grade, use_full_action=self.use_full_action)
+        self.use_rotor_product_action = _prefer_rotor_product_action(
+            grade=self.grade,
+            input_layout=input_layout,
+            output_layout=output_layout,
+            use_full_action=self.use_full_action,
+        )
         self.action = None
         self.vector_matrix = None
         self.left_product = None
@@ -881,8 +895,20 @@ def _graded_action_plan_tensors(
     )
 
 
-def _prefer_rotor_product_action(algebra, *, grade: int, use_full_action: bool) -> bool:
-    return int(grade) == 2 and not use_full_action
+def _prefer_rotor_product_action(
+    *,
+    grade: int,
+    input_layout: GradeLayout,
+    output_layout: GradeLayout,
+    use_full_action: bool,
+) -> bool:
+    if int(grade) != 2 or use_full_action:
+        return False
+    return not _is_vector_to_vector_action(input_layout, output_layout)
+
+
+def _is_vector_to_vector_action(input_layout: GradeLayout, output_layout: GradeLayout) -> bool:
+    return input_layout.grades == (1,) and output_layout.grades == (1,)
 
 
 def _layout_indices(layout: GradeLayout, *, device=None) -> torch.Tensor:
