@@ -77,3 +77,15 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
   license = {Apache-2.0}
 }
 ```
+
+## References
+
+### 1. Geometric Algebra & Layer Architectures
+This project implements the equivariant layer architectures derived from the irreducible decomposition of Clifford multivectors. 
+* *RotorGadget* implementations found in `clifra/layers/primitives` are based on:
+  - Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers from Irreducibles." *arXiv:2507.11688*.
+
+### 2. Optimization on Manifolds
+The core solvers and adaptive optimizers in `clifra/optimizers/` leverage Riemannian optimization techniques to handle the non-linear constraints of multivector rotors and versor transformations:
+  - Absil, P.-A., Mahony, R., & Sepulchre, R. (2008). *Optimization Algorithms on Matrix Manifolds*. Princeton University Press.
+  - Boumal, N. (2023). *An Introduction to Optimization on Smooth Manifolds*. Cambridge University Press.
