@@ -2,7 +2,7 @@
 
 ## Continuous Verification Layouts
 
-| signature | family | n | default grades | full lanes | compact lanes | roundtrip | full avoided | gate |
+| signature | family | n | default grades | full lanes | active lanes | roundtrip | full avoided | gate |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Cl(2,0,0) | euclidean | 2 | 1,2 | 4 | 3 | True | False | True |
 | Cl(1,1,0) | q1 | 2 | 1,2 | 4 | 3 | True | False | True |
