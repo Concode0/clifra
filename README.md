@@ -4,6 +4,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![Docs](https://img.shields.io/badge/docs-MkDocs-brightgreen)](https://concode0.github.io/clifra/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18939518.svg)](https://doi.org/10.5281/zenodo.18939518)
 
 Layout-first Clifford algebra tools for PyTorch.
 
@@ -85,7 +86,7 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
   url     = {https://github.com/Concode0/clifra},
   version = {1.1.0},
   year    = {2026},
-  doi     = {10.5281/zenodo.20759851},
+  doi     = {10.5281/zenodo.18939518},
   license = {Apache-2.0}
 }
 ```
