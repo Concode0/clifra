@@ -5,11 +5,11 @@ authors:
     given-names: "Eunkyum"
     email: "nemonanconcode@gmail.com"
 title: "clifra: Clifford Algebra Layers for PyTorch"
-version: 1.0.0
-date-released: 2026-03-10
+version: 1.1.0
+date-released: 2026-06-20
 url: "https://github.com/Concode0/clifra"
 repository-code: "https://github.com/Concode0/clifra"
-doi: "10.5281/zenodo.18939519"
+doi: "10.5281/zenodo.18939518"
 keywords:
   - "geometric algebra"
   - "clifford algebra"
@@ -18,5 +18,5 @@ keywords:
   - "multivector"
 identifiers:
   - type: doi
-    value: "10.5281/zenodo.18939519"
+    value: "10.5281/zenodo.18939518"
     description: "Zenodo Archive"
