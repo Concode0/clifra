@@ -7,11 +7,13 @@ project.
 Third-party software notices
 ============================
 
-clifra depends on third-party projects distributed under their respective
-licenses:
+clifra declares the following direct dependencies, distributed under their
+respective licenses. Entries are grouped by use and sorted by project name
+within each group. Transitive dependencies remain covered by the metadata and
+license files distributed with those projects.
 
-Core dependencies
------------------
+Runtime and build dependencies
+------------------------------
 
 * PyTorch (https://pytorch.org/)
   Copyright (c) 2016-present, Meta Platforms, Inc. and affiliates.
@@ -20,24 +22,50 @@ Core dependencies
 * setuptools (https://setuptools.pypa.io/)
   Licensed under the MIT License.
 
-Optional development and documentation dependencies
---------------------------------------------------
+Research and visualization dependencies
+---------------------------------------
 
-* pytest and pytest-xdist (https://pytest.org/)
-  Copyright (c) 2004-present, Holger Krekel and contributors.
-  Licensed under the MIT License.
+* imageio (https://imageio.readthedocs.io/)
+  Copyright (c) 2014-2026, imageio developers.
+  Licensed under the BSD-2-Clause License.
 
-* Ruff (https://docs.astral.sh/ruff/)
+* NumPy (https://numpy.org/)
+  Copyright (c) 2005-2025, NumPy Developers.
+  Licensed under the BSD-3-Clause License, with bundled permissive third-party
+  license text included in the NumPy distribution.
+
+* VTK (https://vtk.org/)
+  Copyright (c) 1993-2015 Ken Martin, Will Schroeder, Bill Lorensen.
+  Licensed under the BSD-3-Clause License.
+
+Development and documentation dependencies
+------------------------------------------
+
+* Material for MkDocs (https://squidfunk.github.io/mkdocs-material/)
+  Copyright (c) 2016-2025 Martin Donath.
   Licensed under the MIT License.
 
 * MkDocs (https://www.mkdocs.org/)
+  Copyright (c) 2014-present, Tom Christie.
   Licensed under the BSD-2-Clause License.
 
-* Material for MkDocs (https://squidfunk.github.io/mkdocs-material/)
-  Licensed under the MIT License.
-
 * mkdocstrings (https://mkdocstrings.github.io/)
+  Copyright (c) 2019, Timothée Mazzucotelli and contributors.
   Licensed under the ISC License.
 
 * pymdown-extensions (https://facelessuser.github.io/pymdown-extensions/)
+  Copyright (c) 2014-2025 Isaac Muse.
+  Licensed under the MIT License, with derived extension notices included in
+  the pymdown-extensions distribution.
+
+* pytest (https://pytest.org/)
+  Copyright (c) 2004 Holger Krekel and others.
+  Licensed under the MIT License.
+
+* pytest-xdist (https://pytest-xdist.readthedocs.io/)
+  Copyright (c) 2010 Holger Krekel and contributors.
+  Licensed under the MIT License.
+
+* Ruff (https://docs.astral.sh/ruff/)
+  Copyright (c) 2022 Charles Marsh.
   Licensed under the MIT License.
