@@ -29,6 +29,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - First Guide: first-guide.md
   - Core Design: core-design.md
   - Benchmarks:
       - Overview: benchmarks/index.md

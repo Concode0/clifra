@@ -61,6 +61,9 @@ uv run --group docs mkdocs build
 The docs are intentionally small: API pages come from live docstrings, and
 `docs/core-design.md` keeps the process snippets.
 
+See `docs/first-guide.md`, If you are a little confused or think you need
+an intuitive understanding, please refer to the first guide and move on to the `docs/core-design.md` or `docs/api/`.
+
 ## Research
 
 `research/continuum_solver` is a research engine built on clifra for fitting
