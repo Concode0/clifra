@@ -43,7 +43,7 @@ from .foundation.basis import (
     product_output_grades,
     reverse_sign,
 )
-from .foundation.device import DeviceConfig, dtype_name, optional_dtype, resolve_device, resolve_dtype
+from .foundation.device import dtype_name, optional_dtype, resolve_device, resolve_dtype
 from .foundation.layout import AlgebraSpec, GradeLayout
 from .foundation.module import AlgebraLike, CliffordModule
 from .foundation.numerics import covariance_regularizer, eps_for, eps_like, signed_clamp_min
@@ -149,7 +149,6 @@ __all__ = [
     "make_algebra",
     "make_algebra_from_config",
     # device / validation
-    "DeviceConfig",
     "dtype_name",
     "optional_dtype",
     "resolve_device",

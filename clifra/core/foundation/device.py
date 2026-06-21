@@ -1,11 +1,12 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device configuration and backend tuning for clifra.
+"""Low-level device and dtype helpers.
 
-Centralises device resolution, ``pin_memory``, ``torch.compile``,
-``cudnn.benchmark``, and AMP (automatic mixed precision) into a single
-:class:`DeviceConfig` dataclass.
+Core algebra uses this module only for device and dtype normalization. The
+``DeviceConfig`` class is retained as a direct-module training convenience for
+application code that wants one place to coordinate ``pin_memory``,
+``torch.compile``, ``cudnn.benchmark``, and AMP.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def resolve_device(device: str = "auto") -> str:
 
 @dataclass
 class DeviceConfig:
-    """Immutable bag of device / backend settings.
+    """Resolved device / backend settings for application training loops.
 
     Attributes:
         device: Resolved device string (``cuda``, ``mps``, ``cpu``).

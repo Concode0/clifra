@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Foundation value objects, basis utilities, validation, and device helpers."""
+"""Foundation value objects, basis utilities, validation, and low-level device helpers."""
 
 from .basis import (
     GradeProductOp,
@@ -18,7 +18,7 @@ from .basis import (
     product_output_grades,
     reverse_sign,
 )
-from .device import DeviceConfig, dtype_name, optional_dtype, resolve_device, resolve_dtype
+from .device import dtype_name, optional_dtype, resolve_device, resolve_dtype
 from .layout import AlgebraSpec, GradeLayout
 from .manifold import (
     MANIFOLD_EUCLIDEAN,
@@ -38,7 +38,6 @@ __all__ = [
     "AlgebraLike",
     "AlgebraSpec",
     "CliffordModule",
-    "DeviceConfig",
     "GradeLayout",
     "GradeProductOp",
     "MANIFOLD_EUCLIDEAN",

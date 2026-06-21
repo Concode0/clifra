@@ -5,6 +5,7 @@ import pytest
 
 import clifra.core as core
 import clifra.core.analysis as analysis
+import clifra.core.foundation as foundation
 import clifra.core.runtime as runtime
 from clifra.core.analysis.geodesic import GeodesicFlow
 from clifra.core.analysis.signature import MetricSearch
@@ -23,6 +24,13 @@ def test_core_package_has_no_lazy_analysis_getattr_bridge():
     assert "__getattr__" not in core.__dict__
     assert "MetricSearch" not in core.__dict__
     assert "GeodesicFlow" not in core.__dict__
+
+
+def test_core_packages_do_not_reexport_training_device_config():
+    assert "DeviceConfig" not in core.__dict__
+    assert "DeviceConfig" not in core.__all__
+    assert "DeviceConfig" not in foundation.__dict__
+    assert "DeviceConfig" not in foundation.__all__
 
 
 def test_analysis_package_does_not_reexport_legacy_search_names():

@@ -10,17 +10,12 @@ from typing import Optional
 import torch
 
 from clifra.core.foundation.layout import GradeLayout
-from clifra.core.runtime.tensors import compact_values
+from clifra.core.runtime.tensors import compact_pair_values, compact_values
 
 
 def lane_inner_product(algebra, A: torch.Tensor, B: torch.Tensor, *, layout: Optional[GradeLayout] = None, grades=None) -> torch.Tensor:
     """Return the positive-definite coefficient inner product over compact lanes."""
-    A_values, A_layout = compact_values(algebra, A, layout=layout, grades=grades)
-    B_values, B_layout = compact_values(algebra, B, layout=layout, grades=grades)
-    if A_layout != B_layout:
-        resolved = _union_layout(algebra, A_layout, B_layout)
-        A_values = resolved.convert(A_values, A_layout)
-        B_values = resolved.convert(B_values, B_layout)
+    A_values, B_values, _ = compact_pair_values(algebra, A, B, layout=layout, grades=grades)
     return (A_values * B_values).sum(dim=-1, keepdim=True)
 
 
@@ -38,12 +33,7 @@ def lane_norm(algebra, values: torch.Tensor, *, layout: Optional[GradeLayout] = 
 
 def lane_distance(algebra, A: torch.Tensor, B: torch.Tensor, *, layout: Optional[GradeLayout] = None, grades=None) -> torch.Tensor:
     """Return positive-definite coefficient distance."""
-    A_values, A_layout = compact_values(algebra, A, layout=layout, grades=grades)
-    B_values, B_layout = compact_values(algebra, B, layout=layout, grades=grades)
-    if A_layout != B_layout:
-        resolved = _union_layout(algebra, A_layout, B_layout)
-        A_values = resolved.convert(A_values, A_layout)
-        B_values = resolved.convert(B_values, B_layout)
+    A_values, B_values, _ = compact_pair_values(algebra, A, B, layout=layout, grades=grades)
     diff = A_values - B_values
     energy = diff.pow(2).sum(dim=-1, keepdim=True)
     return energy.sqrt()
@@ -76,9 +66,3 @@ def lane_grade_distribution(
     """Return normalized per-grade lane-energy distribution."""
     energy = lane_grade_energy(algebra, values, layout=layout, grades=grades)
     return energy / (energy.sum(dim=-1, keepdim=True) + float(eps))
-
-
-def _union_layout(algebra, left: GradeLayout, right: GradeLayout) -> GradeLayout:
-    basis = set(left.basis_indices).union(right.basis_indices)
-    grades = sorted({index.bit_count() for index in basis})
-    return algebra.layout(grades)

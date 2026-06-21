@@ -11,7 +11,7 @@ import torch
 
 from clifra.core.foundation.basis import operation_coefficient, reverse_sign
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.runtime.tensors import compact_values, resolve_layout
+from clifra.core.runtime.tensors import compact_pair_values, compact_values, resolve_layout
 
 
 def conjugate_scalar_form_signs(
@@ -45,7 +45,7 @@ def conjugate_scalar_form(
     right_grades: Optional[Iterable[int]] = None,
 ) -> torch.Tensor:
     """Return the signed Clifford-conjugation scalar form ``<bar(A) B>_0``."""
-    A_values, B_values, resolved = _aligned_pair_values(
+    A_values, B_values, resolved = compact_pair_values(
         algebra,
         A,
         B,
@@ -87,7 +87,7 @@ def conjugate_form_distance_like(
     right_grades: Optional[Iterable[int]] = None,
 ) -> torch.Tensor:
     """Return ``sqrt(abs(<bar(A-B) (A-B)>_0))``; not a metric in general."""
-    A_values, B_values, resolved = _aligned_pair_values(
+    A_values, B_values, resolved = compact_pair_values(
         algebra,
         A,
         B,
@@ -130,38 +130,6 @@ def signature_trace_form(algebra, A: torch.Tensor, B: torch.Tensor) -> torch.Ten
 def signature_norm_squared(algebra, A: torch.Tensor) -> torch.Tensor:
     """Return the raw signed signature norm squared ``<A~A>_0``."""
     return signature_trace_form(algebra, A, A)
-
-
-def _aligned_pair_values(
-    algebra,
-    A,
-    B,
-    *,
-    layout: Optional[GradeLayout] = None,
-    left_layout: Optional[GradeLayout] = None,
-    right_layout: Optional[GradeLayout] = None,
-    grades: Optional[Iterable[int]] = None,
-    left_grades: Optional[Iterable[int]] = None,
-    right_grades: Optional[Iterable[int]] = None,
-) -> tuple[torch.Tensor, torch.Tensor, GradeLayout]:
-    shared_left_layout = left_layout if left_layout is not None else layout
-    shared_right_layout = right_layout if right_layout is not None else layout
-    shared_left_grades = left_grades if left_grades is not None else grades
-    shared_right_grades = right_grades if right_grades is not None else grades
-    A_values, A_layout = compact_values(algebra, A, layout=shared_left_layout, grades=shared_left_grades)
-    B_values, B_layout = compact_values(algebra, B, layout=shared_right_layout, grades=shared_right_grades)
-    resolved = A_layout if A_layout == B_layout else _union_layout(algebra, A_layout, B_layout)
-    if A_layout != resolved:
-        A_values = resolved.convert(A_values, A_layout)
-    if B_layout != resolved:
-        B_values = resolved.convert(B_values, B_layout)
-    return A_values, B_values, resolved
-
-
-def _union_layout(algebra, left: GradeLayout, right: GradeLayout) -> GradeLayout:
-    basis = set(left.basis_indices).union(right.basis_indices)
-    grades = sorted({index.bit_count() for index in basis})
-    return algebra.layout(grades)
 
 
 def _conjugate_scalar_form_sign_for_index(spec: AlgebraSpec, index: int) -> float:

@@ -6,7 +6,7 @@ import torch
 
 from clifra.core.foundation.layout import AlgebraSpec
 from clifra.core.planning.layouts import build_product_request
-from clifra.core.runtime.tensors import LaneStorage, TensorContract, infer_contract
+from clifra.core.runtime.tensors import LaneStorage, TensorContract, compact_pair_values, infer_contract
 
 pytestmark = pytest.mark.unit
 
@@ -103,3 +103,30 @@ def test_product_request_can_declare_canonical_output_storage():
 
     assert request.output.uses_canonical_storage
     assert request.output.lane_dim == spec.dim
+
+
+def test_compact_pair_values_aligns_to_grade_union_without_full_materialization():
+    spec = AlgebraSpec(4, 0, 0)
+    vector_layout = spec.layout((1,))
+    bivector_layout = spec.layout((2,))
+    resolved_layout = spec.layout((1, 2))
+    vector_values = torch.ones(2, vector_layout.dim)
+    bivector_values = torch.full((2, bivector_layout.dim), 2.0)
+
+    aligned_vector, aligned_bivector, resolved = compact_pair_values(
+        spec,
+        vector_values,
+        bivector_values,
+        left_layout=vector_layout,
+        right_layout=bivector_layout,
+    )
+
+    assert resolved == resolved_layout
+    assert aligned_vector.shape[-1] == resolved_layout.dim
+    assert aligned_bivector.shape[-1] == resolved_layout.dim
+    vector_positions = resolved_layout.positions_for_grades((1,))
+    bivector_positions = resolved_layout.positions_for_grades((2,))
+    assert torch.allclose(torch.index_select(aligned_vector, -1, vector_positions), vector_values)
+    assert torch.allclose(torch.index_select(aligned_vector, -1, bivector_positions), torch.zeros_like(bivector_values))
+    assert torch.allclose(torch.index_select(aligned_bivector, -1, vector_positions), torch.zeros_like(vector_values))
+    assert torch.allclose(torch.index_select(aligned_bivector, -1, bivector_positions), bivector_values)

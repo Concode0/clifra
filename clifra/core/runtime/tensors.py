@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Iterable, Optional
 
 import torch
 
@@ -210,6 +210,54 @@ def canonical_values(algebra, value: torch.Tensor, *, layout: Optional[GradeLayo
     return resolved.full(values)
 
 
+def union_layout(algebra_or_spec, left: GradeLayout, right: GradeLayout) -> GradeLayout:
+    """Return a compact layout containing every grade from ``left`` and ``right``."""
+    spec = algebra_or_spec if isinstance(algebra_or_spec, AlgebraSpec) else AlgebraSpec.from_algebra(algebra_or_spec)
+    check_layout_spec(spec, left, "left layout")
+    check_layout_spec(spec, right, "right layout")
+    if left == right:
+        return left
+    grades = _grade_union(left.grades, right.grades)
+    return algebra_or_spec.layout(grades) if hasattr(algebra_or_spec, "layout") else spec.layout(grades)
+
+
+def compact_pair_values(
+    algebra_or_spec,
+    left: torch.Tensor,
+    right: torch.Tensor,
+    *,
+    layout: Optional[GradeLayout] = None,
+    left_layout: Optional[GradeLayout] = None,
+    right_layout: Optional[GradeLayout] = None,
+    grades: Optional[Iterable[int]] = None,
+    left_grades: Optional[Iterable[int]] = None,
+    right_grades: Optional[Iterable[int]] = None,
+) -> tuple[torch.Tensor, torch.Tensor, GradeLayout]:
+    """Return compact values aligned to one runtime layout."""
+    shared_left_layout = left_layout if left_layout is not None else layout
+    shared_right_layout = right_layout if right_layout is not None else layout
+    shared_left_grades = left_grades if left_grades is not None else grades
+    shared_right_grades = right_grades if right_grades is not None else grades
+    left_values, resolved_left = compact_values(
+        algebra_or_spec,
+        left,
+        layout=shared_left_layout,
+        grades=shared_left_grades,
+    )
+    right_values, resolved_right = compact_values(
+        algebra_or_spec,
+        right,
+        layout=shared_right_layout,
+        grades=shared_right_grades,
+    )
+    resolved = union_layout(algebra_or_spec, resolved_left, resolved_right)
+    if resolved_left != resolved:
+        left_values = resolved.convert(left_values, resolved_left)
+    if resolved_right != resolved:
+        right_values = resolved.convert(right_values, resolved_right)
+    return left_values, right_values, resolved
+
+
 def metric_self_signs(layout: GradeLayout, *, device=None, dtype=None) -> torch.Tensor:
     """Return basis self-product signs for a layout."""
     signs = [
@@ -217,3 +265,7 @@ def metric_self_signs(layout: GradeLayout, *, device=None, dtype=None) -> torch.
         for index in layout.basis_indices
     ]
     return torch.tensor(signs, device=device, dtype=torch.float32 if dtype is None else dtype)
+
+
+def _grade_union(left: Iterable[int], right: Iterable[int]) -> tuple[int, ...]:
+    return tuple(sorted(set(left).union(right)))
