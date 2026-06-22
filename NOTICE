@@ -41,6 +41,10 @@ Research and visualization dependencies
 Development and documentation dependencies
 ------------------------------------------
 
+* Hypothesis (https://hypothesis.readthedocs.io/)
+  Copyright (c) 2013-present, David R. MacIver and contributors.
+  Licensed under the Mozilla Public License 2.0 (MPL-2.0).
+
 * Material for MkDocs (https://squidfunk.github.io/mkdocs-material/)
   Copyright (c) 2016-2025 Martin Donath.
   Licensed under the MIT License.
