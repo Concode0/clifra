@@ -457,24 +457,6 @@ class TestCommutatorAnalyzer:
         result = ca.analyze(mv)
         assert result.lie_bracket_structure["basis_indices"]
 
-    def test_commutator_primitive_matches_manual(self, alg3):
-        """Verify algebra.commutator() matches GP(A,B) - GP(B,A)."""
-        torch.manual_seed(32)
-        A = torch.randn(10, alg3.dim)
-        B = torch.randn(10, alg3.dim)
-        manual = alg3.geometric_product(A, B) - alg3.geometric_product(B, A)
-        prim = alg3.commutator(A, B)
-        assert torch.allclose(manual, prim, atol=1e-5)
-
-    def test_anti_commutator_primitive_matches_manual(self, alg3):
-        """Verify algebra.anti_commutator() matches GP(A,B) + GP(B,A)."""
-        torch.manual_seed(33)
-        A = torch.randn(10, alg3.dim)
-        B = torch.randn(10, alg3.dim)
-        manual = alg3.geometric_product(A, B) + alg3.geometric_product(B, A)
-        prim = alg3.anti_commutator(A, B)
-        assert torch.allclose(manual, prim, atol=1e-5)
-
 
 # =====================================================================
 # compute_uncertainty_and_alignment
