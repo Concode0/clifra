@@ -87,6 +87,53 @@ class SmallCliffordOracle:
         signs = torch.tensor([reverse_sign(index) for index in basis], dtype=values.dtype, device=values.device)
         return values * signs
 
+    def grade_involution(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
+        basis = self.full_indices if indices is None else tuple(int(index) for index in indices)
+        signs = torch.tensor(
+            [-1.0 if int(index).bit_count() % 2 else 1.0 for index in basis],
+            dtype=values.dtype,
+            device=values.device,
+        )
+        return values * signs
+
+    def clifford_conjugation(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
+        return self.grade_involution(self.reverse(values, indices), indices)
+
+    def scalar_product(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        *,
+        left_indices: Iterable[int] | None = None,
+        right_indices: Iterable[int] | None = None,
+    ) -> torch.Tensor:
+        return self.product(
+            left,
+            right,
+            op="gp",
+            left_indices=left_indices,
+            right_indices=right_indices,
+            output_indices=(0,),
+        )
+
+    def conjugate_scalar_form(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        indices: Iterable[int] | None = None,
+    ) -> torch.Tensor:
+        basis = self.full_indices if indices is None else tuple(int(index) for index in indices)
+        return self.scalar_product(self.clifford_conjugation(left, basis), right, left_indices=basis, right_indices=basis)
+
+    def signature_trace_form(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        indices: Iterable[int] | None = None,
+    ) -> torch.Tensor:
+        basis = self.full_indices if indices is None else tuple(int(index) for index in indices)
+        return self.scalar_product(self.reverse(left, basis), right, left_indices=basis, right_indices=basis)
+
     def dual(
         self,
         values: torch.Tensor,

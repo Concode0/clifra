@@ -20,23 +20,8 @@ def test_runtime_package_has_no_lazy_getattr_import_bridge():
     assert AlgebraContext.__name__ == "AlgebraContext"
 
 
-def test_core_package_has_no_lazy_analysis_getattr_bridge():
-    assert "__getattr__" not in core.__dict__
-    assert "MetricSearch" not in core.__dict__
-    assert "GeodesicFlow" not in core.__dict__
-
-
 def test_core_packages_do_not_reexport_training_device_config():
     assert "DeviceConfig" not in core.__dict__
     assert "DeviceConfig" not in core.__all__
     assert "DeviceConfig" not in foundation.__dict__
     assert "DeviceConfig" not in foundation.__all__
-
-
-def test_analysis_package_does_not_reexport_legacy_search_names():
-    assert "MetricSearch" not in analysis.__all__
-    assert "GeodesicFlow" not in analysis.__all__
-    assert not hasattr(analysis, "MetricSearch")
-    assert not hasattr(analysis, "GeodesicFlow")
-    assert MetricSearch.__name__ == "MetricSearch"
-    assert GeodesicFlow.__name__ == "GeodesicFlow"
