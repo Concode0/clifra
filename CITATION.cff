@@ -6,7 +6,7 @@ authors:
     email: "nemonanconcode@gmail.com"
 title: "clifra: Clifford Algebra Layers for PyTorch"
 version: 1.1.0
-date-released: 2026-06-20
+date-released: 2026-03-10
 url: "https://github.com/Concode0/clifra"
 repository-code: "https://github.com/Concode0/clifra"
 doi: "10.5281/zenodo.18939518"
