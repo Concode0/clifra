@@ -58,6 +58,8 @@ uv run --group docs mkdocs build
 
 ## Docs
 
+> Please check [documentation milestone and status](https://github.com/Concode0/clifra/issues/21)
+
 The docs are intentionally small: API pages come from live docstrings, and
 `docs/core-design.md` keeps the process snippets.
 
@@ -71,10 +73,20 @@ stable, fast continuum deformations. It uses diffeomorphism-style coordinate
 morphing over clifra charts and invertible bivector fields, inheriting clifra's
 planned algebra execution.
 
+The strict PGA metamaterial example in
+`research/continuum_solver/examples/metamaterial_design.py` demonstrates a
+difficult auxetic-to-positive phase target with reversible deformation paths.
+The recorded validation run reached the target loss (`0.001632 < 0.01`) with
+no validation failures, zero folded cells, and extremely small inverse-path
+error (`inverse_rmse=4.10e-16`, `inverse_max_abs=2.00e-15`), producing VTK/GIF
+artifacts under `outputs/metamaterial_design/`.
+
 ## Contribution
 
 Found a problem or want to propose a change? Please open an Issue first,
 especially before a PR, so the scope is clear.
+
+For direct contact, email: nemonanconcode@gmail.com
 
 ## License
 
