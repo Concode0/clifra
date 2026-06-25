@@ -16,7 +16,3 @@ keywords:
   - "deep learning"
   - "rotor"
   - "multivector"
-identifiers:
-  - type: doi
-    value: "10.5281/zenodo.18939518"
-    description: "Zenodo Archive"
