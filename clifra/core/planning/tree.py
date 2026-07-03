@@ -124,10 +124,4 @@ def build_grade_plan_tree(
 def _grade_dim(n: int, grade: int) -> int:
     if grade < 0 or grade > n:
         return 0
-    grade = min(grade, n - grade)
-    numerator = 1
-    denominator = 1
-    for i in range(1, grade + 1):
-        numerator *= n - grade + i
-        denominator *= i
-    return numerator // denominator
+    return math.comb(n, grade)
