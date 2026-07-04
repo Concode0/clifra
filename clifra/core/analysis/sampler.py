@@ -26,7 +26,7 @@ class StatisticalSampler:
     The ``"stratified"`` strategy uses per-point geodesic-flow coherence
     to partition data into geometrically meaningful strata (high-structure
     vs low-structure regions), ensuring coverage of diverse geometric
-    neighbourhoods without assuming a specific metric signature.
+    neighborhoods without assuming a specific metric signature.
     """
 
     @staticmethod

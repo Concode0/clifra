@@ -6,7 +6,7 @@
 
 Interprets data points as grade-1 multivectors and computes the *flow
 field* -- a bivector at each point encoding the direction of shortest
-algebraic paths to its k-nearest neighbours.
+algebraic paths to its k-nearest neighbors.
 """
 
 from typing import Dict
@@ -26,7 +26,7 @@ class GeodesicFlow:
 
     Interprets data points as grade-1 multivectors and computes the *flow
     field* -- a bivector at each point that encodes the direction of shortest
-    algebraic paths to its k-nearest neighbours.
+    algebraic paths to its k-nearest neighbors.
 
     The flow is computed as the mean of *connection bivectors*:
 
@@ -49,7 +49,7 @@ class GeodesicFlow:
 
         Args:
             algebra: Layout-first algebra context.
-            k (int): Number of nearest neighbours for the flow field.
+            k (int): Number of nearest neighbors for the flow field.
         """
         self.algebra = algebra
         self.k = int(k)
@@ -76,13 +76,13 @@ class GeodesicFlow:
         return self.algebra.embed_vector(data)
 
     def _knn(self, mv: torch.Tensor) -> torch.Tensor:
-        """Returns k-nearest neighbour indices in multivector coefficient space.
+        """Returns k-nearest neighbor indices in multivector coefficient space.
 
         Args:
             mv (torch.Tensor): ``[N, dim]`` multivectors.
 
         Returns:
-            torch.Tensor: ``[N, k]`` neighbour indices.
+            torch.Tensor: ``[N, k]`` neighbor indices.
         """
         N = mv.shape[0]
         k = min(self.k, N - 1)
@@ -94,7 +94,7 @@ class GeodesicFlow:
         return idx  # [N, k]
 
     def _connection_bivectors(self, mv: torch.Tensor, *, compact_output: bool = False) -> torch.Tensor:
-        """Computes unit connection bivectors for all (point, neighbour) pairs.
+        """Computes unit connection bivectors for all (point, neighbor) pairs.
 
         The connection bivector from x_i to x_j encodes the rotational "turn"
         in the algebra needed to map one vector toward the other:
@@ -185,11 +185,11 @@ class GeodesicFlow:
         return off_diag.mean() if off_diag.numel() > 0 else mv.new_zeros(())
 
     def coherence(self, mv: torch.Tensor) -> float:
-        """Measures concentration of connection bivectors within each neighbourhood.
+        """Measures concentration of connection bivectors within each neighborhood.
 
         For each point, computes the mean **absolute** cosine similarity between
         all pairs of its k connection bivectors.  This captures how consistently
-        the neighbourhood connections lie on the same rotation plane.
+        the neighborhood connections lie on the same rotation plane.
 
         - **1.0**: all connections at every point are parallel or anti-parallel
           (maximally structured).
@@ -238,7 +238,7 @@ class GeodesicFlow:
         """Measures how much connection structure changes across the manifold.
 
         Computes the mean **dissimilarity** of connection bivectors between
-        neighbouring pairs of points:
+        neighboring pairs of points:
 
             dissimilarity(i, j) = 1 - mean_abs_cos( {B_ia}, {B_jb} )
 
@@ -246,9 +246,9 @@ class GeodesicFlow:
         {B_jb} at point j, and mean_abs_cos is the cross-set absolute cosine
         similarity.
 
-        - **0.0**: all neighbouring points have the same connection structure
+        - **0.0**: all neighboring points have the same connection structure
           (flat geodesics, smooth manifold).
-        - **High**: the connection direction changes rapidly between neighbours
+        - **High**: the connection direction changes rapidly between neighbors
           (high curvature, fragmented flow).
 
         Args:
@@ -385,7 +385,7 @@ class GeodesicFlow:
         """Per-point coherence scores for stratified sampling.
 
         Returns a scalar coherence value per data point, measuring how
-        well-aligned that point's neighbourhood connections are.
+        well-aligned that point's neighborhood connections are.
 
         Args:
             mv (torch.Tensor): ``[N, dim]`` multivectors.

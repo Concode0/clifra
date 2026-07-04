@@ -129,7 +129,7 @@ class CommutatorAnalyzer:
         """Eigenvalue magnitudes of the adjoint operator ``ad_mu``.
 
         Constructs the explicit matrix for ``ad_mu(x) = [mu, x]``
-        where ``mu = E[x]`` and diagonalises it.
+        where ``mu = E[x]`` and diagonalizes it.
 
         Args:
             mv_data: ``[N, dim]`` multivector data.
@@ -187,7 +187,7 @@ class CommutatorAnalyzer:
     def mean_commutator_norm(self, mv_data: torch.Tensor) -> float:
         """``E[||[x_i, mu]||_2]`` -- scalar non-commutativity summary.
 
-        Generalises the *Geometric Uncertainty Index* from
+        Generalizes the *Geometric Uncertainty Index* from
         :func:`clifra.core.analysis.compute_uncertainty_and_alignment`.
 
         Args:

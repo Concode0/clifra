@@ -148,7 +148,7 @@ class AnalysisConfig:
         run_commutator: Enable commutator analysis.
         energy_threshold: Cutoff for "active" components (shared across
             analyzers).
-        k_neighbors: Number of nearest neighbours for local analyses.
+        k_neighbors: Number of nearest neighbors for local analyses.
         verbose: Print progress messages.
     """
 

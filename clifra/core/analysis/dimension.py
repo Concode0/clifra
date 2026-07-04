@@ -34,7 +34,7 @@ class EffectiveDimensionAnalyzer:
         dtype: Floating-point dtype used for covariance computations.
             Defaults to ``torch.float32``.  Pass ``torch.float64`` for
             higher-precision analyses.
-        k_local: Number of neighbours for local-dimension estimation.
+        k_local: Number of neighbors for local-dimension estimation.
         energy_threshold: Minimum normalized eigenvalue to count as
             active.
     """
@@ -159,7 +159,7 @@ class EffectiveDimensionAnalyzer:
         return int((normed > expected[: len(normed)]).sum().item())
 
     def _local_dimensions(self, data: torch.Tensor, k: int) -> torch.Tensor:
-        """Per-point local dimension via neighbourhood PCA."""
+        """Per-point local dimension via neighborhood PCA."""
         dists = torch.cdist(data, data)  # [N, N]
         # k+1 because the closest point is itself
         _, knn_idx = dists.topk(k + 1, largest=False, dim=1)
@@ -261,7 +261,7 @@ class DimensionLifter:
             data: ``[N, d]`` data where d = p + q.
             p: Original positive signature.
             q: Original negative signature.
-            k: Nearest neighbours for geodesic flow.
+            k: Nearest neighbors for geodesic flow.
 
         Returns:
             Dict with keys ``original``, ``lift_positive``, ``lift_null``,
