@@ -230,9 +230,9 @@ class MetricSearch:
                 f"{max_entries} entries."
             )
 
-        norm_sq = 0.5 * (data**2).sum(dim=-1, keepdim=True)
+        half_radius_squared = 0.5 * (data**2).sum(dim=-1, keepdim=True)
         ones = torch.ones(N, 1, device=self.device, dtype=data.dtype)
-        lifted = torch.cat([data, norm_sq, ones], dim=-1)
+        lifted = torch.cat([data, half_radius_squared, ones], dim=-1)
 
         algebra = make_algebra(X + 1, 1, 0, device=self.device, dtype=data.dtype)
         mv = algebra.embed_vector(lifted)

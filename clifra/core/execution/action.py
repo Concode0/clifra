@@ -121,7 +121,7 @@ class BivectorVectorGeneratorExecutor(nn.Module):
                     bivector_layout.spec.p,
                     bivector_layout.spec.q,
                     bivector_layout.spec.r,
-                    "commutator",
+                    "commutator_product",
                 )
                 if coefficient == 0.0:
                     continue
@@ -203,8 +203,8 @@ class VersorVectorMatrixExecutor(nn.Module):
         if self.grade == 2:
             return torch.matrix_exp(self.generator.execute(weights))
         signs = self.metric_signs
-        norm_sq = (weights * weights * signs).sum(dim=-1, keepdim=True)
-        scale = norm_sq.abs().clamp_min(eps_like(norm_sq)).sqrt()
+        signature_norm_squared = (weights * weights * signs).sum(dim=-1, keepdim=True)
+        scale = signature_norm_squared.abs().clamp_min(eps_like(signature_norm_squared)).sqrt()
         normals = weights / scale
         denominator = (normals * normals * signs).sum(dim=-1, keepdim=True)
         denominator = signed_clamp_min(denominator, self.eps)
@@ -347,7 +347,7 @@ class _VersorFactorPlanMixin:
 
         self.bivector_exp = None
         self.rotor_reverse = None
-        self.parameter_norm_sq = None
+        self.parameter_signature_norm_squared = None
         self.parameter_involution = None
         self.parameter_reverse = None
         self.register_buffer("rotor_full_indices", torch.empty(0, dtype=torch.long, device=device), persistent=False)
@@ -360,7 +360,7 @@ class _VersorFactorPlanMixin:
         if int(grade) == 2:
             if self.rotor_layout is None:
                 raise RuntimeError("grade-2 rotor product actions require a rotor layout")
-            self.bivector_exp = algebra.plan_exp(
+            self.bivector_exp = algebra.plan_bivector_exp(
                 input_layout=parameter_layout,
                 output_layout=self.rotor_layout,
                 dtype=dtype,
@@ -377,7 +377,11 @@ class _VersorFactorPlanMixin:
                 self.rotor_full_indices = _layout_indices(self.rotor_layout, device=device)
             return
 
-        self.parameter_norm_sq = algebra.plan_norm_sq(input_layout=parameter_layout, dtype=dtype, device=device)
+        self.parameter_signature_norm_squared = algebra.plan_signature_norm_squared(
+            input_layout=parameter_layout,
+            dtype=dtype,
+            device=device,
+        )
         self.parameter_involution = algebra.plan_unary(
             op="grade_involution",
             input_layout=parameter_layout,
@@ -401,11 +405,11 @@ class _VersorFactorPlanMixin:
             right_full = _materialize_full_from_indices(right, self.rotor_full_indices, self.full_dim)
             return left_full, right_full
 
-        norm_sq = self.parameter_norm_sq(weights)
-        scale = norm_sq.abs().clamp_min(eps_like(norm_sq)).sqrt()
+        signature_norm_squared = self.parameter_signature_norm_squared(weights)
+        scale = signature_norm_squared.abs().clamp_min(eps_like(signature_norm_squared)).sqrt()
         versor = weights / scale
         left = self.parameter_involution(versor)
-        denominator = signed_clamp_min(self.parameter_norm_sq(versor), self.eps_sq)
+        denominator = signed_clamp_min(self.parameter_signature_norm_squared(versor), self.eps_sq)
         right = self.parameter_reverse(versor) / denominator
         left_full = _materialize_full_from_indices(left, self.parameter_full_indices, self.full_dim)
         right_full = _materialize_full_from_indices(right, self.parameter_full_indices, self.full_dim)
@@ -658,7 +662,7 @@ class PairedBivectorActionExecutor(nn.Module):
         )
         device = getattr(algebra, "device", None)
         dtype = getattr(algebra, "dtype", torch.float32)
-        self.bivector_exp = algebra.plan_exp(
+        self.bivector_exp = algebra.plan_bivector_exp(
             input_layout=parameter_layout,
             output_layout=rotor_layout,
             dtype=dtype,
@@ -945,8 +949,8 @@ def full_versor_factors(
         )
 
     if grade == 1:
-        norm_sq = algebra.norm_sq(weights, input_layout=parameter_layout)
-        scale = norm_sq.abs().clamp_min(eps_like(norm_sq)).sqrt()
+        signature_norm_squared = algebra.signature_norm_squared(weights, input_layout=parameter_layout)
+        scale = signature_norm_squared.abs().clamp_min(eps_like(signature_norm_squared)).sqrt()
         versor = weights / scale
     else:
         norm = weights.norm(dim=-1, keepdim=True).clamp_min(eps_like(weights))
@@ -1022,4 +1026,4 @@ def _bivector_exp(
     parameter_layout: GradeLayout,
     rotor_layout: GradeLayout,
 ) -> torch.Tensor:
-    return algebra.exp(values, input_layout=parameter_layout, output_layout=rotor_layout)
+    return algebra.bivector_exp(values, input_layout=parameter_layout, output_layout=rotor_layout)

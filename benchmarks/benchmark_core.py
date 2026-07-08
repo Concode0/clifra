@@ -33,6 +33,7 @@ if str(_REPO_ROOT) not in sys.path:
 from clifra.core.foundation.basis import expand_output_grades
 from clifra.core.foundation.device import FLOAT_DTYPES, dtype_name, resolve_device, resolve_dtype
 from clifra.core.foundation.layout import GradeLayout
+from clifra.core.legacy import LEGACY_PRODUCT_OP_ALIASES, PREFERRED_PRODUCT_OPS
 from clifra.core.planning.policy import (
     DEFAULT_PLANNING_LIMITS,
     DEFAULT_PRODUCT_EXECUTION_POLICY,
@@ -44,12 +45,12 @@ from clifra.core.runtime.algebra import AlgebraContext
 
 DTYPES: dict[str, torch.dtype] = FLOAT_DTYPES
 DEFAULT_OPS = (
-    "full_gp,full_wedge,full_inner,full_commutator,"
+    "full_gp,full_wedge,full_symmetric_product,full_commutator_product,"
     "vector_gp,bivector_vector_commutator,bivector_bivector_commutator,"
-    "norm_vector,dual_vector,bivector_exp,"
+    "signature_norm_vector,pseudoscalar_product_vector,bivector_exp,"
     "full_sandwich,versor_vector,multi_versor_vector,paired_bivector_vector"
 )
-PRODUCT_OPS = {"gp", "wedge", "inner", "commutator", "anti_commutator", "left_contraction", "right_contraction"}
+PRODUCT_OPS = set(PREFERRED_PRODUCT_OPS) | set(LEGACY_PRODUCT_OP_ALIASES)
 UNLOCKED_LIMIT = 1 << 62
 DIAGNOSTIC_SUITES = {"backward", "cumulative", "convergence"}
 
@@ -401,7 +402,7 @@ def _zero_input_grads(inputs: tuple[torch.Tensor, ...]) -> None:
 
 
 def _grad_norm_and_finite(inputs: tuple[torch.Tensor, ...]) -> tuple[float, bool]:
-    grad_norm_sq = 0.0
+    grad_norm_squared = 0.0
     finite = True
     saw_grad = False
     for tensor in inputs:
@@ -410,8 +411,8 @@ def _grad_norm_and_finite(inputs: tuple[torch.Tensor, ...]) -> tuple[float, bool
         saw_grad = True
         grad = tensor.grad.detach().float()
         finite = finite and bool(torch.isfinite(grad).all().item())
-        grad_norm_sq += float((grad * grad).sum().item())
-    return math.sqrt(grad_norm_sq), finite and saw_grad
+        grad_norm_squared += float((grad * grad).sum().item())
+    return math.sqrt(grad_norm_squared), finite and saw_grad
 
 
 def _time_forward_backward(
@@ -624,8 +625,8 @@ def _cache_snapshot(algebra: AlgebraContext) -> dict[str, int]:
     return {
         "product": len(planner._product_executors),
         "unary": len(planner._unary_executors),
-        "norm_sq": len(planner._norm_sq_executors),
-        "dual": len(planner._dual_executors),
+        "signature_norm_squared": len(planner._signature_norm_squared_executors),
+        "pseudoscalar_product": len(planner._pseudoscalar_product_executors),
         "bivector_exp": len(planner._bivector_exp_executors),
         "full_sandwich": len(planner._full_sandwich_action_executors),
     }
@@ -936,10 +937,12 @@ def _build_target(
         return _product_target(
             algebra,
             name=op_name,
-            op="commutator",
+            op="commutator_product",
             left_layout=bivector,
             right_layout=vector,
-            output_layout=algebra.layout(expand_output_grades(bivector.grades, vector.grades, algebra.n, op="commutator")),
+            output_layout=algebra.layout(
+                expand_output_grades(bivector.grades, vector.grades, algebra.n, op="commutator_product")
+            ),
             batch=batch,
             device=device,
             dtype=dtype,
@@ -950,49 +953,51 @@ def _build_target(
         return _product_target(
             algebra,
             name=op_name,
-            op="commutator",
+            op="commutator_product",
             left_layout=bivector,
             right_layout=bivector,
-            output_layout=algebra.layout(expand_output_grades(bivector.grades, bivector.grades, algebra.n, op="commutator")),
+            output_layout=algebra.layout(
+                expand_output_grades(bivector.grades, bivector.grades, algebra.n, op="commutator_product")
+            ),
             batch=batch,
             device=device,
             dtype=dtype,
             seed=seed,
         )
 
-    if op_name == "norm_vector":
-        executor = algebra.plan_norm_sq(input_layout=vector)
+    if op_name == "signature_norm_vector":
+        executor = algebra.plan_signature_norm_squared(input_layout=vector)
         values = _randn((batch, vector.dim), device=device, dtype=dtype, seed=seed)
         return BenchTarget(
             name=op_name,
             family=executor.executor_family,
-            op="norm_sq",
+            op="signature_norm_squared",
             layout_case=op_name,
             module=executor,
             args=(values,),
             metadata={
                 "category": "metric",
-                "call_method": "plan_norm_sq_executor",
+                "call_method": "plan_signature_norm_squared_executor",
                 **_layout_metadata("input", vector),
                 "output_lanes": 1,
                 "pair_count": vector.dim,
             },
         )
 
-    if op_name == "dual_vector":
+    if op_name == "pseudoscalar_product_vector":
         output = algebra.layout((algebra.n - 1,))
-        executor = algebra.plan_dual(input_layout=vector, output_layout=output)
+        executor = algebra.plan_pseudoscalar_product(input_layout=vector, output_layout=output)
         values = _randn((batch, vector.dim), device=device, dtype=dtype, seed=seed)
         return BenchTarget(
             name=op_name,
             family=executor.executor_family,
-            op="dual",
+            op="pseudoscalar_product",
             layout_case=op_name,
             module=executor,
             args=(values,),
             metadata={
                 "category": "permutation",
-                "call_method": "plan_dual_executor",
+                "call_method": "plan_pseudoscalar_product_executor",
                 **_layout_metadata("input", vector),
                 **_layout_metadata("output", executor.output_layout),
                 "pair_count": vector.dim,
@@ -1001,7 +1006,7 @@ def _build_target(
 
     if op_name == "bivector_exp":
         output_layout, output_selector = _exp_output_layout(algebra, exp_output_grades)
-        executor = algebra.plan_exp(input_layout=bivector, output_layout=output_layout, **(exp_plan_kwargs or {}))
+        executor = algebra.plan_bivector_exp(input_layout=bivector, output_layout=output_layout, **(exp_plan_kwargs or {}))
         values = _randn((batch, bivector.dim), device=device, dtype=dtype, seed=seed, scale=0.1)
         return BenchTarget(
             name=op_name,
@@ -1012,7 +1017,7 @@ def _build_target(
             args=(values,),
             metadata={
                 "category": "exp",
-                "call_method": "plan_exp_executor",
+                "call_method": "plan_bivector_exp_executor",
                 **_layout_metadata("input", bivector),
                 **_layout_metadata("output", executor.output_layout),
                 "exp_output_grades_selector": output_selector,
@@ -1651,7 +1656,7 @@ def run_convergence_diagnostics(args: argparse.Namespace) -> list[dict[str, Any]
                     exp_kwargs = _exp_plan_kwargs(args)
                     if args.exp_spectral_max_planes is None:
                         exp_kwargs["spectral_max_planes"] = spectral_max_planes_probe
-                    executor = algebra.plan_exp(input_layout=bivector, output_layout=even, **exp_kwargs)
+                    executor = algebra.plan_bivector_exp(input_layout=bivector, output_layout=even, **exp_kwargs)
                     b = _make_commuting_bivector(algebra, args.diagnostic_batch_size, args.diagnostic_bivector_scale)
                     timing = _time_callable(
                         executor,

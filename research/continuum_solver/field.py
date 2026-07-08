@@ -220,7 +220,7 @@ class InvertibleBivectorField(CliffordModule):
     def rotor_path(self, prefix_shape: Sequence[int] = ()) -> torch.Tensor:
         """Return the explicit even-grade rotors for the current weights."""
         weights = self.weights_for_shape(prefix_shape)
-        return self.algebra.exp(
+        return self.algebra.bivector_exp(
             -0.5 * weights,
             input_layout=self.bivector_layout,
             output_layout=self.algebra.layout(range(0, self.algebra.n + 1, 2)),

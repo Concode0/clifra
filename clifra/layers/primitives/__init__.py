@@ -9,10 +9,15 @@ from .multi_versor import MultiVersorLayer
 from .normalization import CliffordLayerNorm
 from .product import (
     AntiCommutatorLayer,
+    AntiCommutatorProductLayer,
     CommutatorLayer,
+    CommutatorProductLayer,
     GeometricProductLayer,
     InnerProductLayer,
+    LeftContractionLayer,
     ProductLayer,
+    RightContractionLayer,
+    SymmetricProductLayer,
     WedgeLayer,
 )
 from .projection import BladeSelector, GeometricNeutralizer
@@ -30,9 +35,11 @@ __all__ = [
     "ProductLayer",
     "GeometricProductLayer",
     "WedgeLayer",
-    "InnerProductLayer",
-    "CommutatorLayer",
-    "AntiCommutatorLayer",
+    "SymmetricProductLayer",
+    "CommutatorProductLayer",
+    "AntiCommutatorProductLayer",
+    "LeftContractionLayer",
+    "RightContractionLayer",
     "BladeSelector",
     "GeometricNeutralizer",
     "ReflectionLayer",

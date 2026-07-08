@@ -39,16 +39,15 @@ from clifra.core.planning.exp import (
 )
 from clifra.core.planning.policy import PlanningLimits, ProductExecutionPolicy
 
-
 DEFAULT_OPERATIONS = (
     "vector_gp",
     "bivector_vector_commutator",
     "bivector_bivector_commutator",
     "bivector_exp",
-    "norm_default",
+    "signature_norm_default",
     "reverse_default",
     "grade_involution_default",
-    "dual_vector",
+    "pseudoscalar_product_vector",
     "versor_vector",
 )
 MAX_DENSITY_OPERATIONS = DEFAULT_OPERATIONS
@@ -384,9 +383,9 @@ def build_target(
         )
 
     if operation == "bivector_vector_commutator":
-        output_layout = algebra.layout(expand_output_grades((2,), (1,), algebra.n, op="commutator"))
+        output_layout = algebra.layout(expand_output_grades((2,), (1,), algebra.n, op="commutator_product"))
         module = algebra.plan_product(
-            op="commutator",
+            op="commutator_product",
             left_layout=bivector_layout,
             right_layout=vector_layout,
             output_layout=output_layout,
@@ -395,7 +394,7 @@ def build_target(
         right = randn((batch, vector_layout.dim), device=device, dtype=dtype, seed=seed + 1)
         return BenchTarget(
             operation,
-            "commutator",
+            "commutator_product",
             module,
             (left, right),
             {
@@ -410,9 +409,9 @@ def build_target(
         )
 
     if operation == "bivector_bivector_commutator":
-        output_layout = algebra.layout(expand_output_grades((2,), (2,), algebra.n, op="commutator"))
+        output_layout = algebra.layout(expand_output_grades((2,), (2,), algebra.n, op="commutator_product"))
         module = algebra.plan_product(
-            op="commutator",
+            op="commutator_product",
             left_layout=bivector_layout,
             right_layout=bivector_layout,
             output_layout=output_layout,
@@ -421,7 +420,7 @@ def build_target(
         right = randn((batch, bivector_layout.dim), device=device, dtype=dtype, seed=seed + 1, scale=0.2)
         return BenchTarget(
             operation,
-            "commutator",
+            "commutator_product",
             module,
             (left, right),
             {
@@ -435,12 +434,12 @@ def build_target(
             output_layout,
         )
 
-    if operation == "norm_default":
-        module = algebra.plan_norm_sq(input_layout=default_layout, dtype=dtype, device=device)
+    if operation == "signature_norm_default":
+        module = algebra.plan_signature_norm_squared(input_layout=default_layout, dtype=dtype, device=device)
         values = randn((batch, default_layout.dim), device=device, dtype=dtype, seed=seed)
         return BenchTarget(
             operation,
-            "norm_sq",
+            "signature_norm_squared",
             module,
             (values,),
             {
@@ -502,13 +501,13 @@ def build_target(
             default_layout,
         )
 
-    if operation == "dual_vector":
+    if operation == "pseudoscalar_product_vector":
         output_layout = algebra.layout((algebra.n - 1,))
-        module = algebra.plan_dual(input_layout=vector_layout, output_layout=output_layout, dtype=dtype, device=device)
+        module = algebra.plan_pseudoscalar_product(input_layout=vector_layout, output_layout=output_layout, dtype=dtype, device=device)
         values = randn((batch, vector_layout.dim), device=device, dtype=dtype, seed=seed)
         return BenchTarget(
             operation,
-            "dual",
+            "pseudoscalar_product",
             module,
             (values,),
             {
@@ -523,7 +522,7 @@ def build_target(
 
     if operation == "bivector_exp":
         output_layout = algebra.layout((0, 2))
-        module = algebra.plan_exp(
+        module = algebra.plan_bivector_exp(
             input_layout=bivector_layout,
             output_layout=output_layout,
             dtype=dtype,
@@ -1031,8 +1030,8 @@ def rotor_chain_rows_for_signature(
         ref_rotor = plane_rotor(ref_rotor_layout, angle=float(angle) * step, batch=batch, device="cpu", dtype=torch.float64)
         ref_expected = ref_right_product(ref_left_product(ref_rotor, ref_x0), ref_reverse(ref_rotor))
         drift = error_stats(x, ref_expected)
-        norm_current = algebra.norm_sq(x, input_layout=vector_layout).detach().cpu().to(torch.float64)
-        norm_expected = ref_algebra.norm_sq(ref_expected, input_layout=ref_vector_layout).detach().cpu().to(torch.float64)
+        norm_current = algebra.signature_norm_squared(x, input_layout=vector_layout).detach().cpu().to(torch.float64)
+        norm_expected = ref_algebra.signature_norm_squared(ref_expected, input_layout=ref_vector_layout).detach().cpu().to(torch.float64)
         norm_drift = error_stats(norm_current, norm_expected)
         gate_ok = float(drift["max_abs_error"]) <= float(atol) and float(drift["max_rel_error"]) <= float(rtol)
         rows.append(
@@ -1493,7 +1492,7 @@ def apply_quick_defaults(args: argparse.Namespace) -> None:
     args.channels = min(int(args.channels), 2)
     args.warmup = 0
     args.iterations = 1
-    args.operations = "vector_gp,bivector_vector_commutator,bivector_exp,norm_default"
+    args.operations = "vector_gp,bivector_vector_commutator,bivector_exp,signature_norm_default"
     args.drift_steps = min(int(args.drift_steps), 8)
     args.drift_samples = min(int(args.drift_samples), 4)
 

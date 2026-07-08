@@ -317,7 +317,7 @@ class GeodesicFlow:
 
         # Batched: scale log_T by all t values, exp, then GP
         scaled = ts.unsqueeze(-1) * log_T  # [steps, grade2_dim]
-        exp_all = self.algebra.exp(
+        exp_all = self.algebra.bivector_exp(
             scaled,
             input_layout=bivector_layout,
             output_layout=full_layout,

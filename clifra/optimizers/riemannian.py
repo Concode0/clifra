@@ -122,11 +122,11 @@ def _layout_for_parameter(algebra, values: torch.Tensor, grade: int):
     return layout if values.shape[-1] == layout.dim else None
 
 
-def _metric_norm_sq_or_none(algebra, values: torch.Tensor, grade: int) -> torch.Tensor | None:
+def _metric_signature_norm_squared_or_none(algebra, values: torch.Tensor, grade: int) -> torch.Tensor | None:
     layout = _layout_for_parameter(algebra, values, grade)
     if layout is None:
         return None
-    return algebra.norm_sq(values, input_layout=layout)
+    return algebra.signature_norm_squared(values, input_layout=layout)
 
 
 def _euclidean_norm(values: torch.Tensor) -> torch.Tensor:
@@ -135,15 +135,19 @@ def _euclidean_norm(values: torch.Tensor) -> torch.Tensor:
 
 
 def _sphere_retract_(values: torch.Tensor, algebra) -> None:
-    metric_norm_sq = _metric_norm_sq_or_none(algebra, values, 1)
-    if metric_norm_sq is None:
+    metric_signature_norm_squared = _metric_signature_norm_squared_or_none(algebra, values, 1)
+    if metric_signature_norm_squared is None:
         values.div_(_euclidean_norm(values))
         return
 
-    floor = eps_like(metric_norm_sq, multiplier=32.0, min_value=torch.finfo(metric_norm_sq.dtype).tiny)
-    metric_scale = metric_norm_sq.abs().clamp_min(floor).sqrt()
+    floor = eps_like(
+        metric_signature_norm_squared,
+        multiplier=32.0,
+        min_value=torch.finfo(metric_signature_norm_squared.dtype).tiny,
+    )
+    metric_scale = metric_signature_norm_squared.abs().clamp_min(floor).sqrt()
     euclidean_scale = _euclidean_norm(values)
-    scale = torch.where(metric_norm_sq.abs() > floor, metric_scale, euclidean_scale)
+    scale = torch.where(metric_signature_norm_squared.abs() > floor, metric_scale, euclidean_scale)
     values.div_(scale)
 
 
@@ -488,7 +492,7 @@ def exponential_retraction(point, tangent_vector, algebra):
     bivector = algebra.grade_projection(bivector, grade=2)
 
     # Exponential map
-    update = algebra.exp(bivector)
+    update = algebra.bivector_exp(bivector)
 
     # Apply update: R_new = R_old . exp(B)
     return algebra.geometric_product(point, update)

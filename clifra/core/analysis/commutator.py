@@ -107,7 +107,7 @@ class CommutatorAnalyzer:
         right.scatter_(-1, j_idx.view(-1, 1, 1).expand(-1, N, 1), coeffs[:, j_idx].T.unsqueeze(-1))
 
         # Batched compact commutator: [n_pairs, N, grade2_dim]
-        comm = self.algebra.commutator(
+        comm = self.algebra.commutator_product(
             left,
             right,
             left_grades=(1,),
@@ -157,7 +157,7 @@ class CommutatorAnalyzer:
         product_feasible = full_product_feasibility(
             self.algebra,
             role="adjoint_exchange_spectrum",
-            op="commutator",
+            op="commutator_product",
             max_pairs=CONSTANTS.analysis_product_pairs,
         )
         if not matrix_feasible or not product_feasible:
@@ -174,7 +174,7 @@ class CommutatorAnalyzer:
         basis = torch.eye(dim, device=device, dtype=dtype)
 
         # Batched commutator: [dim, dim] x [dim, dim] -> [dim, dim], transpose.
-        ad_mu = self.algebra.commutator(
+        ad_mu = self.algebra.commutator_product(
             mu.unsqueeze(0).expand(dim, -1),
             basis,
             **declared_full_product_kwargs(self.algebra),
@@ -199,14 +199,14 @@ class CommutatorAnalyzer:
         full_product = full_product_feasibility(
             self.algebra,
             role="mean_commutator_norm",
-            op="commutator",
+            op="commutator_product",
             max_pairs=CONSTANTS.analysis_product_pairs,
         )
         if not full_product:
             layout = self.algebra.layout((1,))
             values = layout.compact(mv_data)
             mu = values.mean(dim=0, keepdim=True)
-            comm = self.algebra.commutator(
+            comm = self.algebra.commutator_product(
                 values,
                 mu.expand_as(values),
                 left_grades=(1,),
@@ -219,7 +219,7 @@ class CommutatorAnalyzer:
             return comm.norm(dim=-1).mean().item()
 
         mu = mv_data.mean(dim=0, keepdim=True)  # [1, dim]
-        comm = self.algebra.commutator(mv_data, mu.expand_as(mv_data), **declared_full_product_kwargs(self.algebra))
+        comm = self.algebra.commutator_product(mv_data, mu.expand_as(mv_data), **declared_full_product_kwargs(self.algebra))
         return comm.norm(dim=-1).mean().item()
 
     def lie_bracket_closure(self, mv_data: torch.Tensor) -> Dict:
@@ -275,7 +275,7 @@ class CommutatorAnalyzer:
         a_idx, b_idx = torch.triu_indices(k, k, offset=1, device=device)
 
         # Batched compact commutator and grade-2 projection.
-        brackets_bv = self.algebra.commutator(
+        brackets_bv = self.algebra.commutator_product(
             B[a_idx],
             B[b_idx],
             left_grades=(2,),
@@ -335,7 +335,7 @@ def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.T
 
     # Mean grade-1 vector and compact commutator [x_i, mu]
     mu = x_n.mean(dim=0, keepdim=True)  # [1, n]
-    comm = algebra.commutator(
+    comm = algebra.commutator_product(
         x_n,
         mu.expand_as(x_n),
         left_grades=(1,),

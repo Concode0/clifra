@@ -301,7 +301,7 @@ class SymmetryDetector:
         commutator_feasible = product_feasibility(
             self.algebra,
             role="continuous_symmetry_basis_bivectors",
-            op="commutator",
+            op="commutator_product",
             left_layout=bivector_layout,
             right_layout=full_layout,
             output_layout=full_layout,
@@ -324,7 +324,7 @@ class SymmetryDetector:
         # Batch commutator: [n_bv, N, dim]
         bv_exp = bv_bases.unsqueeze(1).expand(n_bv, N, bivector_layout.dim)
         mv_exp = mv_data.unsqueeze(0).expand(n_bv, N, full_layout.dim)
-        comm = self.algebra.commutator(
+        comm = self.algebra.commutator_product(
             bv_exp,
             mv_exp,
             left_layout=bivector_layout,

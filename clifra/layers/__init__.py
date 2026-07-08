@@ -16,10 +16,15 @@ from .primitives.multi_versor import MultiVersorLayer
 from .primitives.normalization import CliffordLayerNorm
 from .primitives.product import (
     AntiCommutatorLayer,
+    AntiCommutatorProductLayer,
     CommutatorLayer,
+    CommutatorProductLayer,
     GeometricProductLayer,
     InnerProductLayer,
+    LeftContractionLayer,
     ProductLayer,
+    RightContractionLayer,
+    SymmetricProductLayer,
     WedgeLayer,
 )
 from .primitives.projection import BladeSelector, GeometricNeutralizer
@@ -40,9 +45,11 @@ __all__ = [
     "ProductLayer",
     "GeometricProductLayer",
     "WedgeLayer",
-    "InnerProductLayer",
-    "CommutatorLayer",
-    "AntiCommutatorLayer",
+    "SymmetricProductLayer",
+    "CommutatorProductLayer",
+    "AntiCommutatorProductLayer",
+    "LeftContractionLayer",
+    "RightContractionLayer",
     "BladeSelector",
     "GeometricNeutralizer",
     "ReflectionLayer",

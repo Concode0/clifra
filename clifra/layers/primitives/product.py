@@ -50,8 +50,10 @@ class ProductLayer(CliffordModule):
 
         Args:
             algebra: Algebra host.
-            op: Product route: ``"gp"``, ``"wedge"``, ``"inner"``,
-                ``"commutator"``, or ``"anti_commutator"``.
+            op: Product route: ``"gp"``, ``"wedge"``,
+                ``"symmetric_product"``, ``"commutator_product"``,
+                ``"anti_commutator_product"``, ``"left_contraction"``, or
+                ``"right_contraction"``.
             left_grades: Declared input grades for the left operand.
             right_grades: Declared input grades for the right operand.
             output_grades: Optional output grade projection.
@@ -130,25 +132,44 @@ class WedgeLayer(ProductLayer):
         super().__init__(algebra, op="wedge", **kwargs)
 
 
-class InnerProductLayer(ProductLayer):
-    """Layer form of the inner product."""
+class SymmetricProductLayer(ProductLayer):
+    """Layer form of the parity-selected symmetric product route."""
 
     def __init__(self, algebra, **kwargs):
-        super().__init__(algebra, op="inner", **kwargs)
+        super().__init__(algebra, op="symmetric_product", **kwargs)
 
 
-class CommutatorLayer(ProductLayer):
+class CommutatorProductLayer(ProductLayer):
     """Layer form of the commutator product."""
 
     def __init__(self, algebra, **kwargs):
-        super().__init__(algebra, op="commutator", **kwargs)
+        super().__init__(algebra, op="commutator_product", **kwargs)
 
 
-class AntiCommutatorLayer(ProductLayer):
+class AntiCommutatorProductLayer(ProductLayer):
     """Layer form of the anti-commutator product."""
 
     def __init__(self, algebra, **kwargs):
-        super().__init__(algebra, op="anti_commutator", **kwargs)
+        super().__init__(algebra, op="anti_commutator_product", **kwargs)
+
+
+class LeftContractionLayer(ProductLayer):
+    """Layer form of the left contraction."""
+
+    def __init__(self, algebra, **kwargs):
+        super().__init__(algebra, op="left_contraction", **kwargs)
+
+
+class RightContractionLayer(ProductLayer):
+    """Layer form of the right contraction."""
+
+    def __init__(self, algebra, **kwargs):
+        super().__init__(algebra, op="right_contraction", **kwargs)
+
+
+InnerProductLayer = SymmetricProductLayer
+CommutatorLayer = CommutatorProductLayer
+AntiCommutatorLayer = AntiCommutatorProductLayer
 
 
 def _validate_optional_layout(algebra, layout: GradeLayout | None, grades, side: str) -> GradeLayout | None:

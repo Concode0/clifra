@@ -97,10 +97,10 @@ def grade_swish(
     batch_shape = values.shape[:-1]
     grade_idx = grade_index.expand(*batch_shape, lane_dim)
 
-    norm_sq = values.new_zeros(*batch_shape, n_grades)
-    norm_sq.scatter_add_(-1, grade_idx, values * values)
-    eps = eps_like(norm_sq, min_value=torch.finfo(norm_sq.dtype).tiny)
-    norms = torch.sqrt(norm_sq.clamp_min(eps))
+    grade_energy = values.new_zeros(*batch_shape, n_grades)
+    grade_energy.scatter_add_(-1, grade_idx, values * values)
+    eps = eps_like(grade_energy, min_value=torch.finfo(grade_energy.dtype).tiny)
+    norms = torch.sqrt(grade_energy.clamp_min(eps))
 
     gates = torch.sigmoid(grade_weights * norms + grade_biases)
     per_component_gate = gates.gather(-1, grade_idx)
