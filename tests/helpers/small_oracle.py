@@ -82,9 +82,6 @@ class SmallCliffordOracle:
         sign_tensor = torch.tensor(signs, dtype=values.dtype, device=values.device)
         return (values * values * sign_tensor).sum(dim=-1, keepdim=True)
 
-    def norm_sq(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
-        return self.signature_norm_squared(values, indices)
-
     def reverse(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
         basis = self.full_indices if indices is None else tuple(int(index) for index in indices)
         signs = torch.tensor([reverse_sign(index) for index in basis], dtype=values.dtype, device=values.device)
@@ -155,19 +152,6 @@ class SmallCliffordOracle:
             coefficient = operation_coefficient(source_index, pseudoscalar_index, self.p, self.q, self.r, "gp")
             output[..., output_position] = values[..., source_position] * coefficient
         return output
-
-    def dual(
-        self,
-        values: torch.Tensor,
-        *,
-        input_indices: Iterable[int] | None = None,
-        output_indices: Iterable[int] | None = None,
-    ) -> torch.Tensor:
-        return self.pseudoscalar_product(
-            values,
-            input_indices=input_indices,
-            output_indices=output_indices,
-        )
 
     def blade_inverse(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
         denominator = _signed_clamp_min(self.signature_norm_squared(values, indices), torch.finfo(values.dtype).eps**2)

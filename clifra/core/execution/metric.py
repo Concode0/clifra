@@ -31,8 +31,4 @@ class SignatureNormSquaredExecutor(nn.Module):
             raise ValueError(f"values last dimension must be {self.input_dim}, got {values.shape[-1]}")
         return (values * values * self.signs).sum(dim=-1, keepdim=True)
 
-
-NormSquaredExecutor = SignatureNormSquaredExecutor
-
-
 __all__ = ["SignatureNormSquaredExecutor"]

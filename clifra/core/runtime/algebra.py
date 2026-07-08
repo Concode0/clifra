@@ -121,25 +121,13 @@ class AlgebraContext(AlgebraHostMixin):
         """Plan and execute the parity-selected symmetric product route."""
         return self.projected_product(A, B, op="symmetric_product", **kwargs)
 
-    def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``symmetric_product``."""
-        return self.symmetric_product(A, B, **kwargs)
-
     def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Plan and execute the unnormalized commutator product."""
         return self.projected_product(A, B, op="commutator_product", **kwargs)
 
-    def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``commutator_product``."""
-        return self.commutator_product(A, B, **kwargs)
-
     def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Plan and execute the unnormalized anti-commutator product."""
         return self.projected_product(A, B, op="anti_commutator_product", **kwargs)
-
-    def anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``anti_commutator_product``."""
-        return self.anti_commutator_product(A, B, **kwargs)
 
     def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
         """Project declared multivector coefficients to one grade."""
@@ -201,10 +189,6 @@ class AlgebraContext(AlgebraHostMixin):
             output_storage=output_storage,
             return_layout=return_layout,
         )
-
-    def exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``bivector_exp``."""
-        return self.bivector_exp(mv, **kwargs)
 
     def _basis_vector_indices(self, device) -> torch.Tensor:
         resolved = torch.device(device)

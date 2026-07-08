@@ -12,8 +12,6 @@ from typing import Iterable, Literal, Optional
 
 import torch
 
-from clifra.core.legacy import product_method_entry
-
 GradeProductOp = Literal[
     "gp",
     "wedge",
@@ -23,6 +21,21 @@ GradeProductOp = Literal[
     "left_contraction",
     "right_contraction",
 ]
+_PUBLIC_GRADE_PRODUCT_OPS = {
+    "geometric_product": "gp",
+    "symmetric_product": "inner",
+    "commutator_product": "commutator",
+    "anti_commutator_product": "anti_commutator",
+}
+_INTERNAL_GRADE_PRODUCT_OPS = {
+    "gp",
+    "wedge",
+    "inner",
+    "commutator",
+    "anti_commutator",
+    "left_contraction",
+    "right_contraction",
+}
 
 # NOTE: Torch-backed executors currently store canonical basis blades as signed
 # int64 bitmasks. That makes n=63 the largest supported dimension: the highest
@@ -36,7 +49,14 @@ _TORCH_LONG_MAX = (1 << TORCH_LONG_BASIS_MAX_N) - 1
 
 def normalize_grade_product_op(op: str) -> GradeProductOp:
     """Return the internal grade-product key for a public product operation name."""
-    return product_method_entry(op)[0]  # type: ignore[return-value]
+    normalized = str(op).lower()
+    if normalized in _INTERNAL_GRADE_PRODUCT_OPS:
+        return normalized  # type: ignore[return-value]
+    try:
+        return _PUBLIC_GRADE_PRODUCT_OPS[normalized]  # type: ignore[return-value]
+    except KeyError as exc:
+        supported = ", ".join(sorted(_INTERNAL_GRADE_PRODUCT_OPS | set(_PUBLIC_GRADE_PRODUCT_OPS)))
+        raise ValueError(f"Unsupported grade product op {op!r}. Supported ops: {supported}") from exc
 
 
 def normalize_grades(grades: Iterable[int], n: int, *, name: str = "grades") -> tuple[int, ...]:

@@ -376,10 +376,6 @@ class GradePlanner:
             cache=cache,
         )
 
-    def norm_sq_executor(self, **kwargs) -> SignatureNormSquaredExecutor:
-        """Legacy alias for ``signature_norm_squared_executor``."""
-        return self.signature_norm_squared_executor(**kwargs)
-
     def signature_norm_squared_executor_for_layout(
         self,
         *,
@@ -411,10 +407,6 @@ class GradePlanner:
             if cache:
                 self._signature_norm_squared_executors[key] = executor
         return executor
-
-    def norm_sq_executor_for_layout(self, **kwargs) -> SignatureNormSquaredExecutor:
-        """Legacy alias for ``signature_norm_squared_executor_for_layout``."""
-        return self.signature_norm_squared_executor_for_layout(**kwargs)
 
     def pseudoscalar_product_executor_for_layout(
         self,
@@ -454,10 +446,6 @@ class GradePlanner:
             if cache:
                 self._pseudoscalar_product_executors[key] = executor
         return executor
-
-    def dual_executor_for_layout(self, **kwargs) -> PseudoscalarProductExecutor:
-        """Legacy alias for ``pseudoscalar_product_executor_for_layout``."""
-        return self.pseudoscalar_product_executor_for_layout(**kwargs)
 
     def bivector_exp_executor_for_layouts(
         self,

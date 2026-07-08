@@ -56,15 +56,6 @@ def build_signature_norm_squared_plan(
         signs=torch.tensor(signs, dtype=dtype, device=device),
     )
 
-
-NormSquaredPlan = SignatureNormSquaredPlan
-
-
-def build_norm_squared_plan(*args, **kwargs) -> SignatureNormSquaredPlan:
-    """Legacy alias for ``build_signature_norm_squared_plan``."""
-    return build_signature_norm_squared_plan(*args, **kwargs)
-
-
 __all__ = [
     "SignatureNormSquaredPlan",
     "build_signature_norm_squared_plan",

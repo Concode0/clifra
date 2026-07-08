@@ -33,7 +33,6 @@ if str(_REPO_ROOT) not in sys.path:
 from clifra.core.foundation.basis import expand_output_grades
 from clifra.core.foundation.device import FLOAT_DTYPES, dtype_name, resolve_device, resolve_dtype
 from clifra.core.foundation.layout import GradeLayout
-from clifra.core.legacy import LEGACY_PRODUCT_OP_ALIASES, PREFERRED_PRODUCT_OPS
 from clifra.core.planning.policy import (
     DEFAULT_PLANNING_LIMITS,
     DEFAULT_PRODUCT_EXECUTION_POLICY,
@@ -50,7 +49,16 @@ DEFAULT_OPS = (
     "signature_norm_vector,pseudoscalar_product_vector,bivector_exp,"
     "full_sandwich,versor_vector,multi_versor_vector,paired_bivector_vector"
 )
-PRODUCT_OPS = set(PREFERRED_PRODUCT_OPS) | set(LEGACY_PRODUCT_OP_ALIASES)
+PRODUCT_OPS = {
+    "gp",
+    "geometric_product",
+    "wedge",
+    "symmetric_product",
+    "commutator_product",
+    "anti_commutator_product",
+    "left_contraction",
+    "right_contraction",
+}
 UNLOCKED_LIMIT = 1 << 62
 DIAGNOSTIC_SUITES = {"backward", "cumulative", "convergence"}
 

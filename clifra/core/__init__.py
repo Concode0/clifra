@@ -13,7 +13,6 @@ their owning modules.
 from .config import AlgebraConfig, make_algebra, make_algebra_from_config
 from .execution import (
     BivectorExpExecutor,
-    DualExecutor,
     FullSandwichActionExecutor,
     FullSandwichActionHandle,
     FullTableProductExecutor,
@@ -23,7 +22,6 @@ from .execution import (
     GradeUnaryExecutor,
     MultiVersorActionExecutor,
     MultiVersorActionHandle,
-    NormSquaredExecutor,
     PairedBivectorActionExecutor,
     PairedBivectorActionHandle,
     ProductPlanHandle,
@@ -69,12 +67,10 @@ from .planning.exp import (
 from .planning.flow import GradeFlow
 from .planning.layouts import ProductRequest, build_product_request
 from .planning.metric import (
-    NormSquaredPlan,
     SignatureNormSquaredPlan,
-    build_norm_squared_plan,
     build_signature_norm_squared_plan,
 )
-from .planning.permutation import DualPlan, PseudoscalarProductPlan, build_dual_plan, build_pseudoscalar_product_plan
+from .planning.permutation import PseudoscalarProductPlan, build_pseudoscalar_product_plan
 from .planning.planner import GradePlanner
 from .planning.policy import DEFAULT_PLANNING_LIMITS, PlanCost, PlanningLimits
 from .planning.product import (

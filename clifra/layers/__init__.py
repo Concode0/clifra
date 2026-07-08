@@ -15,12 +15,9 @@ from .primitives.linear import CliffordLinear
 from .primitives.multi_versor import MultiVersorLayer
 from .primitives.normalization import CliffordLayerNorm
 from .primitives.product import (
-    AntiCommutatorLayer,
     AntiCommutatorProductLayer,
-    CommutatorLayer,
     CommutatorProductLayer,
     GeometricProductLayer,
-    InnerProductLayer,
     LeftContractionLayer,
     ProductLayer,
     RightContractionLayer,

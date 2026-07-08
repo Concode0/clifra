@@ -210,10 +210,6 @@ class AlgebraHostMixin:
             cache=cache,
         )
 
-    def plan_norm_sq(self, **kwargs):
-        """Legacy alias for ``plan_signature_norm_squared``."""
-        return self.plan_signature_norm_squared(**kwargs)
-
     def plan_pseudoscalar_product(
         self,
         *,
@@ -239,10 +235,6 @@ class AlgebraHostMixin:
             device=device,
             cache=cache,
         )
-
-    def plan_dual(self, **kwargs):
-        """Legacy alias for ``plan_pseudoscalar_product``."""
-        return self.plan_pseudoscalar_product(**kwargs)
 
     def plan_bivector_exp(
         self,
@@ -287,10 +279,6 @@ class AlgebraHostMixin:
             spectral_allow_degenerate=spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
         )
-
-    def plan_exp(self, **kwargs):
-        """Legacy alias for ``plan_bivector_exp``."""
-        return self.plan_bivector_exp(**kwargs)
 
     def plan_sandwich_action(
         self,
@@ -512,25 +500,13 @@ class AlgebraHostMixin:
         """Projected wedge product convenience wrapper."""
         return self.projected_product(A, B, op="wedge", **kwargs)
 
-    def projected_inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Legacy alias for projected symmetric-product routing."""
-        return self.symmetric_product(A, B, **kwargs)
-
     def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Apply the parity-selected symmetric product route."""
         return self.projected_product(A, B, op="symmetric_product", **kwargs)
 
-    def projected_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Legacy projected commutator convenience wrapper."""
-        return self.commutator_product(A, B, **kwargs)
-
     def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Apply the unnormalized commutator product."""
         return self.projected_product(A, B, op="commutator_product", **kwargs)
-
-    def projected_anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Legacy projected anti-commutator convenience wrapper."""
-        return self.anti_commutator_product(A, B, **kwargs)
 
     def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Apply the unnormalized anti-commutator product."""
@@ -605,10 +581,6 @@ class AlgebraHostMixin:
         )
         return executor(active_values)
 
-    def norm_sq(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``signature_norm_squared``."""
-        return self.signature_norm_squared(values, **kwargs)
-
     def pseudoscalar_product(
         self,
         values: torch.Tensor,
@@ -635,10 +607,6 @@ class AlgebraHostMixin:
         if resolved_output_storage is LaneStorage.CANONICAL:
             output = executor.output_layout.full(output)
         return (output, executor.output_layout) if return_layout else output
-
-    def dual(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``pseudoscalar_product``."""
-        return self.pseudoscalar_product(values, **kwargs)
 
     def bivector_exp(
         self,
@@ -685,10 +653,6 @@ class AlgebraHostMixin:
         if resolved_output_storage is LaneStorage.CANONICAL:
             output = output_layout.full(output)
         return (output, output_layout) if return_layout else output
-
-    def exp(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``bivector_exp``."""
-        return self.bivector_exp(values, **kwargs)
 
     def blade_inverse(
         self,

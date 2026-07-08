@@ -31,7 +31,6 @@ from clifra.core.foundation.basis import (
     product_output_grades,
 )
 from clifra.core.foundation.layout import AlgebraSpec
-from clifra.core.legacy import product_method_entry
 from clifra.core.planning.flow import GradeFlow
 from clifra.core.planning.layouts import build_product_request
 from clifra.core.planning.planner import GradePlanner
@@ -44,6 +43,15 @@ from clifra.core.runtime.tensors import LaneStorage
 from tests.helpers.small_oracle import SmallCliffordOracle
 
 DEVICE = "cpu"
+_PRODUCT_METHODS = {
+    "gp": "geometric_product",
+    "wedge": "wedge",
+    "symmetric_product": "symmetric_product",
+    "commutator_product": "commutator_product",
+    "anti_commutator_product": "anti_commutator_product",
+    "left_contraction": "left_contraction",
+    "right_contraction": "right_contraction",
+}
 
 
 def _mps_available() -> bool:
@@ -93,4 +101,4 @@ def _sparse_pairwise_product_reference(
 
 
 def _product_method_name(op: str) -> str:
-    return product_method_entry(op)[1]
+    return _PRODUCT_METHODS[op]

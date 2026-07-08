@@ -19,16 +19,29 @@ from typing import Any
 
 import torch
 
-from clifra.core.legacy import canonical_product_alias, product_method_entry
+_PRODUCT_METHODS = {
+    "gp": ("gp", "geometric_product"),
+    "geometric_product": ("gp", "geometric_product"),
+    "wedge": ("wedge", "wedge"),
+    "symmetric_product": ("inner", "symmetric_product"),
+    "commutator_product": ("commutator", "commutator_product"),
+    "anti_commutator_product": ("anti_commutator", "anti_commutator_product"),
+    "left_contraction": ("left_contraction", "left_contraction"),
+    "right_contraction": ("right_contraction", "right_contraction"),
+}
 
 
 def canonical_product_op(op: str) -> str:
-    """Return the preferred public product operation name for a supported alias."""
-    return canonical_product_alias(op)
+    """Return a supported public product operation name."""
+    normalized = str(op).lower()
+    if normalized in _PRODUCT_METHODS:
+        return normalized
+    supported = ", ".join(sorted(_PRODUCT_METHODS))
+    raise ValueError(f"Unsupported product op {op!r}. Supported ops: {supported}")
 
 
 def _resolve_product_op(op: str) -> tuple[str, str]:
-    return product_method_entry(op)
+    return _PRODUCT_METHODS[canonical_product_op(op)]
 
 
 def product(algebra, left: torch.Tensor, right: torch.Tensor, *, op: str = "gp", **kwargs: Any) -> torch.Tensor:
@@ -52,7 +65,7 @@ def product(algebra, left: torch.Tensor, right: torch.Tensor, *, op: str = "gp",
     """
     _, method_name = _resolve_product_op(op)
     if kwargs:
-        return algebra.projected_product(left, right, op=canonical_product_alias(op), **kwargs)
+        return algebra.projected_product(left, right, op=canonical_product_op(op), **kwargs)
     return getattr(algebra, method_name)(left, right)
 
 
@@ -82,29 +95,14 @@ def wedge(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> to
     return product(algebra, left, right, op="wedge", **kwargs)
 
 
-def inner_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Legacy alias for ``symmetric_product``."""
-    return symmetric_product(algebra, left, right, **kwargs)
-
-
 def symmetric_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
     """Apply the parity-selected symmetric product route to full or declared compact lanes."""
     return product(algebra, left, right, op="symmetric_product", **kwargs)
 
 
-def commutator(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Legacy alias for ``commutator_product``."""
-    return commutator_product(algebra, left, right, **kwargs)
-
-
 def commutator_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
     """Apply the unnormalized commutator product to full or declared compact lanes."""
     return product(algebra, left, right, op="commutator_product", **kwargs)
-
-
-def anti_commutator(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Legacy alias for ``anti_commutator_product``."""
-    return anti_commutator_product(algebra, left, right, **kwargs)
 
 
 def anti_commutator_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
@@ -142,19 +140,9 @@ def clifford_conjugation(algebra, values: torch.Tensor, **kwargs: Any) -> torch.
     return algebra.clifford_conjugation(values, **kwargs)
 
 
-def dual(algebra, values: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Legacy alias for ``pseudoscalar_product``."""
-    return pseudoscalar_product(algebra, values, **kwargs)
-
-
 def pseudoscalar_product(algebra, values: torch.Tensor, **kwargs: Any) -> torch.Tensor:
     """Apply right multiplication by the unit pseudoscalar."""
     return algebra.pseudoscalar_product(values, **kwargs)
-
-
-def norm_sq(algebra, values: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Legacy alias for ``signature_norm_squared``."""
-    return signature_norm_squared(algebra, values, **kwargs)
 
 
 def signature_norm_squared(algebra, values: torch.Tensor, **kwargs: Any) -> torch.Tensor:

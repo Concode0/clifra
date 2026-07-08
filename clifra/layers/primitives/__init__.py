@@ -8,12 +8,9 @@ from .linear import CliffordLinear
 from .multi_versor import MultiVersorLayer
 from .normalization import CliffordLayerNorm
 from .product import (
-    AntiCommutatorLayer,
     AntiCommutatorProductLayer,
-    CommutatorLayer,
     CommutatorProductLayer,
     GeometricProductLayer,
-    InnerProductLayer,
     LeftContractionLayer,
     ProductLayer,
     RightContractionLayer,

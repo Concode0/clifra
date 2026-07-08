@@ -87,24 +87,12 @@ class AlgebraLike(Protocol):
         """Return a hot-path unary handle for compact-lane values."""
         ...
 
-    def plan_norm_sq(self, **kwargs):
-        """Legacy alias for ``plan_signature_norm_squared``."""
-        ...
-
     def plan_signature_norm_squared(self, **kwargs):
         """Return a signed signature-norm executor for compact-lane values."""
         ...
 
-    def plan_dual(self, **kwargs):
-        """Legacy alias for ``plan_pseudoscalar_product``."""
-        ...
-
     def plan_pseudoscalar_product(self, **kwargs):
         """Return a right-pseudoscalar product executor for compact-lane values."""
-        ...
-
-    def plan_exp(self, **kwargs):
-        """Legacy alias for ``plan_bivector_exp``."""
         ...
 
     def plan_bivector_exp(self, **kwargs):
@@ -135,24 +123,12 @@ class AlgebraLike(Protocol):
         """Apply the exterior product."""
         ...
 
-    def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``symmetric_product``."""
-        ...
-
     def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply the parity-selected symmetric product route."""
         ...
 
-    def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``commutator_product``."""
-        ...
-
     def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply the unnormalized commutator product."""
-        ...
-
-    def anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``anti_commutator_product``."""
         ...
 
     def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -183,16 +159,8 @@ class AlgebraLike(Protocol):
         """Apply Clifford conjugation."""
         ...
 
-    def norm_sq(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``signature_norm_squared``."""
-        ...
-
     def signature_norm_squared(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Return the signed Clifford signature norm squared."""
-        ...
-
-    def dual(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``pseudoscalar_product``."""
         ...
 
     def pseudoscalar_product(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -217,10 +185,6 @@ class AlgebraLike(Protocol):
 
     def versor_product(self, versor: torch.Tensor, values: torch.Tensor, **kwargs) -> torch.Tensor:
         """Apply a general versor product."""
-        ...
-
-    def exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Legacy alias for ``bivector_exp``."""
         ...
 
     def bivector_exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:

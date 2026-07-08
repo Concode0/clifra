@@ -27,8 +27,8 @@ from .handles import (
     UnaryPlanHandle,
     VersorActionHandle,
 )
-from .metric import NormSquaredExecutor, SignatureNormSquaredExecutor
-from .permutation import DualExecutor, PseudoscalarProductExecutor
+from .metric import SignatureNormSquaredExecutor
+from .permutation import PseudoscalarProductExecutor
 from .product import FullTableProductExecutor, GradeProductExecutor
 from .unary import GradeUnaryExecutor
 

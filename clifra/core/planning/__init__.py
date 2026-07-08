@@ -28,13 +28,8 @@ from .exp import (
 )
 from .flow import GradeFlow
 from .layouts import ProductRequest, build_product_request
-from .metric import (
-    NormSquaredPlan,
-    SignatureNormSquaredPlan,
-    build_norm_squared_plan,
-    build_signature_norm_squared_plan,
-)
-from .permutation import DualPlan, PseudoscalarProductPlan, build_dual_plan, build_pseudoscalar_product_plan
+from .metric import SignatureNormSquaredPlan, build_signature_norm_squared_plan
+from .permutation import PseudoscalarProductPlan, build_pseudoscalar_product_plan
 from .planner import GradePlanner
 from .policy import (
     DEFAULT_PLANNING_LIMITS,

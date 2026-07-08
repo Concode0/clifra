@@ -79,15 +79,6 @@ def build_pseudoscalar_product_plan(
         signs=torch.tensor(signs, dtype=dtype, device=device),
     )
 
-
-DualPlan = PseudoscalarProductPlan
-
-
-def build_dual_plan(*args, **kwargs) -> PseudoscalarProductPlan:
-    """Legacy alias for ``build_pseudoscalar_product_plan``."""
-    return build_pseudoscalar_product_plan(*args, **kwargs)
-
-
 __all__ = [
     "PseudoscalarProductPlan",
     "build_pseudoscalar_product_plan",

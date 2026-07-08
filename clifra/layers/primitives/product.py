@@ -166,12 +166,6 @@ class RightContractionLayer(ProductLayer):
     def __init__(self, algebra, **kwargs):
         super().__init__(algebra, op="right_contraction", **kwargs)
 
-
-InnerProductLayer = SymmetricProductLayer
-CommutatorLayer = CommutatorProductLayer
-AntiCommutatorLayer = AntiCommutatorProductLayer
-
-
 def _validate_optional_layout(algebra, layout: GradeLayout | None, grades, side: str) -> GradeLayout | None:
     if layout is None:
         return None
