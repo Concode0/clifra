@@ -46,7 +46,7 @@ import torch
 
 vectors = torch.randn(8, algebra.n)
 full = algebra.embed_vector(vectors)
-rotor = algebra.exp(torch.randn(8, bivector_layout.dim), input_layout=bivector_layout)
+rotor = algebra.bivector_exp(torch.randn(8, bivector_layout.dim), input_layout=bivector_layout)
 ```
 
 ## Use Layers With Layout Contracts

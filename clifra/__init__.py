@@ -9,7 +9,7 @@ the static graph, execution modules own the compiled tensor work, and layers
 consume those layout contracts without depending on a second algebra host.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 from clifra.core.config import AlgebraConfig, make_algebra, make_algebra_from_config
 from clifra.core.formatting import Multivector, format_multivector
