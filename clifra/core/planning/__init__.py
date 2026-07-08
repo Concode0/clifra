@@ -28,8 +28,13 @@ from .exp import (
 )
 from .flow import GradeFlow
 from .layouts import ProductRequest, build_product_request
-from .metric import NormSquaredPlan, build_norm_squared_plan
-from .permutation import DualPlan, build_dual_plan
+from .metric import (
+    NormSquaredPlan,
+    SignatureNormSquaredPlan,
+    build_norm_squared_plan,
+    build_signature_norm_squared_plan,
+)
+from .permutation import DualPlan, PseudoscalarProductPlan, build_dual_plan, build_pseudoscalar_product_plan
 from .planner import GradePlanner
 from .policy import (
     DEFAULT_PLANNING_LIMITS,
@@ -60,8 +65,8 @@ __all__ = [
     "GradePlanner",
     "PlanningLimits",
     "PlanCost",
-    "NormSquaredPlan",
-    "DualPlan",
+    "SignatureNormSquaredPlan",
+    "PseudoscalarProductPlan",
     "DEFAULT_PLANNING_LIMITS",
     "DEFAULT_PRODUCT_EXECUTION_POLICY",
     "ProductExecutionPolicy",
@@ -93,8 +98,8 @@ __all__ = [
     "spectral_exp_angle_diagnostics",
     "spectral_exp_preselection",
     "spectral_exp_uniform_tail_stress",
-    "build_norm_squared_plan",
-    "build_dual_plan",
+    "build_signature_norm_squared_plan",
+    "build_pseudoscalar_product_plan",
     "build_product_request",
     "build_unary_request",
     "estimate_product_executor_cost",

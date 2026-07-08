@@ -11,8 +11,8 @@ from clifra.core.foundation.basis import operation_coefficient
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 
 
-class DualPlan:
-    """Static gather/sign plan for right multiplication by pseudoscalar."""
+class PseudoscalarProductPlan:
+    """Static gather/sign plan for right multiplication by the pseudoscalar."""
 
     def __init__(
         self,
@@ -40,14 +40,14 @@ class DualPlan:
         return self.output_layout.grades
 
 
-def build_dual_plan(
+def build_pseudoscalar_product_plan(
     spec: AlgebraSpec,
     *,
     input_layout: GradeLayout,
     output_layout: GradeLayout | None = None,
     device=None,
     dtype: torch.dtype = torch.float32,
-) -> DualPlan:
+) -> PseudoscalarProductPlan:
     """Build a static right-pseudoscalar multiplication plan."""
     if input_layout.spec != spec:
         raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {spec}")
@@ -71,10 +71,24 @@ def build_dual_plan(
         input_positions.append(source_position)
         signs.append(operation_coefficient(source_index, pseudoscalar_index, spec.p, spec.q, spec.r, "gp"))
 
-    return DualPlan(
+    return PseudoscalarProductPlan(
         spec=spec,
         input_layout=input_layout,
         output_layout=output_layout,
         input_positions=torch.tensor(input_positions, dtype=torch.long, device=device),
         signs=torch.tensor(signs, dtype=dtype, device=device),
     )
+
+
+DualPlan = PseudoscalarProductPlan
+
+
+def build_dual_plan(*args, **kwargs) -> PseudoscalarProductPlan:
+    """Legacy alias for ``build_pseudoscalar_product_plan``."""
+    return build_pseudoscalar_product_plan(*args, **kwargs)
+
+
+__all__ = [
+    "PseudoscalarProductPlan",
+    "build_pseudoscalar_product_plan",
+]

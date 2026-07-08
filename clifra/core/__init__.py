@@ -14,6 +14,7 @@ from .config import AlgebraConfig, make_algebra, make_algebra_from_config
 from .execution import (
     BivectorExpExecutor,
     DualExecutor,
+    FullSandwichActionExecutor,
     FullSandwichActionHandle,
     FullTableProductExecutor,
     GeometricAttentionScoreExecutor,
@@ -26,6 +27,8 @@ from .execution import (
     PairedBivectorActionExecutor,
     PairedBivectorActionHandle,
     ProductPlanHandle,
+    PseudoscalarProductExecutor,
+    SignatureNormSquaredExecutor,
     UnaryPlanHandle,
     VersorActionExecutor,
     VersorActionHandle,
@@ -37,6 +40,7 @@ from .foundation.basis import (
     basis_product,
     expand_output_grades,
     geometric_product_output_grades,
+    normalize_grade_product_op,
     normalize_grades,
     operation_coefficient,
     operation_may_be_nonzero,
@@ -64,8 +68,13 @@ from .planning.exp import (
 )
 from .planning.flow import GradeFlow
 from .planning.layouts import ProductRequest, build_product_request
-from .planning.metric import NormSquaredPlan, build_norm_squared_plan
-from .planning.permutation import DualPlan, build_dual_plan
+from .planning.metric import (
+    NormSquaredPlan,
+    SignatureNormSquaredPlan,
+    build_norm_squared_plan,
+    build_signature_norm_squared_plan,
+)
+from .planning.permutation import DualPlan, PseudoscalarProductPlan, build_dual_plan, build_pseudoscalar_product_plan
 from .planning.planner import GradePlanner
 from .planning.policy import DEFAULT_PLANNING_LIMITS, PlanCost, PlanningLimits
 from .planning.product import (
@@ -119,6 +128,7 @@ __all__ = [
     "AlgebraLike",
     "CliffordModule",
     "GeometricAttentionScoreExecutor",
+    "FullSandwichActionExecutor",
     "FullSandwichActionHandle",
     "GradedLinearActionExecutor",
     "VersorActionExecutor",
@@ -196,10 +206,10 @@ __all__ = [
     "FullTableProductPlan",
     "GradeProductExecutor",
     "GradeProductPlan",
-    "NormSquaredExecutor",
-    "NormSquaredPlan",
-    "DualExecutor",
-    "DualPlan",
+    "SignatureNormSquaredExecutor",
+    "SignatureNormSquaredPlan",
+    "PseudoscalarProductExecutor",
+    "PseudoscalarProductPlan",
     "GradePathNode",
     "GradePlanTree",
     "GradeFlow",
@@ -212,8 +222,8 @@ __all__ = [
     "basis_product",
     "build_full_table_product_plan",
     "build_grade_product_plan",
-    "build_norm_squared_plan",
-    "build_dual_plan",
+    "build_signature_norm_squared_plan",
+    "build_pseudoscalar_product_plan",
     "build_bivector_exp_plan",
     "format_spectral_exp_uniform_tail_stress",
     "spectral_exp_angle_diagnostics",
@@ -224,6 +234,7 @@ __all__ = [
     "build_unary_request",
     "expand_output_grades",
     "geometric_product_output_grades",
+    "normalize_grade_product_op",
     "normalize_grades",
     "operation_coefficient",
     "operation_may_be_nonzero",

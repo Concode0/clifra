@@ -11,7 +11,12 @@ from typing import Optional
 
 import torch
 
-from clifra.core.foundation.basis import GradeProductOp, expand_output_grades, normalize_grades
+from clifra.core.foundation.basis import (
+    GradeProductOp,
+    expand_output_grades,
+    normalize_grade_product_op,
+    normalize_grades,
+)
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 from clifra.core.runtime.tensors import (
     LaneStorage,
@@ -20,16 +25,6 @@ from clifra.core.runtime.tensors import (
     infer_contract,
     normalize_lane_storage,
 )
-
-_VALID_PRODUCT_OPS = {
-    "gp",
-    "wedge",
-    "inner",
-    "commutator",
-    "anti_commutator",
-    "left_contraction",
-    "right_contraction",
-}
 
 __all__ = [
     "ProductRequest",
@@ -169,10 +164,7 @@ def build_product_request(
 
 def normalize_product_op(op: str) -> GradeProductOp:
     """Validate and normalize a product operation name."""
-    normalized = str(op)
-    if normalized not in _VALID_PRODUCT_OPS:
-        raise ValueError(f"Unsupported grade product op {op!r}")
-    return normalized  # type: ignore[return-value]
+    return normalize_grade_product_op(op)
 
 
 def resolve_output_layout(

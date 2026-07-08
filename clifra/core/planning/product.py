@@ -20,6 +20,7 @@ from clifra.core.foundation.basis import (
     GradeProductOp,
     basis_index_tuple_for_grades,
     basis_indices_tensor,
+    normalize_grade_product_op,
     operation_coefficient,
 )
 from clifra.core.foundation.layout import AlgebraSpec
@@ -219,6 +220,7 @@ def build_grade_product_plan(
 ) -> GradeProductPlan:
     """Build an exact static basis-pair plan for a grade-restricted operation."""
     spec = AlgebraSpec(int(p), int(q), int(r))
+    op = normalize_grade_product_op(op)
     tree = build_grade_plan_tree(
         spec,
         left_grades=left_grades,
@@ -540,7 +542,14 @@ def build_full_table_product_plan(
         row = []
         for output_index in range(dim):
             right_index = left_index ^ output_index
-            coefficient = operation_coefficient(left_index, right_index, spec.p, spec.q, spec.r, op)
+            coefficient = operation_coefficient(
+                left_index,
+                right_index,
+                spec.p,
+                spec.q,
+                spec.r,
+                op,
+            )
             row.append(coefficient)
             if coefficient != 0.0:
                 pair_count += 1

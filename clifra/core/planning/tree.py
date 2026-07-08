@@ -14,7 +14,13 @@ import math
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from clifra.core.foundation.basis import GradeProductOp, expand_output_grades, normalize_grades, product_output_grades
+from clifra.core.foundation.basis import (
+    GradeProductOp,
+    expand_output_grades,
+    normalize_grade_product_op,
+    normalize_grades,
+    product_output_grades,
+)
 from clifra.core.foundation.layout import AlgebraSpec
 
 
@@ -82,6 +88,7 @@ def build_grade_plan_tree(
     chunk_pair_limit: Optional[int] = None,
 ) -> GradePlanTree:
     """Build planner metadata for grade route grouping."""
+    op = normalize_grade_product_op(op)
     left = normalize_grades(left_grades, spec.n, name="left_grades")
     right = normalize_grades(right_grades, spec.n, name="right_grades")
     output = (

@@ -12,6 +12,8 @@ from typing import Iterable, Literal, Optional
 
 import torch
 
+from clifra.core.legacy import product_method_entry
+
 GradeProductOp = Literal[
     "gp",
     "wedge",
@@ -30,6 +32,11 @@ GradeProductOp = Literal[
 # multi-limb or variable-length bitsets, or another non-int64 basis identifier.
 TORCH_LONG_BASIS_MAX_N = 63
 _TORCH_LONG_MAX = (1 << TORCH_LONG_BASIS_MAX_N) - 1
+
+
+def normalize_grade_product_op(op: str) -> GradeProductOp:
+    """Return the internal grade-product key for a public product operation name."""
+    return product_method_entry(op)[0]  # type: ignore[return-value]
 
 
 def normalize_grades(grades: Iterable[int], n: int, *, name: str = "grades") -> tuple[int, ...]:
@@ -110,18 +117,9 @@ def expand_output_grades(
     project_grades: Optional[Iterable[int]] = None,
 ) -> tuple[int, ...]:
     """Expand input grade sets into output grades required by ``op``."""
+    op = normalize_grade_product_op(op)
     left = normalize_grades(left_grades, n, name="left_grades")
     right = normalize_grades(right_grades, n, name="right_grades")
-    if op not in {
-        "gp",
-        "wedge",
-        "inner",
-        "commutator",
-        "anti_commutator",
-        "left_contraction",
-        "right_contraction",
-    }:
-        raise ValueError(f"Unsupported grade product op {op!r}")
 
     outputs: set[int] = set()
     for left_grade in left:
@@ -138,8 +136,15 @@ def expand_output_grades(
     return tuple(sorted(outputs))
 
 
-def product_output_grades(left_grade: int, right_grade: int, n: int, *, op: GradeProductOp = "gp") -> tuple[int, ...]:
+def product_output_grades(
+    left_grade: int,
+    right_grade: int,
+    n: int,
+    *,
+    op: GradeProductOp = "gp",
+) -> tuple[int, ...]:
     """Return possible output grades for one homogeneous product route."""
+    op = normalize_grade_product_op(op)
     left_grade = int(left_grade)
     right_grade = int(right_grade)
     if op == "left_contraction":
@@ -196,8 +201,16 @@ def reverse_sign(index: int) -> float:
     return -1.0 if ((grade * (grade - 1) // 2) % 2) else 1.0
 
 
-def operation_coefficient(index_a: int, index_b: int, p: int, q: int, r: int, op: GradeProductOp) -> float:
+def operation_coefficient(
+    index_a: int,
+    index_b: int,
+    p: int,
+    q: int,
+    r: int,
+    op: GradeProductOp,
+) -> float:
     """Return the scalar coefficient multiplying ``A_i * B_j`` for ``op``."""
+    op = normalize_grade_product_op(op)
     if not operation_may_be_nonzero(index_a, index_b, p, q, r, op):
         return 0.0
 
@@ -212,8 +225,16 @@ def operation_coefficient(index_a: int, index_b: int, p: int, q: int, r: int, op
     raise ValueError(f"Unsupported grade product op {op!r}")
 
 
-def operation_may_be_nonzero(index_a: int, index_b: int, p: int, q: int, r: int, op: GradeProductOp) -> bool:
+def operation_may_be_nonzero(
+    index_a: int,
+    index_b: int,
+    p: int,
+    q: int,
+    r: int,
+    op: GradeProductOp,
+) -> bool:
     """Return whether an operator can have a non-zero coefficient for a basis pair."""
+    op = normalize_grade_product_op(op)
     overlap_mask = int(index_a) & int(index_b)
     if op == "wedge":
         return overlap_mask == 0

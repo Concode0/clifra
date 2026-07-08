@@ -182,7 +182,7 @@ class AlgebraHostMixin:
         )
         return UnaryPlanHandle(executor)
 
-    def plan_norm_sq(
+    def plan_signature_norm_squared(
         self,
         *,
         grades=None,
@@ -193,7 +193,7 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ):
-        """Return a diagonal norm executor for declared compact-lane values."""
+        """Return a signed signature-norm executor for declared compact-lane values."""
         if input_grades is None:
             input_grades = grades
         if input_layout is None:
@@ -203,14 +203,18 @@ class AlgebraHostMixin:
         if device is None:
             device = getattr(self, "device", None)
         input_layout = self._declared_layout(input_grades, input_layout)
-        return self.planner.norm_sq_executor_for_layout(
+        return self.planner.signature_norm_squared_executor_for_layout(
             input_layout=input_layout,
             dtype=dtype,
             device=device,
             cache=cache,
         )
 
-    def plan_dual(
+    def plan_norm_sq(self, **kwargs):
+        """Legacy alias for ``plan_signature_norm_squared``."""
+        return self.plan_signature_norm_squared(**kwargs)
+
+    def plan_pseudoscalar_product(
         self,
         *,
         input_grades=None,
@@ -221,14 +225,14 @@ class AlgebraHostMixin:
         device=None,
         cache: bool = True,
     ):
-        """Return a dual/pseudoscalar permutation executor for compact-lane values."""
+        """Return a right-pseudoscalar product executor for compact-lane values."""
         if dtype is None:
             dtype = getattr(self, "dtype", torch.float32)
         if device is None:
             device = getattr(self, "device", None)
         input_layout = self._declared_layout(input_grades, input_layout)
         output_layout = self._optional_layout(output_grades, output_layout)
-        return self.planner.dual_executor_for_layout(
+        return self.planner.pseudoscalar_product_executor_for_layout(
             input_layout=input_layout,
             output_layout=output_layout,
             dtype=dtype,
@@ -236,7 +240,11 @@ class AlgebraHostMixin:
             cache=cache,
         )
 
-    def plan_exp(
+    def plan_dual(self, **kwargs):
+        """Legacy alias for ``plan_pseudoscalar_product``."""
+        return self.plan_pseudoscalar_product(**kwargs)
+
+    def plan_bivector_exp(
         self,
         *,
         input_grades=None,
@@ -279,6 +287,10 @@ class AlgebraHostMixin:
             spectral_allow_degenerate=spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
         )
+
+    def plan_exp(self, **kwargs):
+        """Legacy alias for ``plan_bivector_exp``."""
+        return self.plan_bivector_exp(**kwargs)
 
     def plan_sandwich_action(
         self,
@@ -501,16 +513,28 @@ class AlgebraHostMixin:
         return self.projected_product(A, B, op="wedge", **kwargs)
 
     def projected_inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Projected inner product convenience wrapper."""
-        return self.projected_product(A, B, op="inner", **kwargs)
+        """Legacy alias for projected symmetric-product routing."""
+        return self.symmetric_product(A, B, **kwargs)
+
+    def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Apply the parity-selected symmetric product route."""
+        return self.projected_product(A, B, op="symmetric_product", **kwargs)
 
     def projected_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Projected commutator convenience wrapper."""
-        return self.projected_product(A, B, op="commutator", **kwargs)
+        """Legacy projected commutator convenience wrapper."""
+        return self.commutator_product(A, B, **kwargs)
+
+    def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Apply the unnormalized commutator product."""
+        return self.projected_product(A, B, op="commutator_product", **kwargs)
 
     def projected_anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Projected anti-commutator convenience wrapper."""
-        return self.projected_product(A, B, op="anti_commutator", **kwargs)
+        """Legacy projected anti-commutator convenience wrapper."""
+        return self.anti_commutator_product(A, B, **kwargs)
+
+    def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
+        """Apply the unnormalized anti-commutator product."""
+        return self.projected_product(A, B, op="anti_commutator_product", **kwargs)
 
     def projected_left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
         """Projected left contraction convenience wrapper."""
@@ -558,7 +582,7 @@ class AlgebraHostMixin:
             output = request.output.layout.full(output)
         return (output, request.output_layout) if return_layout else output
 
-    def norm_sq(
+    def signature_norm_squared(
         self,
         values: torch.Tensor,
         *,
@@ -573,15 +597,19 @@ class AlgebraHostMixin:
         if input_layout is None:
             input_layout = layout
         resolved = self._declared_layout(input_grades, input_layout)
-        active_values = self._compact_values_for_layout(values, resolved, "norm_sq values")
-        executor = self.planner.norm_sq_executor_for_layout(
+        active_values = self._compact_values_for_layout(values, resolved, "signature_norm_squared values")
+        executor = self.planner.signature_norm_squared_executor_for_layout(
             input_layout=resolved,
             dtype=active_values.dtype,
             device=active_values.device,
         )
         return executor(active_values)
 
-    def dual(
+    def norm_sq(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Legacy alias for ``signature_norm_squared``."""
+        return self.signature_norm_squared(values, **kwargs)
+
+    def pseudoscalar_product(
         self,
         values: torch.Tensor,
         *,
@@ -589,26 +617,30 @@ class AlgebraHostMixin:
         output_grades=None,
         input_layout: Optional[GradeLayout] = None,
         output_layout: Optional[GradeLayout] = None,
+        output_storage: LaneStorage | str = LaneStorage.COMPACT,
         return_layout: bool = False,
     ) -> torch.Tensor:
-        """Apply right-pseudoscalar multiplication through a planned permutation."""
+        """Apply right multiplication by the unit pseudoscalar."""
+        resolved_output_storage = normalize_lane_storage(output_storage)
         input_layout = self._declared_layout(input_grades, input_layout)
         output_layout = self._optional_layout(output_grades, output_layout)
-        active_values = self._compact_values_for_layout(values, input_layout, "dual values")
-        executor = self.planner.dual_executor_for_layout(
+        active_values = self._compact_values_for_layout(values, input_layout, "pseudoscalar_product values")
+        executor = self.planner.pseudoscalar_product_executor_for_layout(
             input_layout=input_layout,
             output_layout=output_layout,
             dtype=active_values.dtype,
             device=active_values.device,
         )
         output = executor(active_values)
+        if resolved_output_storage is LaneStorage.CANONICAL:
+            output = executor.output_layout.full(output)
         return (output, executor.output_layout) if return_layout else output
 
-    def pseudoscalar_product(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply right multiplication by the unit pseudoscalar."""
-        return self.dual(values, **kwargs)
+    def dual(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Legacy alias for ``pseudoscalar_product``."""
+        return self.pseudoscalar_product(values, **kwargs)
 
-    def exp(
+    def bivector_exp(
         self,
         values: torch.Tensor,
         *,
@@ -623,9 +655,11 @@ class AlgebraHostMixin:
         spectral_transition_n: Optional[int] = None,
         spectral_allow_degenerate: Optional[bool] = None,
         spectral_allow_truncated_degenerate: Optional[bool] = None,
+        output_storage: LaneStorage | str = LaneStorage.COMPACT,
         return_layout: bool = False,
     ) -> torch.Tensor:
         """Exponentiate a declared bivector through a planner-owned executor."""
+        resolved_output_storage = normalize_lane_storage(output_storage)
         input_layout, output_layout = self._bivector_exp_layouts(
             values,
             input_grades=input_grades,
@@ -648,7 +682,13 @@ class AlgebraHostMixin:
             spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
         )
         output = executor(active_values)
+        if resolved_output_storage is LaneStorage.CANONICAL:
+            output = output_layout.full(output)
         return (output, output_layout) if return_layout else output
+
+    def exp(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Legacy alias for ``bivector_exp``."""
+        return self.bivector_exp(values, **kwargs)
 
     def blade_inverse(
         self,
@@ -673,7 +713,7 @@ class AlgebraHostMixin:
             input_layout=resolved,
             output_layout=resolved,
         )
-        scalar = signed_clamp_min(self.norm_sq(active_blade, input_layout=resolved), self.eps_sq)
+        scalar = signed_clamp_min(self.signature_norm_squared(active_blade, input_layout=resolved), self.eps_sq)
         output = blade_rev / scalar
         return (output, resolved) if return_layout else output
 
@@ -696,8 +736,10 @@ class AlgebraHostMixin:
         output_layout = self._optional_layout(output_grades, output_layout) or input_layout
         active_values = self._compact_values_for_layout(values, input_layout, "blade_project values")
         active_blade = self._compact_values_for_layout(blade, blade_layout, "blade_project blade")
-        inner_layout = self.layout(expand_output_grades(input_layout.grades, blade_layout.grades, self.n, op="inner"))
-        inner = self.inner_product(
+        inner_layout = self.layout(
+            expand_output_grades(input_layout.grades, blade_layout.grades, self.n, op="symmetric_product")
+        )
+        inner = self.symmetric_product(
             active_values,
             active_blade,
             left_layout=input_layout,

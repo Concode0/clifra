@@ -10,8 +10,8 @@ import torch
 
 from clifra.core.execution.action import FullSandwichActionExecutor
 from clifra.core.execution.exp import BivectorExpExecutor
-from clifra.core.execution.metric import NormSquaredExecutor
-from clifra.core.execution.permutation import DualExecutor
+from clifra.core.execution.metric import SignatureNormSquaredExecutor
+from clifra.core.execution.permutation import PseudoscalarProductExecutor
 from clifra.core.execution.product import FullTableProductExecutor, GradeProductExecutor
 from clifra.core.execution.unary import GradeUnaryExecutor
 from clifra.core.foundation.basis import operation_coefficient
@@ -26,8 +26,8 @@ from clifra.core.planning.action import (
 )
 from clifra.core.planning.exp import DEFAULT_BIVECTOR_EXP_EXECUTION_POLICY, build_bivector_exp_plan
 from clifra.core.planning.layouts import ProductRequest, build_product_request, normalize_product_op
-from clifra.core.planning.metric import build_norm_squared_plan
-from clifra.core.planning.permutation import build_dual_plan
+from clifra.core.planning.metric import build_signature_norm_squared_plan
+from clifra.core.planning.permutation import build_pseudoscalar_product_plan
 from clifra.core.planning.policy import (
     estimate_product_executor_cost,
     validate_grades_cost,
@@ -61,8 +61,8 @@ class GradePlanner:
         self.spec = AlgebraSpec.from_algebra(algebra)
         self._product_executors = {}
         self._unary_executors = {}
-        self._norm_sq_executors = {}
-        self._dual_executors = {}
+        self._signature_norm_squared_executors = {}
+        self._pseudoscalar_product_executors = {}
         self._bivector_exp_executors = {}
         self._full_sandwich_action_executors = {}
         self._bivector_signs_cache = {}
@@ -107,8 +107,8 @@ class GradePlanner:
         """Drop cached executor modules."""
         self._product_executors.clear()
         self._unary_executors.clear()
-        self._norm_sq_executors.clear()
-        self._dual_executors.clear()
+        self._signature_norm_squared_executors.clear()
+        self._pseudoscalar_product_executors.clear()
         self._bivector_exp_executors.clear()
         self._full_sandwich_action_executors.clear()
         self._bivector_signs_cache.clear()
@@ -128,17 +128,17 @@ class GradePlanner:
             executor._apply(fn)
             self._unary_executors[self._unary_cache_key(executor)] = executor
 
-        norm_sq_executors = list(self._norm_sq_executors.values())
-        self._norm_sq_executors.clear()
-        for executor in norm_sq_executors:
+        signature_norm_squared_executors = list(self._signature_norm_squared_executors.values())
+        self._signature_norm_squared_executors.clear()
+        for executor in signature_norm_squared_executors:
             executor._apply(fn)
-            self._norm_sq_executors[self._norm_sq_cache_key(executor)] = executor
+            self._signature_norm_squared_executors[self._signature_norm_squared_cache_key(executor)] = executor
 
-        dual_executors = list(self._dual_executors.values())
-        self._dual_executors.clear()
-        for executor in dual_executors:
+        pseudoscalar_product_executors = list(self._pseudoscalar_product_executors.values())
+        self._pseudoscalar_product_executors.clear()
+        for executor in pseudoscalar_product_executors:
             executor._apply(fn)
-            self._dual_executors[self._dual_cache_key(executor)] = executor
+            self._pseudoscalar_product_executors[self._pseudoscalar_product_cache_key(executor)] = executor
 
         bivector_exp_executors = list(self._bivector_exp_executors.values())
         self._bivector_exp_executors.clear()
@@ -360,31 +360,35 @@ class GradePlanner:
         )
         return self.unary_executor_for_request(request, cache=cache)
 
-    def norm_sq_executor(
+    def signature_norm_squared_executor(
         self,
         *,
         input_grades,
         dtype,
         device,
         cache: bool = True,
-    ) -> NormSquaredExecutor:
-        """Return a cached diagonal executor for algebraic squared norm."""
-        return self.norm_sq_executor_for_layout(
+    ) -> SignatureNormSquaredExecutor:
+        """Return a cached diagonal executor for signed signature norm squared."""
+        return self.signature_norm_squared_executor_for_layout(
             input_layout=self.layout(input_grades),
             dtype=dtype,
             device=device,
             cache=cache,
         )
 
-    def norm_sq_executor_for_layout(
+    def norm_sq_executor(self, **kwargs) -> SignatureNormSquaredExecutor:
+        """Legacy alias for ``signature_norm_squared_executor``."""
+        return self.signature_norm_squared_executor(**kwargs)
+
+    def signature_norm_squared_executor_for_layout(
         self,
         *,
         input_layout: GradeLayout,
         dtype,
         device,
         cache: bool = True,
-    ) -> NormSquaredExecutor:
-        """Return a cached diagonal norm executor for a resolved layout."""
+    ) -> SignatureNormSquaredExecutor:
+        """Return a cached signed signature-norm executor for a resolved layout."""
         if input_layout.spec != self.spec:
             raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {self.spec}")
         resolved_device = torch.device(device)
@@ -392,23 +396,27 @@ class GradePlanner:
             self.spec,
             str(resolved_device),
             str(dtype),
-            "norm_sq",
+            "signature_norm_squared",
             input_layout.grades,
         )
-        executor = self._norm_sq_executors.get(key) if cache else None
+        executor = self._signature_norm_squared_executors.get(key) if cache else None
         if executor is None:
-            plan = build_norm_squared_plan(
+            plan = build_signature_norm_squared_plan(
                 self.spec,
                 input_layout=input_layout,
                 dtype=dtype,
                 device=resolved_device,
             )
-            executor = NormSquaredExecutor(plan)
+            executor = SignatureNormSquaredExecutor(plan)
             if cache:
-                self._norm_sq_executors[key] = executor
+                self._signature_norm_squared_executors[key] = executor
         return executor
 
-    def dual_executor_for_layout(
+    def norm_sq_executor_for_layout(self, **kwargs) -> SignatureNormSquaredExecutor:
+        """Legacy alias for ``signature_norm_squared_executor_for_layout``."""
+        return self.signature_norm_squared_executor_for_layout(**kwargs)
+
+    def pseudoscalar_product_executor_for_layout(
         self,
         *,
         input_layout: GradeLayout,
@@ -416,8 +424,8 @@ class GradePlanner:
         dtype,
         device,
         cache: bool = True,
-    ) -> DualExecutor:
-        """Return a cached dual/pseudoscalar permutation executor."""
+    ) -> PseudoscalarProductExecutor:
+        """Return a cached right-pseudoscalar product permutation executor."""
         if input_layout.spec != self.spec:
             raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {self.spec}")
         if output_layout is None:
@@ -429,23 +437,27 @@ class GradePlanner:
             self.spec,
             str(resolved_device),
             str(dtype),
-            "dual",
+            "pseudoscalar_product",
             input_layout.grades,
             output_layout.grades,
         )
-        executor = self._dual_executors.get(key) if cache else None
+        executor = self._pseudoscalar_product_executors.get(key) if cache else None
         if executor is None:
-            plan = build_dual_plan(
+            plan = build_pseudoscalar_product_plan(
                 self.spec,
                 input_layout=input_layout,
                 output_layout=output_layout,
                 dtype=dtype,
                 device=resolved_device,
             )
-            executor = DualExecutor(plan)
+            executor = PseudoscalarProductExecutor(plan)
             if cache:
-                self._dual_executors[key] = executor
+                self._pseudoscalar_product_executors[key] = executor
         return executor
+
+    def dual_executor_for_layout(self, **kwargs) -> PseudoscalarProductExecutor:
+        """Legacy alias for ``pseudoscalar_product_executor_for_layout``."""
+        return self.pseudoscalar_product_executor_for_layout(**kwargs)
 
     def bivector_exp_executor_for_layouts(
         self,
@@ -729,7 +741,7 @@ class GradePlanner:
             executor.output_layout.grades,
         )
 
-    def _norm_sq_cache_key(self, executor: NormSquaredExecutor) -> tuple[object, ...]:
+    def _signature_norm_squared_cache_key(self, executor: SignatureNormSquaredExecutor) -> tuple[object, ...]:
         return (
             self.spec,
             str(executor.signs.device),
@@ -738,7 +750,7 @@ class GradePlanner:
             executor.input_layout.grades,
         )
 
-    def _dual_cache_key(self, executor: DualExecutor) -> tuple[object, ...]:
+    def _pseudoscalar_product_cache_key(self, executor: PseudoscalarProductExecutor) -> tuple[object, ...]:
         return (
             self.spec,
             str(executor.signs.device),
@@ -747,6 +759,7 @@ class GradePlanner:
             executor.input_layout.grades,
             executor.output_layout.grades,
         )
+
 
     def _bivector_exp_cache_key(self, executor: BivectorExpExecutor) -> tuple[object, ...]:
         return (

@@ -27,15 +27,16 @@ from .handles import (
     UnaryPlanHandle,
     VersorActionHandle,
 )
-from .metric import NormSquaredExecutor
-from .permutation import DualExecutor
+from .metric import NormSquaredExecutor, SignatureNormSquaredExecutor
+from .permutation import DualExecutor, PseudoscalarProductExecutor
 from .product import FullTableProductExecutor, GradeProductExecutor
 from .unary import GradeUnaryExecutor
 
 __all__ = [
     "BivectorExpExecutor",
+    "FullSandwichActionExecutor",
     "FullTableProductExecutor",
-    "DualExecutor",
+    "PseudoscalarProductExecutor",
     "GeometricAttentionScoreExecutor",
     "GradeProductExecutor",
     "GradeUnaryExecutor",
@@ -57,5 +58,5 @@ __all__ = [
     "VersorActionHandle",
     "MultiVersorActionHandle",
     "PairedBivectorActionHandle",
-    "NormSquaredExecutor",
+    "SignatureNormSquaredExecutor",
 ]

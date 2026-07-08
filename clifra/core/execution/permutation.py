@@ -8,16 +8,16 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from clifra.core.planning.permutation import DualPlan
+from clifra.core.planning.permutation import PseudoscalarProductPlan
 
 
-class DualExecutor(nn.Module):
-    """Compile-friendly dual/pseudoscalar permutation executor."""
+class PseudoscalarProductExecutor(nn.Module):
+    """Compile-friendly right-pseudoscalar product permutation executor."""
 
     executor_family = "unary_permutation"
-    op = "dual"
+    op = "pseudoscalar_product"
 
-    def __init__(self, plan: DualPlan):
+    def __init__(self, plan: PseudoscalarProductPlan):
         super().__init__()
         self.spec = plan.spec
         self.input_layout = plan.input_layout
@@ -30,11 +30,14 @@ class DualExecutor(nn.Module):
         self.register_buffer("signs", plan.signs, persistent=False)
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
-        """Return dual values in ``output_layout`` lanes."""
+        """Return right-pseudoscalar product values in ``output_layout`` lanes."""
         if values.shape[-1] != self.input_dim:
             raise ValueError(f"values last dimension must be {self.input_dim}, got {values.shape[-1]}")
         gathered = torch.index_select(values, -1, self.input_positions)
         return gathered * self.signs
 
 
-__all__ = ["DualExecutor"]
+DualExecutor = PseudoscalarProductExecutor
+
+
+__all__ = ["PseudoscalarProductExecutor"]

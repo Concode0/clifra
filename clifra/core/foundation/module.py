@@ -88,14 +88,26 @@ class AlgebraLike(Protocol):
         ...
 
     def plan_norm_sq(self, **kwargs):
-        """Return a diagonal norm executor for compact-lane values."""
+        """Legacy alias for ``plan_signature_norm_squared``."""
+        ...
+
+    def plan_signature_norm_squared(self, **kwargs):
+        """Return a signed signature-norm executor for compact-lane values."""
         ...
 
     def plan_dual(self, **kwargs):
-        """Return a dual/pseudoscalar executor for compact-lane values."""
+        """Legacy alias for ``plan_pseudoscalar_product``."""
+        ...
+
+    def plan_pseudoscalar_product(self, **kwargs):
+        """Return a right-pseudoscalar product executor for compact-lane values."""
         ...
 
     def plan_exp(self, **kwargs):
+        """Legacy alias for ``plan_bivector_exp``."""
+        ...
+
+    def plan_bivector_exp(self, **kwargs):
         """Return a bivector exponential executor for compact-lane values."""
         ...
 
@@ -124,15 +136,27 @@ class AlgebraLike(Protocol):
         ...
 
     def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply the inner product."""
+        """Legacy alias for ``symmetric_product``."""
+        ...
+
+    def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the parity-selected symmetric product route."""
         ...
 
     def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply the commutator product."""
+        """Legacy alias for ``commutator_product``."""
+        ...
+
+    def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the unnormalized commutator product."""
         ...
 
     def anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply the anti-commutator product."""
+        """Legacy alias for ``anti_commutator_product``."""
+        ...
+
+    def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply the unnormalized anti-commutator product."""
         ...
 
     def left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -160,11 +184,15 @@ class AlgebraLike(Protocol):
         ...
 
     def norm_sq(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Return the algebraic squared norm."""
+        """Legacy alias for ``signature_norm_squared``."""
+        ...
+
+    def signature_norm_squared(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Return the signed Clifford signature norm squared."""
         ...
 
     def dual(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply the Hodge dual / right pseudoscalar product."""
+        """Legacy alias for ``pseudoscalar_product``."""
         ...
 
     def pseudoscalar_product(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
@@ -192,6 +220,10 @@ class AlgebraLike(Protocol):
         ...
 
     def exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Legacy alias for ``bivector_exp``."""
+        ...
+
+    def bivector_exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
         """Exponentiate a declared bivector."""
         ...
 
@@ -227,6 +259,20 @@ class AlgebraLike(Protocol):
         """Apply every full-layout sandwich action to every input channel."""
         ...
 
+    def versor_action(self, values: torch.Tensor, weights: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Apply a planned grade-1 or grade-2 versor action."""
+        ...
+
+    def multi_versor_action(
+        self,
+        values: torch.Tensor,
+        weights: torch.Tensor,
+        mix: torch.Tensor,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Apply a planned weighted grade-1 or grade-2 versor action."""
+        ...
+
     def paired_bivector_action(
         self,
         values: torch.Tensor,
@@ -236,6 +282,18 @@ class AlgebraLike(Protocol):
         **kwargs,
     ) -> torch.Tensor:
         """Apply independent left/right bivector rotor pairs."""
+        ...
+
+    def grade_norms(self, values: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Return per-grade coefficient norms for declared-layout values."""
+        ...
+
+    def multivector(self, values: torch.Tensor, **kwargs):
+        """Return a debug-only multivector formatter for ``values``."""
+        ...
+
+    def format_multivector(self, values: torch.Tensor, **kwargs) -> str:
+        """Format ``values`` as basis-blade terms for debugging."""
         ...
 
 

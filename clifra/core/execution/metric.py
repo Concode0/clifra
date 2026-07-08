@@ -8,16 +8,16 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from clifra.core.planning.metric import NormSquaredPlan
+from clifra.core.planning.metric import SignatureNormSquaredPlan
 
 
-class NormSquaredExecutor(nn.Module):
-    """Compile-friendly diagonal executor for algebraic squared norm."""
+class SignatureNormSquaredExecutor(nn.Module):
+    """Compile-friendly diagonal executor for signed signature norm squared."""
 
     executor_family = "metric_diagonal"
-    op = "norm_sq"
+    op = "signature_norm_squared"
 
-    def __init__(self, plan: NormSquaredPlan):
+    def __init__(self, plan: SignatureNormSquaredPlan):
         super().__init__()
         self.spec = plan.spec
         self.input_layout = plan.input_layout
@@ -32,4 +32,7 @@ class NormSquaredExecutor(nn.Module):
         return (values * values * self.signs).sum(dim=-1, keepdim=True)
 
 
-__all__ = ["NormSquaredExecutor"]
+NormSquaredExecutor = SignatureNormSquaredExecutor
+
+
+__all__ = ["SignatureNormSquaredExecutor"]

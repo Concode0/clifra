@@ -24,6 +24,7 @@ from clifra.core.planning.policy import (
     PlanningLimits,
     ProductExecutionPolicy,
 )
+from clifra.core.runtime.tensors import LaneStorage
 
 
 class AlgebraContext(AlgebraHostMixin):
@@ -116,17 +117,29 @@ class AlgebraContext(AlgebraHostMixin):
         """Plan and execute an exterior product."""
         return self.projected_product(A, B, op="wedge", **kwargs)
 
+    def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Plan and execute the parity-selected symmetric product route."""
+        return self.projected_product(A, B, op="symmetric_product", **kwargs)
+
     def inner_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute the symmetric inner product route."""
-        return self.projected_product(A, B, op="inner", **kwargs)
+        """Legacy alias for ``symmetric_product``."""
+        return self.symmetric_product(A, B, **kwargs)
+
+    def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Plan and execute the unnormalized commutator product."""
+        return self.projected_product(A, B, op="commutator_product", **kwargs)
 
     def commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute a commutator product."""
-        return self.projected_product(A, B, op="commutator", **kwargs)
+        """Legacy alias for ``commutator_product``."""
+        return self.commutator_product(A, B, **kwargs)
+
+    def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Plan and execute the unnormalized anti-commutator product."""
+        return self.projected_product(A, B, op="anti_commutator_product", **kwargs)
 
     def anti_commutator(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute an anti-commutator product."""
-        return self.projected_product(A, B, op="anti_commutator", **kwargs)
+        """Legacy alias for ``anti_commutator_product``."""
+        return self.anti_commutator_product(A, B, **kwargs)
 
     def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:
         """Project declared multivector coefficients to one grade."""
@@ -152,7 +165,7 @@ class AlgebraContext(AlgebraHostMixin):
         """Apply Clifford conjugation to full-lane or compact multivector coefficients."""
         return self.planned_unary(mv, op="clifford_conjugation", **kwargs)
 
-    def exp(
+    def bivector_exp(
         self,
         mv: torch.Tensor,
         *,
@@ -167,10 +180,11 @@ class AlgebraContext(AlgebraHostMixin):
         spectral_transition_n: Optional[int] = None,
         spectral_allow_degenerate: Optional[bool] = None,
         spectral_allow_truncated_degenerate: Optional[bool] = None,
+        output_storage: LaneStorage | str = LaneStorage.COMPACT,
         return_layout: bool = False,
     ) -> torch.Tensor:
         """Exponentiate a declared bivector through the shared planner route."""
-        return AlgebraHostMixin.exp(
+        return AlgebraHostMixin.bivector_exp(
             self,
             mv,
             input_grades=input_grades,
@@ -184,8 +198,13 @@ class AlgebraContext(AlgebraHostMixin):
             spectral_transition_n=spectral_transition_n,
             spectral_allow_degenerate=spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=spectral_allow_truncated_degenerate,
+            output_storage=output_storage,
             return_layout=return_layout,
         )
+
+    def exp(self, mv: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Legacy alias for ``bivector_exp``."""
+        return self.bivector_exp(mv, **kwargs)
 
     def _basis_vector_indices(self, device) -> torch.Tensor:
         resolved = torch.device(device)

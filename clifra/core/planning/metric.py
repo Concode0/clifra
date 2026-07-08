@@ -11,7 +11,7 @@ from clifra.core.foundation.basis import operation_coefficient, reverse_sign
 from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
 
 
-class NormSquaredPlan:
+class SignatureNormSquaredPlan:
     """Static diagonal plan for ``<x reverse(x)>_0`` over one layout."""
 
     def __init__(
@@ -36,13 +36,13 @@ class NormSquaredPlan:
         return self.input_layout.dim
 
 
-def build_norm_squared_plan(
+def build_signature_norm_squared_plan(
     spec: AlgebraSpec,
     *,
     input_layout: GradeLayout,
     device=None,
     dtype: torch.dtype = torch.float32,
-) -> NormSquaredPlan:
+) -> SignatureNormSquaredPlan:
     """Build a static diagonal signed norm plan for ``input_layout``."""
     if input_layout.spec != spec:
         raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {spec}")
@@ -50,8 +50,22 @@ def build_norm_squared_plan(
         reverse_sign(index) * operation_coefficient(index, index, spec.p, spec.q, spec.r, "gp")
         for index in input_layout.basis_indices
     ]
-    return NormSquaredPlan(
+    return SignatureNormSquaredPlan(
         spec=spec,
         input_layout=input_layout,
         signs=torch.tensor(signs, dtype=dtype, device=device),
     )
+
+
+NormSquaredPlan = SignatureNormSquaredPlan
+
+
+def build_norm_squared_plan(*args, **kwargs) -> SignatureNormSquaredPlan:
+    """Legacy alias for ``build_signature_norm_squared_plan``."""
+    return build_signature_norm_squared_plan(*args, **kwargs)
+
+
+__all__ = [
+    "SignatureNormSquaredPlan",
+    "build_signature_norm_squared_plan",
+]
