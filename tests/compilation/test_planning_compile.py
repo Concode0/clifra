@@ -5,7 +5,6 @@ from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
     AlgebraSpec,
-    DualExecutor,
     FullSandwichActionExecutor,
     FullSandwichActionHandle,
     FullTableProductExecutor,
@@ -14,11 +13,12 @@ from tests.planning._grade_plan_helpers import (
     GradeProductExecutor,
     LaneStorage,
     MultiVersorActionHandle,
-    NormSquaredExecutor,
     PairedBivectorActionHandle,
     PlanningLimits,
     ProductExecutionPolicy,
     ProductPlanHandle,
+    PseudoscalarProductExecutor,
+    SignatureNormSquaredExecutor,
     SmallCliffordOracle,
     UnaryPlanHandle,
     VersorActionHandle,
@@ -251,7 +251,7 @@ def test_plan_unary_handle_compiles_fullgraph_without_cache_mutation():
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-@pytest.mark.parametrize("op", ["gp", "wedge", "inner", "commutator", "anti_commutator"])
+@pytest.mark.parametrize("op", ["gp", "wedge", "symmetric_product", "commutator_product", "anti_commutator_product"])
 def test_clifford_public_full_layout_product_compiles_fullgraph_after_cache_warm(op):
     algebra = AlgebraContext(4, 0, 0, device=DEVICE, dtype=torch.float32)
     generator = torch.Generator(device=DEVICE).manual_seed(293)
@@ -277,7 +277,7 @@ def test_full_sandwich_action_executor_compiles_fullgraph_with_aot_eager():
     executor = FullSandwichActionExecutor.from_layout(layout, device=DEVICE, dtype=torch.float32)
     generator = torch.Generator(device=DEVICE).manual_seed(271)
     bivectors = torch.randn(4, bivector_layout.dim, dtype=torch.float32, generator=generator) * 0.1
-    left = algebra.exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=layout)
+    left = algebra.bivector_exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=layout)
     right = algebra.reverse(left, input_layout=layout, output_layout=layout)
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float32, generator=generator)
 
@@ -296,7 +296,7 @@ def test_planned_public_per_channel_sandwich_compiles_fullgraph_after_cache_warm
     bivector_layout = algebra.layout((2,))
     generator = torch.Generator(device=DEVICE).manual_seed(299)
     bivectors = torch.randn(4, bivector_layout.dim, dtype=torch.float32, generator=generator) * 0.1
-    left = algebra.exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=layout)
+    left = algebra.bivector_exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=layout)
     right = algebra.reverse(left, input_layout=layout, output_layout=layout)
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float32, generator=generator)
 
@@ -318,7 +318,7 @@ def test_plan_sandwich_action_handle_compiles_fullgraph_without_cache_mutation()
     handle = algebra.plan_sandwich_action(layout=layout, dtype=torch.float32, device=DEVICE)
     generator = torch.Generator(device=DEVICE).manual_seed(311)
     bivectors = torch.randn(4, bivector_layout.dim, dtype=torch.float32, generator=generator) * 0.1
-    left = algebra.exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=layout)
+    left = algebra.bivector_exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=layout)
     right = algebra.reverse(left, input_layout=layout, output_layout=layout)
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float32, generator=generator)
     cache_size = len(algebra.planner._full_sandwich_action_executors)
@@ -476,10 +476,10 @@ def test_plan_paired_bivector_action_handle_compiles_fullgraph_without_cache_mut
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_norm_sq_executor_compiles_fullgraph_with_aot_eager():
+def test_signature_norm_squared_executor_compiles_fullgraph_with_aot_eager():
     algebra = AlgebraContext(5, 0, device=DEVICE, dtype=torch.float32)
     layout = algebra.layout((2,))
-    executor = algebra.planner.norm_sq_executor_for_layout(
+    executor = algebra.planner.signature_norm_squared_executor_for_layout(
         input_layout=layout,
         dtype=torch.float32,
         device=DEVICE,
@@ -491,7 +491,7 @@ def test_norm_sq_executor_compiles_fullgraph_with_aot_eager():
     expected = executor(values)
     actual = compiled(values)
 
-    assert isinstance(executor, NormSquaredExecutor)
+    assert isinstance(executor, SignatureNormSquaredExecutor)
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
 
@@ -532,11 +532,11 @@ def test_planned_reflect_compiles_fullgraph_after_cache_warm():
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_dual_executor_compiles_fullgraph_with_aot_eager():
+def test_pseudoscalar_product_executor_compiles_fullgraph_with_aot_eager():
     algebra = AlgebraContext(5, 0, device=DEVICE, dtype=torch.float32)
     input_layout = algebra.layout((1,))
     output_layout = algebra.layout((4,))
-    executor = algebra.planner.dual_executor_for_layout(
+    executor = algebra.planner.pseudoscalar_product_executor_for_layout(
         input_layout=input_layout,
         output_layout=output_layout,
         dtype=torch.float32,
@@ -554,7 +554,7 @@ def test_dual_executor_compiles_fullgraph_with_aot_eager():
     expected = executor(values)
     actual = compiled(values)
 
-    assert isinstance(executor, DualExecutor)
+    assert isinstance(executor, PseudoscalarProductExecutor)
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
 

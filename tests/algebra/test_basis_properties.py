@@ -108,8 +108,8 @@ def test_geometric_product_grade_bounds_for_high_dimensional_routes():
     assert geometric_product_output_grades(1, 1, 16) == (0, 2)
     assert geometric_product_output_grades(2, 1, 16) == (1, 3)
     assert product_output_grades(2, 1, 16, op="wedge") == (3,)
-    assert product_output_grades(2, 1, 16, op="commutator") == (1,)
-    assert product_output_grades(2, 1, 16, op="anti_commutator") == (3,)
+    assert product_output_grades(2, 1, 16, op="commutator_product") == (1,)
+    assert product_output_grades(2, 1, 16, op="anti_commutator_product") == (3,)
     assert expand_output_grades((0, 2), (1,), 16, op="gp") == (1, 3)
     assert expand_output_grades((1,), (1,), 16, op="wedge") == (2,)
     assert expand_output_grades((1,), (1,), 16, op="gp", project_grades=(0,)) == (0,)
@@ -122,5 +122,5 @@ def test_basis_tensorization_reports_int64_bitmask_boundary():
 
 def test_operation_coefficients_keep_wedge_as_exterior_product():
     assert operation_coefficient(3, 4, 3, 0, 0, "wedge") == 1.0
-    assert operation_coefficient(3, 4, 3, 0, 0, "commutator") == 0.0
-    assert operation_coefficient(3, 4, 3, 0, 0, "anti_commutator") == 2.0
+    assert operation_coefficient(3, 4, 3, 0, 0, "commutator_product") == 0.0
+    assert operation_coefficient(3, 4, 3, 0, 0, "anti_commutator_product") == 2.0

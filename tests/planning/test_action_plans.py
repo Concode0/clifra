@@ -5,7 +5,6 @@ from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
     AlgebraSpec,
-    DualExecutor,
     FullSandwichActionExecutor,
     FullSandwichActionHandle,
     FullTableProductExecutor,
@@ -14,11 +13,12 @@ from tests.planning._grade_plan_helpers import (
     GradeProductExecutor,
     LaneStorage,
     MultiVersorActionHandle,
-    NormSquaredExecutor,
     PairedBivectorActionHandle,
     PlanningLimits,
     ProductExecutionPolicy,
     ProductPlanHandle,
+    PseudoscalarProductExecutor,
+    SignatureNormSquaredExecutor,
     SmallCliffordOracle,
     UnaryPlanHandle,
     VersorActionHandle,
@@ -82,7 +82,7 @@ def test_full_sandwich_action_executor_matches_small_oracle_action_matrices():
     executor = FullSandwichActionExecutor.from_layout(layout, device=DEVICE, dtype=torch.float64)
     generator = torch.Generator(device=DEVICE).manual_seed(263)
     bivectors = torch.randn(4, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
-    left = algebra.exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=layout)
+    left = algebra.bivector_exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=layout)
     right = algebra.reverse(left, input_layout=layout, output_layout=layout)
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float64, generator=generator)
 
@@ -100,7 +100,7 @@ def test_context_sandwich_helpers_use_planner_full_action_executor():
     bivector_layout = algebra.layout((2,))
     generator = torch.Generator(device=DEVICE).manual_seed(295)
     bivectors = torch.randn(4, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
-    left = algebra.exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=full_layout)
+    left = algebra.bivector_exp(-0.5 * bivectors, input_layout=bivector_layout, output_layout=full_layout)
     right = algebra.reverse(left, input_layout=full_layout, output_layout=full_layout)
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float64, generator=generator)
 
@@ -132,9 +132,9 @@ def test_context_sandwich_product_and_multi_rotor_sandwich_match_sequential_prod
     generator = torch.Generator(device=DEVICE).manual_seed(297)
     batch_bivectors = torch.randn(3, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
     rotor_bivectors = torch.randn(5, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
-    batch_left = algebra.exp(-0.5 * batch_bivectors, input_layout=bivector_layout, output_layout=full_layout)
+    batch_left = algebra.bivector_exp(-0.5 * batch_bivectors, input_layout=bivector_layout, output_layout=full_layout)
     batch_right = algebra.reverse(batch_left, input_layout=full_layout, output_layout=full_layout)
-    rotor_left = algebra.exp(-0.5 * rotor_bivectors, input_layout=bivector_layout, output_layout=full_layout)
+    rotor_left = algebra.bivector_exp(-0.5 * rotor_bivectors, input_layout=bivector_layout, output_layout=full_layout)
     rotor_right = algebra.reverse(rotor_left, input_layout=full_layout, output_layout=full_layout)
     values = torch.randn(3, 4, algebra.dim, dtype=torch.float64, generator=generator)
 
@@ -184,9 +184,9 @@ def test_plan_sandwich_action_handle_covers_public_full_action_helpers():
     generator = torch.Generator(device=DEVICE).manual_seed(309)
     left_bivectors = torch.randn(4, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
     batch_bivectors = torch.randn(3, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
-    left = algebra.exp(-0.5 * left_bivectors, input_layout=bivector_layout, output_layout=full_layout)
+    left = algebra.bivector_exp(-0.5 * left_bivectors, input_layout=bivector_layout, output_layout=full_layout)
     right = algebra.reverse(left, input_layout=full_layout, output_layout=full_layout)
-    batch_left = algebra.exp(-0.5 * batch_bivectors, input_layout=bivector_layout, output_layout=full_layout)
+    batch_left = algebra.bivector_exp(-0.5 * batch_bivectors, input_layout=bivector_layout, output_layout=full_layout)
     batch_right = algebra.reverse(batch_left, input_layout=full_layout, output_layout=full_layout)
     values = torch.randn(3, 4, algebra.dim, dtype=torch.float64, generator=generator)
 
@@ -215,7 +215,7 @@ def test_context_full_layout_versor_action_uses_static_action_matrix_executor():
     weights = torch.randn(4, parameter_layout.dim, dtype=torch.float64, generator=generator) * 0.1
     values = torch.randn(2, 4, context.dim, dtype=torch.float64, generator=generator)
 
-    left = context.exp(-0.5 * weights, input_layout=parameter_layout, output_layout=full_layout)
+    left = context.bivector_exp(-0.5 * weights, input_layout=parameter_layout, output_layout=full_layout)
     right = context.reverse(left, input_layout=full_layout, output_layout=full_layout)
     matrices = _oracle_sandwich_action_matrices(oracle, left, right)
     expected = torch.einsum("...cj,ckj->...ck", values, matrices)

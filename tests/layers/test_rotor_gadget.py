@@ -24,7 +24,7 @@ pytestmark = pytest.mark.unit
 
 def _planned_paired_full_factors(layer: RotorGadget):
     algebra = layer.algebra
-    exp = algebra.plan_exp(input_layout=layer.parameter_layout, output_layout=layer.rotor_layout)
+    exp = algebra.plan_bivector_exp(input_layout=layer.parameter_layout, output_layout=layer.rotor_layout)
     reverse = algebra.plan_unary(op="reverse", input_layout=layer.rotor_layout, output_layout=layer.rotor_layout)
     left = exp(-0.5 * layer.bivector_left)
     right = reverse(exp(-0.5 * layer.bivector_right))

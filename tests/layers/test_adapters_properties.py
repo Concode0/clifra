@@ -104,7 +104,7 @@ def test_projective_rotor_rotation_matches_euclidean_rotation(d, angle, data):
     points = data.draw(tensor_with_shape((batch, d)))
     bivector = torch.zeros(1, algebra.dim, dtype=torch.float64)
     bivector[0, 3] = -0.5 * float(angle)
-    rotor = algebra.exp(bivector)
+    rotor = algebra.bivector_exp(bivector)
     rotor_reverse = oracle.reverse(rotor)
     projective = embed.embed(points)
 

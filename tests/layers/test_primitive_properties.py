@@ -211,7 +211,7 @@ def test_versor_layer_bivector_action_matches_small_oracle_on_vectors(n, data):
     with torch.no_grad():
         layer.grade_weights.copy_(weights)
 
-    rotor = even_layout.full(algebra.exp(-0.5 * weights, input_layout=bivector_layout, output_layout=even_layout))
+    rotor = even_layout.full(algebra.bivector_exp(-0.5 * weights, input_layout=bivector_layout, output_layout=even_layout))
     rotor_reverse = oracle.reverse(rotor)
     full_values = vector_layout.full(values)
     expected_full = oracle.product(oracle.product(rotor, full_values), rotor_reverse)
@@ -276,7 +276,7 @@ def test_multi_versor_layer_matches_weighted_small_oracle_rotor_sum(n, data):
         layer.grade_weights.copy_(grade_weights)
         layer.weights.copy_(mix_weights)
 
-    rotors = even_layout.full(algebra.exp(-0.5 * grade_weights, input_layout=bivector_layout, output_layout=even_layout))
+    rotors = even_layout.full(algebra.bivector_exp(-0.5 * grade_weights, input_layout=bivector_layout, output_layout=even_layout))
     rotor_reverses = oracle.reverse(rotors)
     full_values = vector_layout.full(values)
     expected_full = torch.zeros_like(full_values)

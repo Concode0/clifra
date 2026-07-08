@@ -5,7 +5,6 @@ from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
     AlgebraSpec,
-    DualExecutor,
     FullSandwichActionExecutor,
     FullSandwichActionHandle,
     FullTableProductExecutor,
@@ -14,11 +13,12 @@ from tests.planning._grade_plan_helpers import (
     GradeProductExecutor,
     LaneStorage,
     MultiVersorActionHandle,
-    NormSquaredExecutor,
     PairedBivectorActionHandle,
     PlanningLimits,
     ProductExecutionPolicy,
     ProductPlanHandle,
+    PseudoscalarProductExecutor,
+    SignatureNormSquaredExecutor,
     SmallCliffordOracle,
     UnaryPlanHandle,
     VersorActionHandle,
@@ -167,10 +167,10 @@ def test_algebra_plan_product_returns_compact_lane_handle():
     assert torch.allclose(handle(left, right), expected, atol=1e-6, rtol=1e-6)
 
 
-def test_algebra_plan_unary_norm_dual_and_exp_handles_match_public_routes():
+def test_algebra_plan_unary_signature_pseudoscalar_and_bivector_exp_handles_match_public_routes():
     algebra = AlgebraContext(5, 0, device=DEVICE, dtype=torch.float32)
     vector_layout = algebra.layout((1,))
-    dual_layout = algebra.layout((4,))
+    pseudoscalar_layout = algebra.layout((4,))
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2, 4))
     generator = torch.Generator(device=DEVICE).manual_seed(307)
@@ -178,16 +178,28 @@ def test_algebra_plan_unary_norm_dual_and_exp_handles_match_public_routes():
     bivector = torch.randn(3, bivector_layout.dim, dtype=torch.float32, generator=generator) * 0.1
 
     reverse = algebra.plan_unary(op="reverse", input_layout=vector_layout)
-    norm_sq = algebra.plan_norm_sq(input_layout=vector_layout)
-    dual = algebra.plan_dual(input_layout=vector_layout, output_layout=dual_layout)
-    exp = algebra.plan_exp(input_layout=bivector_layout, output_layout=even_layout)
+    signature_norm_squared = algebra.plan_signature_norm_squared(input_layout=vector_layout)
+    pseudoscalar_product = algebra.plan_pseudoscalar_product(
+        input_layout=vector_layout,
+        output_layout=pseudoscalar_layout,
+    )
+    bivector_exp = algebra.plan_bivector_exp(input_layout=bivector_layout, output_layout=even_layout)
 
     assert isinstance(reverse, UnaryPlanHandle)
     assert reverse.output_layout == vector_layout
     assert torch.allclose(reverse(vector), algebra.reverse(vector, input_layout=vector_layout))
-    assert torch.allclose(norm_sq(vector), algebra.norm_sq(vector, input_layout=vector_layout))
-    assert torch.allclose(dual(vector), algebra.dual(vector, input_layout=vector_layout, output_layout=dual_layout))
-    assert torch.allclose(exp(bivector), algebra.exp(bivector, input_layout=bivector_layout, output_layout=even_layout))
+    assert torch.allclose(
+        signature_norm_squared(vector),
+        algebra.signature_norm_squared(vector, input_layout=vector_layout),
+    )
+    assert torch.allclose(
+        pseudoscalar_product(vector),
+        algebra.pseudoscalar_product(vector, input_layout=vector_layout, output_layout=pseudoscalar_layout),
+    )
+    assert torch.allclose(
+        bivector_exp(bivector),
+        algebra.bivector_exp(bivector, input_layout=bivector_layout, output_layout=even_layout),
+    )
 
 
 def test_grade_planner_rebuilds_executor_after_dtype_move():
@@ -369,7 +381,7 @@ def test_context_planned_unary_compact_reverse():
     assert torch.allclose(actual, -values)
 
 
-def test_planned_norm_sq_matches_small_oracle_for_full_and_compact_layouts():
+def test_planned_signature_norm_squared_matches_small_oracle_for_full_and_compact_layouts():
     context = AlgebraContext(3, 1, 1, device=DEVICE, dtype=torch.float64)
     oracle = _oracle_for(context)
     bivector_layout = context.layout((2,))
@@ -377,30 +389,30 @@ def test_planned_norm_sq_matches_small_oracle_for_full_and_compact_layouts():
     full = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
     compact = torch.randn(3, bivector_layout.dim, dtype=torch.float64, generator=generator)
 
-    full_executor = context.planner.norm_sq_executor_for_layout(
+    full_executor = context.planner.signature_norm_squared_executor_for_layout(
         input_layout=context.layout(),
         dtype=torch.float64,
         device=DEVICE,
     )
-    compact_executor = context.planner.norm_sq_executor_for_layout(
+    compact_executor = context.planner.signature_norm_squared_executor_for_layout(
         input_layout=bivector_layout,
         dtype=torch.float64,
         device=DEVICE,
     )
 
-    assert isinstance(full_executor, NormSquaredExecutor)
+    assert isinstance(full_executor, SignatureNormSquaredExecutor)
     assert full_executor.executor_family == "metric_diagonal"
     assert compact_executor.input_layout == bivector_layout
-    assert torch.allclose(context.norm_sq(full), oracle.norm_sq(full), atol=1e-12, rtol=1e-12)
+    assert torch.allclose(context.signature_norm_squared(full), oracle.signature_norm_squared(full), atol=1e-12, rtol=1e-12)
     assert torch.allclose(
-        context.norm_sq(compact, input_layout=bivector_layout),
-        oracle.norm_sq(compact, bivector_layout.basis_indices),
+        context.signature_norm_squared(compact, input_layout=bivector_layout),
+        oracle.signature_norm_squared(compact, bivector_layout.basis_indices),
         atol=1e-12,
         rtol=1e-12,
     )
 
 
-def test_planned_dual_matches_small_oracle_for_full_and_compact_layouts():
+def test_planned_pseudoscalar_product_matches_small_oracle_for_full_and_compact_layouts():
     context = AlgebraContext(3, 1, 0, device=DEVICE, dtype=torch.float64)
     oracle = _oracle_for(context)
     vector_layout = context.layout((1,))
@@ -409,28 +421,28 @@ def test_planned_dual_matches_small_oracle_for_full_and_compact_layouts():
     full = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
     compact = torch.randn(3, vector_layout.dim, dtype=torch.float64, generator=generator)
 
-    full_executor = context.planner.dual_executor_for_layout(
+    full_executor = context.planner.pseudoscalar_product_executor_for_layout(
         input_layout=context.layout(),
         dtype=torch.float64,
         device=DEVICE,
     )
-    compact_executor = context.planner.dual_executor_for_layout(
+    compact_executor = context.planner.pseudoscalar_product_executor_for_layout(
         input_layout=vector_layout,
         output_layout=trivector_layout,
         dtype=torch.float64,
         device=DEVICE,
     )
-    compact_actual, compact_layout = context.dual(compact, input_layout=vector_layout, return_layout=True)
-    compact_expected = oracle.dual(
+    compact_actual, compact_layout = context.pseudoscalar_product(compact, input_layout=vector_layout, return_layout=True)
+    compact_expected = oracle.pseudoscalar_product(
         compact,
         input_indices=vector_layout.basis_indices,
         output_indices=trivector_layout.basis_indices,
     )
 
-    assert isinstance(full_executor, DualExecutor)
+    assert isinstance(full_executor, PseudoscalarProductExecutor)
     assert full_executor.executor_family == "unary_permutation"
     assert compact_executor.output_layout == trivector_layout
-    assert torch.allclose(context.dual(full), oracle.dual(full), atol=1e-12, rtol=1e-12)
+    assert torch.allclose(context.pseudoscalar_product(full), oracle.pseudoscalar_product(full), atol=1e-12, rtol=1e-12)
     assert compact_layout == trivector_layout
     assert torch.allclose(compact_actual, compact_expected, atol=1e-12, rtol=1e-12)
 
@@ -698,9 +710,9 @@ def test_compact_binary_products_do_not_unwrap_full_tensors():
     results = [
         (algebra.geometric_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (1, 3)),
         (algebra.wedge(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (3,)),
-        (algebra.inner_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (3,)),
-        (algebra.commutator(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (1,)),
-        (algebra.anti_commutator(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (3,)),
+        (algebra.symmetric_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (3,)),
+        (algebra.commutator_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (1,)),
+        (algebra.anti_commutator_product(bivector, vector, left_layout=bivector_layout, right_layout=vector_layout), (3,)),
     ]
 
     for values, expected_grades in results:

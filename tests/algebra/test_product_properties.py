@@ -8,6 +8,7 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
+from clifra.core.legacy import product_method_entry
 from clifra.core.runtime.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
     PROPERTY_SETTINGS,
@@ -20,19 +21,8 @@ from tests.helpers.small_oracle import SmallCliffordOracle
 
 pytestmark = pytest.mark.unit
 
-PRODUCT_METHODS = {
-    "gp": "geometric_product",
-    "wedge": "wedge",
-    "inner": "inner_product",
-    "commutator": "commutator",
-    "anti_commutator": "anti_commutator",
-    "left_contraction": "left_contraction",
-    "right_contraction": "right_contraction",
-}
-
-
 def _product(algebra: AlgebraContext, op: str, left: torch.Tensor, right: torch.Tensor, **kwargs) -> torch.Tensor:
-    return getattr(algebra, PRODUCT_METHODS[op])(left, right, **kwargs)
+    return getattr(algebra, product_method_entry(op)[1])(left, right, **kwargs)
 
 
 @PROPERTY_SETTINGS

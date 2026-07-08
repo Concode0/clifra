@@ -295,8 +295,8 @@ def test_bivector_exp_policy_knobs_connect_through_algebra_context():
     algebra = make_algebra(10, 0, 2, device=DEVICE, dtype=torch.float64, bivector_exp_execution_policy=policy)
     bivector_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2))
-    conservative = algebra.plan_exp(input_layout=bivector_layout, output_layout=output_layout)
-    override = algebra.plan_exp(
+    conservative = algebra.plan_bivector_exp(input_layout=bivector_layout, output_layout=output_layout)
+    override = algebra.plan_bivector_exp(
         input_layout=bivector_layout,
         output_layout=output_layout,
         spectral_allow_truncated_degenerate=True,
@@ -335,7 +335,7 @@ def test_bivector_exp_spectral_local_plans_high_dimension_without_full_even_oper
     bivector_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2))
 
-    executor = algebra.plan_exp(
+    executor = algebra.plan_bivector_exp(
         input_layout=bivector_layout,
         output_layout=output_layout,
         dtype=torch.float32,
@@ -355,7 +355,7 @@ def test_mps_high_dim_bivector_exp_plans_spectral_local_family():
     algebra = AlgebraContext(6, 0, device="mps", dtype=torch.float32)
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4, 6))
-    executor = algebra.plan_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps")
+    executor = algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps")
 
     assert executor.executor_family == "spectral_local"
     assert executor.left_product is None
@@ -366,7 +366,7 @@ def test_mps_mixed_bivector_exp_plans_cpu_matrix_exp_family():
     algebra = AlgebraContext(3, 3, device="mps", dtype=torch.float32)
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4, 6))
-    executor = algebra.plan_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps")
+    executor = algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps")
 
     assert executor.executor_family == "cpu_matrix_exp"
     assert executor.left_product is not None
@@ -420,9 +420,9 @@ def test_planned_bivector_exp_public_call_compiles_fullgraph_after_cache_warm():
     ) * 0.1
 
     def exp_public(x):
-        return algebra.exp(x, input_layout=input_layout, output_layout=output_layout)
+        return algebra.bivector_exp(x, input_layout=input_layout, output_layout=output_layout)
 
-    algebra.plan_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device=DEVICE)
+    algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device=DEVICE)
     expected = bivector_exp_cpu_reference(
         algebra,
         values,

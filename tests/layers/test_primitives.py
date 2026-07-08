@@ -21,7 +21,7 @@ pytestmark = pytest.mark.unit
 
 def _planned_grade2_full_factors(algebra, weights: torch.Tensor, parameter_layout):
     rotor_layout = algebra.layout(range(0, algebra.n + 1, 2))
-    exp = algebra.plan_exp(input_layout=parameter_layout, output_layout=rotor_layout)
+    exp = algebra.plan_bivector_exp(input_layout=parameter_layout, output_layout=rotor_layout)
     reverse = algebra.plan_unary(op="reverse", input_layout=rotor_layout, output_layout=rotor_layout)
     rotor = exp(-0.5 * weights)
     return rotor_layout.full(rotor), rotor_layout.full(reverse(rotor))
@@ -282,7 +282,7 @@ class TestLayers:
         indices = layer.grade_indices.unsqueeze(0).expand(layer.channels, -1)
         B.scatter_(1, indices, layer.grade_weights)
 
-        R = algebra_3d.exp(-0.5 * B)
+        R = algebra_3d.bivector_exp(-0.5 * B)
         R_rev = algebra_3d.reverse(R)
 
         # R * ~R should be identity
@@ -345,8 +345,8 @@ class TestLayers:
         layer = ReflectionLayer(algebra_3d, channels=C)
         x = torch.randn(2, C, 8)
         y = layer(x)
-        x_norms = algebra_3d.norm_sq(x.reshape(-1, 8))
-        y_norms = algebra_3d.norm_sq(y.reshape(-1, 8))
+        x_norms = algebra_3d.signature_norm_squared(x.reshape(-1, 8))
+        y_norms = algebra_3d.signature_norm_squared(y.reshape(-1, 8))
         assert torch.allclose(x_norms, y_norms, atol=1e-4)
 
     def test_reflection_gradient_flow(self, algebra_3d):

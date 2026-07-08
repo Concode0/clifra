@@ -74,28 +74,28 @@ def test_grade_projection_matches_small_oracle(case, data):
 
 @PROPERTY_SETTINGS
 @given(case=compact_multivector_cases())
-def test_norm_squared_matches_small_oracle_for_declared_layouts(case):
+def test_signature_norm_squared_matches_small_oracle_for_declared_layouts(case):
     signature, grades, values = case
     algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
     oracle = SmallCliffordOracle(*signature)
     layout = algebra.layout(grades)
 
-    actual = algebra.norm_sq(values, input_layout=layout)
-    expected = oracle.norm_sq(values, layout.basis_indices)
+    actual = algebra.signature_norm_squared(values, input_layout=layout)
+    expected = oracle.signature_norm_squared(values, layout.basis_indices)
 
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
 @PROPERTY_SETTINGS
 @given(case=compact_multivector_cases())
-def test_dual_matches_small_oracle_for_declared_layouts(case):
+def test_pseudoscalar_product_matches_small_oracle_for_declared_layouts(case):
     signature, grades, values = case
     algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
     oracle = SmallCliffordOracle(*signature)
     input_layout = algebra.layout(grades)
 
-    actual, output_layout = algebra.dual(values, input_layout=input_layout, return_layout=True)
-    expected = oracle.dual(
+    actual, output_layout = algebra.pseudoscalar_product(values, input_layout=input_layout, return_layout=True)
+    expected = oracle.pseudoscalar_product(
         values,
         input_indices=input_layout.basis_indices,
         output_indices=output_layout.basis_indices,

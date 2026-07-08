@@ -37,9 +37,9 @@ COEFFICIENTS = st.floats(
 PRODUCT_OPS = (
     "gp",
     "wedge",
-    "inner",
-    "commutator",
-    "anti_commutator",
+    "symmetric_product",
+    "commutator_product",
+    "anti_commutator_product",
     "left_contraction",
     "right_contraction",
 )

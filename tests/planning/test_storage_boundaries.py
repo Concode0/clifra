@@ -59,3 +59,49 @@ def test_planned_unary_accepts_string_storage_for_canonical_output():
 
     assert actual.shape == (3, algebra.dim)
     assert torch.allclose(actual, expected)
+
+
+def test_pseudoscalar_product_accepts_output_storage_and_materializes_canonical_output():
+    algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float64)
+    vector_layout = algebra.layout((1,))
+    values = torch.randn(4, vector_layout.dim, dtype=torch.float64)
+
+    compact, output_layout = algebra.pseudoscalar_product(
+        values,
+        input_layout=vector_layout,
+        output_storage=LaneStorage.COMPACT,
+        return_layout=True,
+    )
+    actual, actual_layout = algebra.pseudoscalar_product(
+        values,
+        input_layout=vector_layout,
+        output_storage="canonical",
+        return_layout=True,
+    )
+
+    assert actual_layout == output_layout
+    assert actual.shape == (4, algebra.dim)
+    assert torch.allclose(actual, output_layout.full(compact))
+
+
+def test_bivector_exp_accepts_output_storage_and_materializes_canonical_output():
+    algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float64)
+    bivector_layout = algebra.layout((2,))
+    values = torch.randn(2, bivector_layout.dim, dtype=torch.float64) * 0.1
+
+    compact, output_layout = algebra.bivector_exp(
+        values,
+        input_layout=bivector_layout,
+        output_storage=LaneStorage.COMPACT,
+        return_layout=True,
+    )
+    actual, actual_layout = algebra.bivector_exp(
+        values,
+        input_layout=bivector_layout,
+        output_storage="canonical",
+        return_layout=True,
+    )
+
+    assert actual_layout == output_layout
+    assert actual.shape == (2, algebra.dim)
+    assert torch.allclose(actual, output_layout.full(compact), atol=1e-12, rtol=1e-12)

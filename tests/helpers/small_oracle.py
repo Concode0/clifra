@@ -73,7 +73,7 @@ class SmallCliffordOracle:
             output[..., index] = values[..., index]
         return output
 
-    def norm_sq(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
+    def signature_norm_squared(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
         basis = self.full_indices if indices is None else tuple(int(index) for index in indices)
         signs = [
             reverse_sign(index) * operation_coefficient(index, index, self.p, self.q, self.r, "gp")
@@ -81,6 +81,9 @@ class SmallCliffordOracle:
         ]
         sign_tensor = torch.tensor(signs, dtype=values.dtype, device=values.device)
         return (values * values * sign_tensor).sum(dim=-1, keepdim=True)
+
+    def norm_sq(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
+        return self.signature_norm_squared(values, indices)
 
     def reverse(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
         basis = self.full_indices if indices is None else tuple(int(index) for index in indices)
@@ -134,7 +137,7 @@ class SmallCliffordOracle:
         basis = self.full_indices if indices is None else tuple(int(index) for index in indices)
         return self.scalar_product(self.reverse(left, basis), right, left_indices=basis, right_indices=basis)
 
-    def dual(
+    def pseudoscalar_product(
         self,
         values: torch.Tensor,
         *,
@@ -153,8 +156,21 @@ class SmallCliffordOracle:
             output[..., output_position] = values[..., source_position] * coefficient
         return output
 
+    def dual(
+        self,
+        values: torch.Tensor,
+        *,
+        input_indices: Iterable[int] | None = None,
+        output_indices: Iterable[int] | None = None,
+    ) -> torch.Tensor:
+        return self.pseudoscalar_product(
+            values,
+            input_indices=input_indices,
+            output_indices=output_indices,
+        )
+
     def blade_inverse(self, values: torch.Tensor, indices: Iterable[int] | None = None) -> torch.Tensor:
-        denominator = _signed_clamp_min(self.norm_sq(values, indices), torch.finfo(values.dtype).eps**2)
+        denominator = _signed_clamp_min(self.signature_norm_squared(values, indices), torch.finfo(values.dtype).eps**2)
         return self.reverse(values, indices) / denominator
 
 

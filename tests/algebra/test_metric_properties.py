@@ -139,9 +139,9 @@ def test_signed_magnitudes_are_absolute_forms_not_lane_norms():
     values = torch.zeros(1, algebra.dim, dtype=torch.float64)
     values[0, 1] = 2.0
 
-    expected_norm_sq = oracle.signature_trace_form(values, values)
+    expected_signature_norm_squared = oracle.signature_trace_form(values, values)
 
-    assert torch.allclose(signature_norm_squared(algebra, values), expected_norm_sq)
-    assert torch.allclose(signature_magnitude(algebra, values), torch.sqrt(expected_norm_sq.abs()))
-    assert torch.allclose(conjugate_form_magnitude(algebra, values), torch.sqrt(expected_norm_sq.abs()))
+    assert torch.allclose(signature_norm_squared(algebra, values), expected_signature_norm_squared)
+    assert torch.allclose(signature_magnitude(algebra, values), torch.sqrt(expected_signature_norm_squared.abs()))
+    assert torch.allclose(conjugate_form_magnitude(algebra, values), torch.sqrt(expected_signature_norm_squared.abs()))
     assert torch.allclose(conjugate_form_distance_like(algebra, values, values), torch.zeros(1, 1, dtype=torch.float64))

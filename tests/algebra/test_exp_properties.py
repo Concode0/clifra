@@ -55,7 +55,7 @@ def test_bivector_exp_matches_cpu_oracle_for_even_output_layouts(case):
     signature, input_layout, output_layout, values = case
     algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
 
-    actual = algebra.exp(values, input_layout=input_layout, output_layout=output_layout)
+    actual = algebra.bivector_exp(values, input_layout=input_layout, output_layout=output_layout)
     expected = bivector_exp_cpu_reference(
         algebra,
         values,
@@ -75,7 +75,7 @@ def test_euclidean_bivector_exp_is_unit_rotor_by_small_oracle(case):
     oracle = SmallCliffordOracle(p, q, r)
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
 
-    rotor = algebra.exp(values, input_layout=input_layout, output_layout=even_layout)
+    rotor = algebra.bivector_exp(values, input_layout=input_layout, output_layout=even_layout)
     rotor_reverse = oracle.reverse(rotor, even_layout.basis_indices)
     product = oracle.product(
         rotor,

@@ -236,7 +236,7 @@ def test_convergence_synthetic_rotation_sgd(algebra_3d):
     # Ground truth: rotation in e12 plane (index 3 is e12 bivector)
     B_true = torch.zeros(1, 1, algebra_3d.dim)
     B_true[0, 0, 3] = 0.5  # Small rotation in e12 plane
-    R_true = algebra_3d.exp(-0.5 * B_true)
+    R_true = algebra_3d.bivector_exp(-0.5 * B_true)
 
     # Generate data: y = R_true . x . ~R_true
     x = torch.randn(100, 1, 8)
@@ -268,7 +268,7 @@ def test_convergence_synthetic_rotation_adam(algebra_3d):
     # Ground truth: rotation in e12 plane (index 3 is e12 bivector)
     B_true = torch.zeros(1, 1, algebra_3d.dim)
     B_true[0, 0, 3] = 0.5  # Small rotation in e12 plane
-    R_true = algebra_3d.exp(-0.5 * B_true)
+    R_true = algebra_3d.bivector_exp(-0.5 * B_true)
 
     # Generate data
     x = torch.randn(100, 1, 8)
@@ -301,7 +301,7 @@ def test_compare_sgd_convergence(algebra_3d):
     x = torch.randn(50, 4, 8)
     # Generate target by applying a random rotor transformation
     B_target = torch.randn(1, 1, algebra_3d.dim) * 0.1
-    R_target = algebra_3d.exp(-0.5 * B_target)
+    R_target = algebra_3d.bivector_exp(-0.5 * B_target)
     R_target_rev = algebra_3d.reverse(R_target)
     y_target = algebra_3d.geometric_product(algebra_3d.geometric_product(R_target, x), R_target_rev)
 
@@ -362,7 +362,7 @@ def test_rotor_manifold_membership_after_optimization(algebra_3d):
     grade_indices = layer.grade_indices.unsqueeze(0).expand(layer.channels, -1)
     B_full.scatter_(1, grade_indices, layer.grade_weights)
 
-    R = algebra_3d.exp(-0.5 * B_full)
+    R = algebra_3d.bivector_exp(-0.5 * B_full)
     R_rev = algebra_3d.reverse(R)
     RR_rev = algebra_3d.geometric_product(R, R_rev)
 
@@ -671,7 +671,7 @@ def test_sphere_retraction_uses_signature_norm_for_mixed_signature(optimizer_cls
 
     optimizer.step()
 
-    metric_norm = algebra.norm_sq(vector, input_layout=vector_layout).abs()
+    metric_norm = algebra.signature_norm_squared(vector, input_layout=vector_layout).abs()
     euclidean_norm = vector.norm(dim=-1, keepdim=True)
     assert torch.allclose(metric_norm, torch.ones_like(metric_norm), atol=1e-6)
     assert not torch.allclose(euclidean_norm, torch.ones_like(euclidean_norm), atol=1e-4)

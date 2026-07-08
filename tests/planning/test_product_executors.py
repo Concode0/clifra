@@ -5,7 +5,6 @@ from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
     AlgebraSpec,
-    DualExecutor,
     FullSandwichActionExecutor,
     FullSandwichActionHandle,
     FullTableProductExecutor,
@@ -14,11 +13,12 @@ from tests.planning._grade_plan_helpers import (
     GradeProductExecutor,
     LaneStorage,
     MultiVersorActionHandle,
-    NormSquaredExecutor,
     PairedBivectorActionHandle,
     PlanningLimits,
     ProductExecutionPolicy,
     ProductPlanHandle,
+    PseudoscalarProductExecutor,
+    SignatureNormSquaredExecutor,
     SmallCliffordOracle,
     UnaryPlanHandle,
     VersorActionHandle,
@@ -52,7 +52,15 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize(
     "op",
-    ["gp", "wedge", "inner", "commutator", "anti_commutator", "left_contraction", "right_contraction"],
+    [
+        "gp",
+        "wedge",
+        "symmetric_product",
+        "commutator_product",
+        "anti_commutator_product",
+        "left_contraction",
+        "right_contraction",
+    ],
 )
 def test_static_grade_product_matches_small_oracle_for_selected_grade_paths(op):
     algebra = SmallCliffordOracle(4, 1, 1)
@@ -195,7 +203,7 @@ def test_product_executor_pairwise_uses_factorized_smaller_lane_contraction():
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
-@pytest.mark.parametrize("op", ["gp", "wedge", "inner", "commutator", "anti_commutator"])
+@pytest.mark.parametrize("op", ["gp", "wedge", "symmetric_product", "commutator_product", "anti_commutator_product"])
 def test_planner_full_table_executor_matches_small_oracle_full_layout_product(op):
     context = AlgebraContext(4, 1, 0, device=DEVICE, dtype=torch.float64)
     oracle = _oracle_for(context)

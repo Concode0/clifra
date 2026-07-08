@@ -18,8 +18,8 @@ from clifra.core.execution.handles import (
     UnaryPlanHandle,
     VersorActionHandle,
 )
-from clifra.core.execution.metric import NormSquaredExecutor
-from clifra.core.execution.permutation import DualExecutor
+from clifra.core.execution.metric import SignatureNormSquaredExecutor
+from clifra.core.execution.permutation import PseudoscalarProductExecutor
 from clifra.core.execution.product import FullTableProductExecutor, GradeProductExecutor
 from clifra.core.foundation.basis import (
     basis_count_for_grades,
@@ -31,6 +31,7 @@ from clifra.core.foundation.basis import (
     product_output_grades,
 )
 from clifra.core.foundation.layout import AlgebraSpec
+from clifra.core.legacy import product_method_entry
 from clifra.core.planning.flow import GradeFlow
 from clifra.core.planning.layouts import build_product_request
 from clifra.core.planning.planner import GradePlanner
@@ -92,4 +93,4 @@ def _sparse_pairwise_product_reference(
 
 
 def _product_method_name(op: str) -> str:
-    return {"gp": "geometric_product", "inner": "inner_product"}.get(op, op)
+    return product_method_entry(op)[1]
