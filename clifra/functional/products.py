@@ -23,9 +23,9 @@ _PRODUCT_METHODS = {
     "gp": ("gp", "geometric_product"),
     "geometric_product": ("gp", "geometric_product"),
     "wedge": ("wedge", "wedge"),
-    "symmetric_product": ("inner", "symmetric_product"),
-    "commutator_product": ("commutator", "commutator_product"),
-    "anti_commutator_product": ("anti_commutator", "anti_commutator_product"),
+    "symmetric_product": ("symmetric_product", "symmetric_product"),
+    "commutator_product": ("commutator_product", "commutator_product"),
+    "anti_commutator_product": ("anti_commutator_product", "anti_commutator_product"),
     "left_contraction": ("left_contraction", "left_contraction"),
     "right_contraction": ("right_contraction", "right_contraction"),
 }
@@ -96,17 +96,17 @@ def wedge(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> to
 
 
 def symmetric_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply the parity-selected symmetric product route to full or declared compact lanes."""
+    """Apply the normalized anti-commutator ``(A B + B A) / 2``."""
     return product(algebra, left, right, op="symmetric_product", **kwargs)
 
 
 def commutator_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply the unnormalized commutator product to full or declared compact lanes."""
+    """Apply the commutator ``A B - B A``."""
     return product(algebra, left, right, op="commutator_product", **kwargs)
 
 
 def anti_commutator_product(algebra, left: torch.Tensor, right: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-    """Apply the unnormalized anti-commutator product to full or declared compact lanes."""
+    """Apply the unnormalized anti-commutator ``A B + B A``."""
     return product(algebra, left, right, op="anti_commutator_product", **kwargs)
 
 

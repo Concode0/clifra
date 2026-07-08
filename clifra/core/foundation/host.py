@@ -501,15 +501,15 @@ class AlgebraHostMixin:
         return self.projected_product(A, B, op="wedge", **kwargs)
 
     def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Apply the parity-selected symmetric product route."""
+        """Apply the normalized anti-commutator ``(A B + B A) / 2``."""
         return self.projected_product(A, B, op="symmetric_product", **kwargs)
 
     def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Apply the unnormalized commutator product."""
+        """Apply the commutator ``A B - B A``."""
         return self.projected_product(A, B, op="commutator_product", **kwargs)
 
     def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
-        """Apply the unnormalized anti-commutator product."""
+        """Apply the unnormalized anti-commutator ``A B + B A``."""
         return self.projected_product(A, B, op="anti_commutator_product", **kwargs)
 
     def projected_left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs):
@@ -635,7 +635,7 @@ class AlgebraHostMixin:
             input_layout=input_layout,
             output_layout=output_layout,
         )
-        active_values = self._compact_values_for_layout(values, input_layout, "exp values")
+        active_values = self._compact_values_for_layout(values, input_layout, "bivector_exp values")
         executor = self.planner.bivector_exp_executor_for_layouts(
             input_layout=input_layout,
             output_layout=output_layout,
@@ -700,21 +700,21 @@ class AlgebraHostMixin:
         output_layout = self._optional_layout(output_grades, output_layout) or input_layout
         active_values = self._compact_values_for_layout(values, input_layout, "blade_project values")
         active_blade = self._compact_values_for_layout(blade, blade_layout, "blade_project blade")
-        inner_layout = self.layout(
+        symmetric_layout = self.layout(
             expand_output_grades(input_layout.grades, blade_layout.grades, self.n, op="symmetric_product")
         )
-        inner = self.symmetric_product(
+        symmetric_component = self.symmetric_product(
             active_values,
             active_blade,
             left_layout=input_layout,
             right_layout=blade_layout,
-            output_layout=inner_layout,
+            output_layout=symmetric_layout,
         )
         blade_inv = self.blade_inverse(active_blade, input_layout=blade_layout)
         output = self.geometric_product(
-            inner,
+            symmetric_component,
             blade_inv,
-            left_layout=inner_layout,
+            left_layout=symmetric_layout,
             right_layout=blade_layout,
             output_layout=output_layout,
         )

@@ -18,11 +18,11 @@ from clifra.core.foundation.layout import GradeLayout
 from clifra.core.foundation.module import AlgebraLike
 from clifra.core.runtime.energy import (
     lane_distance,
+    lane_dot_product,
     lane_energy,
     lane_grade_distribution,
     lane_grade_energy,
     lane_grade_norms,
-    lane_inner_product,
     lane_norm,
 )
 from clifra.core.runtime.forms import (
@@ -50,7 +50,7 @@ def scalar_product(
     """Return the Clifford scalar product ``<A B>_0``.
 
     This is an algebraic projection, not the positive-definite optimizer
-    geometry. Use ``lane_inner_product`` for Euclidean coefficient geometry.
+    geometry. Use ``lane_dot_product`` for Euclidean coefficient geometry.
     """
     return algebra.projected_geometric_product(
         A,
@@ -116,7 +116,7 @@ __all__ = [
     "grade_purity",
     "mean_grade",
     "clifford_conjugate",
-    "lane_inner_product",
+    "lane_dot_product",
     "lane_energy",
     "lane_norm",
     "lane_distance",

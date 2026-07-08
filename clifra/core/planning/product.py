@@ -480,10 +480,10 @@ def _operation_coefficients(
         valid = valid & (left_grade <= right_grade) & (output_grade == right_grade - left_grade)
     elif op == "right_contraction":
         valid = valid & (left_grade >= right_grade) & (output_grade == left_grade - right_grade)
-    elif op in {"inner", "commutator", "anti_commutator"}:
+    elif op in {"symmetric_product", "commutator_product", "anti_commutator_product"}:
         overlap_grade = _bit_count_tensor(overlap, n)
         parity_odd = ((int(left_grade) * int(right_grade) - overlap_grade) & 1).to(torch.bool)
-        if op == "commutator":
+        if op == "commutator_product":
             valid = valid & parity_odd
         else:
             valid = valid & ~parity_odd
@@ -499,7 +499,7 @@ def _operation_coefficients(
         metric_parity = _parity_tensor(torch.bitwise_and(overlap, negative_mask), n)
         swap_parity = swap_parity ^ metric_parity
 
-    factor = 2.0 if op in {"commutator", "anti_commutator"} else 1.0
+    factor = 2.0 if op in {"commutator_product", "anti_commutator_product"} else 1.0
     coefficients = torch.where(
         swap_parity,
         torch.full((), -factor, dtype=dtype),

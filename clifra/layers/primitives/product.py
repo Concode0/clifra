@@ -133,21 +133,21 @@ class WedgeLayer(ProductLayer):
 
 
 class SymmetricProductLayer(ProductLayer):
-    """Layer form of the parity-selected symmetric product route."""
+    """Layer form of the normalized anti-commutator ``(A B + B A) / 2``."""
 
     def __init__(self, algebra, **kwargs):
         super().__init__(algebra, op="symmetric_product", **kwargs)
 
 
 class CommutatorProductLayer(ProductLayer):
-    """Layer form of the commutator product."""
+    """Layer form of the commutator ``A B - B A``."""
 
     def __init__(self, algebra, **kwargs):
         super().__init__(algebra, op="commutator_product", **kwargs)
 
 
 class AntiCommutatorProductLayer(ProductLayer):
-    """Layer form of the anti-commutator product."""
+    """Layer form of the unnormalized anti-commutator ``A B + B A``."""
 
     def __init__(self, algebra, **kwargs):
         super().__init__(algebra, op="anti_commutator_product", **kwargs)

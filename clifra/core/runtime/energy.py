@@ -13,8 +13,8 @@ from clifra.core.foundation.layout import GradeLayout
 from clifra.core.runtime.tensors import compact_pair_values, compact_values
 
 
-def lane_inner_product(algebra, A: torch.Tensor, B: torch.Tensor, *, layout: Optional[GradeLayout] = None, grades=None) -> torch.Tensor:
-    """Return the positive-definite coefficient inner product over compact lanes."""
+def lane_dot_product(algebra, A: torch.Tensor, B: torch.Tensor, *, layout: Optional[GradeLayout] = None, grades=None) -> torch.Tensor:
+    """Return the positive-definite coefficient dot product over compact lanes."""
     A_values, B_values, _ = compact_pair_values(algebra, A, B, layout=layout, grades=grades)
     return (A_values * B_values).sum(dim=-1, keepdim=True)
 

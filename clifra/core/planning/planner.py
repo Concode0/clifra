@@ -463,7 +463,7 @@ class GradePlanner:
         spectral_allow_degenerate: bool | None = None,
         spectral_allow_truncated_degenerate: bool | None = None,
     ) -> BivectorExpExecutor:
-        """Return a cached executor for ``exp(B)`` with grade-2 input."""
+        """Return a cached executor for the bivector exponential ``exp(B)``."""
         if input_layout.spec != self.spec:
             raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {self.spec}")
         if output_layout.spec != self.spec:

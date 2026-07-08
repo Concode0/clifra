@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bivector exponential executors for static exp plans."""
+"""Bivector exponential executors for static bivector-exponential plans."""
 
 from __future__ import annotations
 
@@ -47,9 +47,9 @@ def _filtered_symmetric_eigh_backward_impl(
     if grad_eigenvectors is None:
         grad_eigenvectors = torch.zeros_like(eigenvectors)
 
-    inner = eigenvectors.transpose(-1, -2) @ grad_eigenvectors
+    eigenvector_overlap = eigenvectors.transpose(-1, -2) @ grad_eigenvectors
     cauchy = _filtered_eigenvalue_cauchy_inverse(eigenvalues, tolerances)
-    tangent = cauchy * inner
+    tangent = cauchy * eigenvector_overlap
     diagonal = torch.diag_embed(grad_eigenvalues)
     spectral_grad = diagonal + 0.5 * (tangent + tangent.transpose(-1, -2))
     grad_matrix = eigenvectors @ spectral_grad @ eigenvectors.transpose(-1, -2)
@@ -1244,7 +1244,7 @@ def _expanded_det4_impl(matrix: Tensor) -> Tensor:
 
 
 class BivectorExpExecutor(nn.Module):
-    """Compile-friendly ``exp(B)`` executor for grade-2 inputs.
+    """Compile-friendly bivector exponential ``exp(B)`` executor for grade-2 inputs.
 
     Dimensions up to five use closed formulas. Eligible high-dimensional
     Euclidean plans use exact matrix exponentials up to the configured

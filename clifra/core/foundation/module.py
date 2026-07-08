@@ -124,15 +124,15 @@ class AlgebraLike(Protocol):
         ...
 
     def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply the parity-selected symmetric product route."""
+        """Apply the normalized anti-commutator ``(A B + B A) / 2``."""
         ...
 
     def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply the unnormalized commutator product."""
+        """Apply the commutator ``A B - B A``."""
         ...
 
     def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Apply the unnormalized anti-commutator product."""
+        """Apply the unnormalized anti-commutator ``A B + B A``."""
         ...
 
     def left_contraction(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:

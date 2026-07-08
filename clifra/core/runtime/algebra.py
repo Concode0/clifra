@@ -118,15 +118,15 @@ class AlgebraContext(AlgebraHostMixin):
         return self.projected_product(A, B, op="wedge", **kwargs)
 
     def symmetric_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute the parity-selected symmetric product route."""
+        """Plan and execute the normalized anti-commutator ``(A B + B A) / 2``."""
         return self.projected_product(A, B, op="symmetric_product", **kwargs)
 
     def commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute the unnormalized commutator product."""
+        """Plan and execute the commutator ``A B - B A``."""
         return self.projected_product(A, B, op="commutator_product", **kwargs)
 
     def anti_commutator_product(self, A: torch.Tensor, B: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Plan and execute the unnormalized anti-commutator product."""
+        """Plan and execute the unnormalized anti-commutator ``A B + B A``."""
         return self.projected_product(A, B, op="anti_commutator_product", **kwargs)
 
     def grade_projection(self, mv: torch.Tensor, grade: int, **kwargs) -> torch.Tensor:

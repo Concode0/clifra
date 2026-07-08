@@ -9,7 +9,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from clifra.core.runtime.algebra import AlgebraContext
-from clifra.core.runtime.energy import lane_distance, lane_energy, lane_inner_product, lane_norm
+from clifra.core.runtime.energy import lane_distance, lane_dot_product, lane_energy, lane_norm
 from clifra.core.runtime.forms import (
     conjugate_form_distance_like,
     conjugate_form_magnitude,
@@ -99,7 +99,7 @@ def test_lane_metrics_are_positive_coefficient_geometry(signature, data):
 
     assert torch.allclose(lane_energy(algebra, left), (left * left).sum(dim=-1, keepdim=True))
     assert torch.allclose(lane_norm(algebra, left), torch.linalg.vector_norm(left, dim=-1, keepdim=True))
-    assert torch.allclose(lane_inner_product(algebra, left, right), (left * right).sum(dim=-1, keepdim=True))
+    assert torch.allclose(lane_dot_product(algebra, left, right), (left * right).sum(dim=-1, keepdim=True))
     assert torch.all(lane_norm(algebra, left) >= 0)
     assert torch.allclose(lane_distance(algebra, left, left), torch.zeros(batch, 1, dtype=torch.float64))
     assert torch.allclose(lane_distance(algebra, left, right), lane_distance(algebra, right, left))

@@ -1024,7 +1024,7 @@ def _build_target(
             module=executor,
             args=(values,),
             metadata={
-                "category": "exp",
+                "category": "bivector_exp",
                 "call_method": "plan_bivector_exp_executor",
                 **_layout_metadata("input", bivector),
                 **_layout_metadata("output", executor.output_layout),

@@ -8,34 +8,23 @@ from __future__ import annotations
 
 from itertools import combinations
 from math import comb
-from typing import Iterable, Literal, Optional
+from typing import Iterable, Literal, Optional, get_args
 
 import torch
 
 GradeProductOp = Literal[
     "gp",
     "wedge",
-    "inner",
-    "commutator",
-    "anti_commutator",
+    "symmetric_product",
+    "commutator_product",
+    "anti_commutator_product",
     "left_contraction",
     "right_contraction",
 ]
 _PUBLIC_GRADE_PRODUCT_OPS = {
     "geometric_product": "gp",
-    "symmetric_product": "inner",
-    "commutator_product": "commutator",
-    "anti_commutator_product": "anti_commutator",
 }
-_INTERNAL_GRADE_PRODUCT_OPS = {
-    "gp",
-    "wedge",
-    "inner",
-    "commutator",
-    "anti_commutator",
-    "left_contraction",
-    "right_contraction",
-}
+_GRADE_PRODUCT_OPS = set(get_args(GradeProductOp))
 
 # NOTE: Torch-backed executors currently store canonical basis blades as signed
 # int64 bitmasks. That makes n=63 the largest supported dimension: the highest
@@ -50,12 +39,12 @@ _TORCH_LONG_MAX = (1 << TORCH_LONG_BASIS_MAX_N) - 1
 def normalize_grade_product_op(op: str) -> GradeProductOp:
     """Return the internal grade-product key for a public product operation name."""
     normalized = str(op).lower()
-    if normalized in _INTERNAL_GRADE_PRODUCT_OPS:
+    if normalized in _GRADE_PRODUCT_OPS:
         return normalized  # type: ignore[return-value]
     try:
         return _PUBLIC_GRADE_PRODUCT_OPS[normalized]  # type: ignore[return-value]
     except KeyError as exc:
-        supported = ", ".join(sorted(_INTERNAL_GRADE_PRODUCT_OPS | set(_PUBLIC_GRADE_PRODUCT_OPS)))
+        supported = ", ".join(sorted(_GRADE_PRODUCT_OPS | set(_PUBLIC_GRADE_PRODUCT_OPS)))
         raise ValueError(f"Unsupported grade product op {op!r}. Supported ops: {supported}") from exc
 
 
@@ -178,14 +167,14 @@ def product_output_grades(
     outputs = geometric_product_output_grades(left_grade, right_grade, n)
     if op == "gp":
         return outputs
-    if op not in {"inner", "commutator", "anti_commutator"}:
+    if op not in {"symmetric_product", "commutator_product", "anti_commutator_product"}:
         raise ValueError(f"Unsupported grade product op {op!r}")
 
     filtered = []
     for output_grade in outputs:
         overlap = (left_grade + right_grade - output_grade) // 2
         parity_odd = ((left_grade * right_grade - overlap) % 2) == 1
-        if op == "commutator":
+        if op == "commutator_product":
             keep = parity_odd
         else:
             keep = not parity_odd
@@ -235,12 +224,12 @@ def operation_coefficient(
         return 0.0
 
     _, sign_ab = basis_product(index_a, index_b, p, q, r)
-    if op in {"gp", "wedge", "inner", "left_contraction", "right_contraction"}:
+    if op in {"gp", "wedge", "symmetric_product", "left_contraction", "right_contraction"}:
         return sign_ab
 
-    if op == "commutator":
+    if op == "commutator_product":
         return 2.0 * sign_ab
-    if op == "anti_commutator":
+    if op == "anti_commutator_product":
         return 2.0 * sign_ab
     raise ValueError(f"Unsupported grade product op {op!r}")
 
@@ -277,9 +266,9 @@ def operation_may_be_nonzero(
         return True
 
     parity_odd = _swap_parity_between_orders(index_a, index_b) == 1
-    if op == "commutator":
+    if op == "commutator_product":
         return parity_odd
-    if op in {"inner", "anti_commutator"}:
+    if op in {"symmetric_product", "anti_commutator_product"}:
         return not parity_odd
     raise ValueError(f"Unsupported grade product op {op!r}")
 

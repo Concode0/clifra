@@ -537,7 +537,7 @@ def build_target(
             module,
             (values,),
             {
-                "category": "exp",
+                "category": "bivector_exp",
                 "executor_family": getattr(module, "executor_family", "unknown"),
                 "pair_count": int(getattr(getattr(module, "left_product", None), "pair_count", 0) or 0),
                 "spectral_local_axis_count": getattr(module, "spectral_local_axis_count", None),
@@ -861,7 +861,7 @@ def operation_skip_details(
         if family in MATRIX_EXP_FAMILIES:
             return {
                 "status": "skipped",
-                "category": "exp",
+                "category": "bivector_exp",
                 "executor_family": family,
                 "exp_preselection_reason": reason,
                 "skip_reason": (

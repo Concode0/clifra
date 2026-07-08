@@ -188,7 +188,7 @@ def build_bivector_exp_plan(
     spectral_allow_degenerate: bool = True,
     spectral_allow_truncated_degenerate: bool = True,
 ) -> BivectorExpPlan:
-    """Build a static plan for ``exp(B)`` where ``B`` is grade-2."""
+    """Build a static plan for the bivector exponential ``exp(B)`` where ``B`` is grade-2."""
     if input_layout.spec != spec:
         raise ValueError(f"input_layout signature {input_layout.spec} does not match algebra signature {spec}")
     if output_layout.spec != spec:
