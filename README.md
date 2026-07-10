@@ -78,8 +78,7 @@ The strict PGA metamaterial example in
 difficult auxetic-to-positive phase target with reversible deformation paths.
 The recorded validation run reached the target loss (`0.001632 < 0.01`) with
 no validation failures, zero folded cells, and extremely small inverse-path
-error (`inverse_rmse=4.10e-16`, `inverse_max_abs=2.00e-15`), producing VTK/GIF
-artifacts under `outputs/metamaterial_design/`.
+error (`inverse_rmse=4.10e-16`, `inverse_max_abs=2.00e-15`)
 
 ## Contribution
 

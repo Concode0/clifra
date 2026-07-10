@@ -649,7 +649,7 @@ def _import_visualization_dependencies():
         import imageio.v2 as imageio
         import numpy as np
         import vtk
-        from vtk.util import numpy_support
+        from vtk.util import numpy_support # type: ignore
     except ImportError as exc:
         raise RuntimeError(
             "visualization requires optional dependencies; install them with `uv sync --group viz`"

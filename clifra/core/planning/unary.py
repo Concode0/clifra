@@ -181,7 +181,7 @@ def normalize_unary_op(op: str) -> GradeUnaryOp:
     normalized = str(op)
     if normalized not in _VALID_UNARY_OPS:
         raise ValueError(f"Unsupported grade unary op {op!r}")
-    return normalized  # type: ignore[return-value]
+    return normalized
 
 
 def resolve_unary_output_layout(

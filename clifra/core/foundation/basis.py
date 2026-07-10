@@ -40,9 +40,9 @@ def normalize_grade_product_op(op: str) -> GradeProductOp:
     """Return the internal grade-product key for a public product operation name."""
     normalized = str(op).lower()
     if normalized in _GRADE_PRODUCT_OPS:
-        return normalized  # type: ignore[return-value]
+        return normalized
     try:
-        return _PUBLIC_GRADE_PRODUCT_OPS[normalized]  # type: ignore[return-value]
+        return _PUBLIC_GRADE_PRODUCT_OPS[normalized]
     except KeyError as exc:
         supported = ", ".join(sorted(_GRADE_PRODUCT_OPS | set(_PUBLIC_GRADE_PRODUCT_OPS)))
         raise ValueError(f"Unsupported grade product op {op!r}. Supported ops: {supported}") from exc
