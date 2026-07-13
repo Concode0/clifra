@@ -10,7 +10,7 @@ from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.runtime.tensors import resolve_layout
 
-from ._layout import basis_positions
+from ._layout import basis_positions, basis_vector_indices
 
 
 class ConformalEmbedding(CliffordModule):
@@ -59,9 +59,12 @@ class ConformalEmbedding(CliffordModule):
         self.scalar_layout = algebra.layout((0,))
         self.lane_dim = self.layout.dim
 
-        idx_ep = 1 << d
-        idx_em = 1 << (d + 1)
-        g1_basis = [1 << bit for bit in range(d)]
+        idx_ep, idx_em = basis_vector_indices(
+            algebra,
+            (d, d + 1),
+            name="ConformalEmbedding null basis",
+        )
+        g1_basis = basis_vector_indices(algebra, range(d), name="ConformalEmbedding")
         self.register_buffer("_g1_idx", basis_positions(self.layout, g1_basis, name="ConformalEmbedding"))
 
         ep_pos, em_pos = basis_positions(self.layout, (idx_ep, idx_em), name="ConformalEmbedding").tolist()
@@ -115,7 +118,7 @@ class ConformalEmbedding(CliffordModule):
             right_layout=self.layout,
             output_layout=self.scalar_layout,
         )
-        scale = signed_clamp_min(-P_einf[..., 0:1], self.algebra.eps)
+        scale = signed_clamp_min(-P_einf, self.algebra.eps)
         P_norm = P / scale
 
         return torch.gather(P_norm, -1, self._g1_idx.expand(*P.shape[:-1], d))

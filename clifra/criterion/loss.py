@@ -69,7 +69,7 @@ class IsometryLoss(CliffordModule):
         """Return metric signs for canonical basis lanes."""
         basis = torch.eye(self.algebra.dim, device=self.algebra.device, dtype=self.algebra.dtype)
         sq = self.algebra.geometric_product(basis, basis)
-        return sq[:, 0]
+        return self.algebra.layout((0,)).compact(sq).squeeze(-1)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Compare metric norms."""

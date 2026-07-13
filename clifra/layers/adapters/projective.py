@@ -10,7 +10,7 @@ from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import signed_clamp_min
 from clifra.core.runtime.tensors import resolve_layout
 
-from ._layout import basis_positions
+from ._layout import basis_position, basis_positions, basis_vector_indices
 
 
 class ProjectiveEmbedding(CliffordModule):
@@ -62,11 +62,15 @@ class ProjectiveEmbedding(CliffordModule):
         self.layout = resolve_layout(algebra, layout=layout, grades=grades)
         self.lane_dim = self.layout.dim
 
-        g1_basis = [1 << bit for bit in range(d)]
+        g1_basis = basis_vector_indices(algebra, range(d), name="ProjectiveEmbedding")
         self.register_buffer("_g1_idx", basis_positions(self.layout, g1_basis, name="ProjectiveEmbedding"))
 
-        idx_e0 = 1 << (algebra.p + algebra.q)
-        e0_pos = basis_positions(self.layout, (idx_e0,), name="ProjectiveEmbedding")[0]
+        (idx_e0,) = basis_vector_indices(
+            algebra,
+            (algebra.p + algebra.q,),
+            name="ProjectiveEmbedding null basis",
+        )
+        e0_pos = basis_position(self.layout, idx_e0, name="ProjectiveEmbedding")
         self.register_buffer("_idx_e0", e0_pos.clone().detach())
 
         e0 = torch.zeros(self.lane_dim, dtype=algebra.dtype)

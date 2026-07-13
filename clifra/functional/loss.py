@@ -75,8 +75,8 @@ def chamfer_distance(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """
     diff = pred.unsqueeze(2) - target.unsqueeze(1)
     dist_sq = (diff**2).sum(dim=-1)
-    min_dist_pred = dist_sq.min(dim=2)[0].mean(dim=1)
-    min_dist_target = dist_sq.min(dim=1)[0].mean(dim=1)
+    min_dist_pred = dist_sq.min(dim=2).values.mean(dim=1)
+    min_dist_target = dist_sq.min(dim=1).values.mean(dim=1)
     return (min_dist_pred + min_dist_target).mean()
 
 
@@ -86,7 +86,8 @@ def conservative_force_loss(energy: torch.Tensor, force_pred: torch.Tensor, pos:
     ``force_pred`` and ``pos`` share an ordinary coordinate shape such as
     ``[B, N, P]``; ``energy`` has matching leading batch axes.
     """
-    force_from_energy = -torch.autograd.grad(energy.sum(), pos, create_graph=True, retain_graph=True)[0]
+    (energy_gradient,) = torch.autograd.grad(energy.sum(), pos, create_graph=True, retain_graph=True)
+    force_from_energy = -energy_gradient
     return F.mse_loss(force_pred, force_from_energy)
 
 
