@@ -1,7 +1,12 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared manifold metadata for framework parameters."""
+"""Optimizer dispatch tags for framework parameters.
+
+The three accepted labels are deliberately small in scope. They select the
+retraction applied by clifra's optimizers; they are not a taxonomy of geometric
+objects supported by the algebra, planner, or layer systems.
+"""
 
 from __future__ import annotations
 
@@ -21,13 +26,13 @@ def format_valid_manifolds() -> str:
 
 
 def validate_manifold(manifold: str) -> str:
-    """Validate and return a manifold tag."""
+    """Validate and return an optimizer manifold tag."""
     if manifold not in VALID_MANIFOLDS:
         raise ValueError(f"Unknown manifold {manifold!r}. Must be one of {format_valid_manifolds()}")
     return manifold
 
 
 def tag_manifold(param: nn.Parameter, manifold: str) -> nn.Parameter:
-    """Tag a parameter with its manifold type and return the parameter."""
+    """Tag a parameter for optimizer retraction dispatch and return it."""
     param._manifold = validate_manifold(manifold)
     return param

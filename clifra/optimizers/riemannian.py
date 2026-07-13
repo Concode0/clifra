@@ -1,19 +1,20 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Riemannian optimizers for manifold-valued parameters.
+"""Optimizers with retraction dispatch for tagged parameters.
 
 Implements optimization on product manifolds Spin(p,q) x S^{n-1} x R^d
 using per-parameter retraction dispatch.
 
-Each parameter can be tagged with a manifold type via ``p._manifold``:
+The optimizer recognizes exactly three simplified tags via ``p._manifold``:
     - ``'spin'``: Lie algebra bivectors — retracted via bivector norm clipping
       (the forward-pass exp map completes the Riemannian update on Spin(n))
     - ``'sphere'``: Unit vectors on S^{n-1} — retracted via L2 normalization
     - ``'euclidean'`` (or untagged): Standard unconstrained parameters
 
-Use ``from_model()`` to auto-group parameters by manifold tag. Parameters
-without a tag are treated as Euclidean.
+Use ``from_model()`` to auto-group parameters by tag. Parameters without a tag
+are treated as Euclidean. These labels are private optimizer metadata, not a
+general classification system for clifra's geometric objects.
 
 References:
     - Absil et al. "Optimization Algorithms on Matrix Manifolds" (2008)
