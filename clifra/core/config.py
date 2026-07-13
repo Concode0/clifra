@@ -20,7 +20,19 @@ from clifra.core.runtime.algebra import AlgebraContext
 
 @dataclass(frozen=True)
 class AlgebraConfig:
-    """Planner-first algebra declaration."""
+    """Planner-first algebra declaration.
+
+    Args:
+        p: Number of positive-square basis vectors.
+        q: Number of negative-square basis vectors.
+        r: Number of null basis vectors.
+        device: PyTorch device used by planned executor buffers.
+        dtype: Floating-point dtype used by the algebra host.
+        default_grades: Optional grade set returned by ``algebra.layout()``.
+        planning_limits: Optional injected lane and interaction limits.
+        product_execution_policy: Optional injected product-executor cost model.
+        bivector_exp_execution_policy: Optional injected bivector exponential policy.
+    """
 
     p: int
     q: int = 0
@@ -34,7 +46,11 @@ class AlgebraConfig:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any], **overrides) -> "AlgebraConfig":
-        """Build an algebra declaration from a mapping-like config."""
+        """Build an algebra declaration from a mapping-like config.
+
+        Explicit non-``None`` keyword overrides take precedence over mapping
+        values, including all injected planning and execution policies.
+        """
         values = {
             "p": int(_mapping_get(config, "p", 0)),
             "q": int(_mapping_get(config, "q", 0)),
@@ -42,6 +58,8 @@ class AlgebraConfig:
             "device": _mapping_get(config, "device", "cuda"),
             "dtype": resolve_dtype(_mapping_get(config, "dtype", torch.float32)),
             "default_grades": _optional_grades(_mapping_get(config, "default_grades", None)),
+            "planning_limits": _mapping_get(config, "planning_limits", None),
+            "product_execution_policy": _mapping_get(config, "product_execution_policy", None),
             "bivector_exp_execution_policy": _mapping_get(config, "bivector_exp_execution_policy", None),
         }
         values.update({key: value for key, value in overrides.items() if value is not None})
@@ -61,7 +79,11 @@ def make_algebra(
     product_execution_policy: Optional[ProductExecutionPolicy] = None,
     bivector_exp_execution_policy: Optional[BivectorExpExecutionPolicy] = None,
 ) -> AlgebraLike:
-    """Construct the planner-owned algebra host."""
+    """Construct the planner-owned algebra host.
+
+    Planning limits and executor policies are stored on the returned host and
+    shared by every layout, plan, and layer built from it.
+    """
     resolved_device = resolve_device(device) if str(device) == "auto" else device
     resolved_dtype = resolve_dtype(dtype)
 
@@ -79,7 +101,11 @@ def make_algebra(
 
 
 def make_algebra_from_config(config: Mapping[str, Any], **overrides) -> AlgebraLike:
-    """Construct an algebra from a mapping-like config."""
+    """Construct an algebra from a mapping-like config.
+
+    The mapping accepts every :class:`AlgebraConfig` field. Explicit non-``None``
+    overrides take precedence over values from the mapping.
+    """
     algebra_config = AlgebraConfig.from_mapping(config, **overrides)
     return make_algebra(
         algebra_config.p,
