@@ -12,7 +12,6 @@ wheels/
 outputs/
 data/
 benchmarks/results/
-benchmarks/compare_benchmark_artifacts.py
 
 *.pt
 train_log_*.txt

@@ -179,6 +179,10 @@ dev = [
 ]
 
 [package.dev-dependencies]
+benchmark = [
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
 docs = [
     { name = "mkdocs" },
     { name = "mkdocs-material" },
@@ -205,6 +209,7 @@ requires-dist = [
 provides-extras = ["dev", "all"]
 
 [package.metadata.requires-dev]
+benchmark = [{ name = "matplotlib", specifier = ">=3.9.0" }]
 docs = [
     { name = "mkdocs", specifier = "<2.0" },
     { name = "mkdocs-material", specifier = ">=9.7.4" },
