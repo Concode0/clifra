@@ -1,11 +1,9 @@
 {
   "raw": {
-    "z": 0.032819,
-    "curvature": 0.106277
+    "z": 0.032819
   },
   "projected": {
     "z": 0.000601,
-    "curvature": 0.039095,
     "selector_deviation": 0.327933
   },
   "vector_gates": [
@@ -31,41 +29,27 @@
     {
       "noise": 0.0,
       "z": 0.000601,
-      "curvature": 0.039095,
       "selector_deviation": 0.327933
     },
     {
       "noise": 0.01,
       "z": 0.000604,
-      "curvature": 0.029121,
       "selector_deviation": 0.327933
     },
     {
       "noise": 0.05,
       "z": 0.000644,
-      "curvature": 0.106699,
       "selector_deviation": 0.327933
     },
     {
       "noise": 0.1,
       "z": 0.000779,
-      "curvature": 0.175906,
       "selector_deviation": 0.327933
     },
     {
       "noise": 0.2,
       "z": 0.001331,
-      "curvature": 0.262139,
       "selector_deviation": 0.327933
     }
-  ],
-  "analysis_metadata": {
-    "data_shape": [
-      576,
-      1,
-      8
-    ],
-    "config_device": "cpu",
-    "elapsed_seconds": 0.01
-  }
+  ]
 }

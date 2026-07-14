@@ -1,10 +1,10 @@
-# Train and Analyze a Surface Projection
+# Train a Surface Projection
 
 The following $Cl(3, 0)$ experiment trains a rotor action followed by a learned
 lane gate to project a sampled surface toward the $e_1$–$e_2$ plane. The data
-formula, model, loss, optimizer, analysis, robustness measurement, and surface
-plotting helper are included. Familiarity with PyTorch training loops is
-assumed; every clifra-specific object is introduced locally.
+formula, model, loss, optimizer, robustness measurement, and surface plotting
+helper are included. Familiarity with PyTorch training loops is assumed; every
+clifra-specific object is introduced locally.
 
 The surface is a grid patch:
 
@@ -28,8 +28,6 @@ import torch
 
 from clifra import make_algebra
 from clifra.core.foundation import CliffordModule
-from clifra.core.analysis import AnalysisConfig, GeometricAnalyzer
-from clifra.core.analysis.geodesic import GeodesicFlow
 from clifra.layers import BladeSelector, VersorLayer
 from clifra.optimizers import make_riemannian_optimizer
 ```
@@ -125,7 +123,6 @@ torch.manual_seed(7)
 algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
 data, grid_shape = sample_patch(algebra)
 model = SurfaceProjection(algebra)
-flow = GeodesicFlow(algebra, k=10)
 optimizer = make_riemannian_optimizer(
     model,
     algebra,
@@ -151,10 +148,9 @@ with torch.no_grad():
 ## Inspect
 
 ```python
-def measure(flow, algebra, values, model=None):
+def measure(algebra, values, model=None):
     metrics = {
         "z": float(coordinate_component(algebra, values, axis=2).square().mean()),
-        "curvature": flow.curvature(values.squeeze(-2)),
     }
     if model is not None:
         metrics["selector_deviation"] = float(model.selector_penalty().detach())
@@ -164,8 +160,8 @@ def measure(flow, algebra, values, model=None):
     }
 
 
-raw_metrics = measure(flow, algebra, data)
-projected_metrics = measure(flow, algebra, projected, model)
+raw_metrics = measure(algebra, data)
+projected_metrics = measure(algebra, projected, model)
 print("raw", raw_metrics)
 print("projected", projected_metrics)
 ```
@@ -173,8 +169,8 @@ print("projected", projected_metrics)
 Representative run:
 
 ```text
-raw {'z': 0.032819, 'curvature': 0.106277}
-projected {'z': 0.000601, 'curvature': 0.039095, 'selector_deviation': 0.327933}
+raw {'z': 0.032819}
+projected {'z': 0.000601, 'selector_deviation': 0.327933}
 ```
 
 Inspect the learned gate in vector coordinates rather than indexing canonical
@@ -191,60 +187,10 @@ print("vector gates", vector_gates.squeeze())
 The $e_3$ gate is smaller than the $e_1$ and $e_2$ gates. This is the
 non-invertible step that removes most of the height variation.
 
-`GeometricAnalyzer` can consume the same full-lane output in pre-embedded mode:
-
-```python
-analyzer = GeometricAnalyzer(
-    AnalysisConfig(
-        device="cpu",
-        dtype=algebra.dtype,
-        run_dimension=False,
-        run_signature=False,
-    )
-)
-report = analyzer.analyze(projected, algebra=algebra)
-print(report.summary())
-```
-
-Representative run:
-
-```text
-=== Geometric Analysis Report ===
-
-[Spectral]
-  Grade energy: [0.0000, 0.7252, 0.0000, 0.0000]
-  Bivector spectrum: [0.0000]
-  GP eigenvalues (top 5): [0.1197, 0.1197, 0.1197, 0.1197, 0.1197]
-
-[Symmetry]
-  Null directions: [2]
-  Involution symmetry: 1.0000
-  Continuous symmetry dim: 4
-  Reflection symmetries: 3 detected
-
-[Commutator]
-  Mean commutator norm: 0.0000
-  Exchange spectrum (top 5): [0.0000, 0.0000, 0.0000, 0.0000, 0.0000]
-  Lie bracket closure error: 0.0000
-
-[Metadata]
-  data_shape: [576, 1, 8]
-  config_device: cpu
-  elapsed_seconds: 0.01
-```
-
-In this report, `Null directions` are grade-1 basis directions with low observed
-coefficient energy; they are not null directions of the Euclidean signature.
-`Involution symmetry` is the fraction of coefficient energy in odd grades. When
-the analyzer supplies a commutator result, `Continuous symmetry dim` counts
-near-zero modes in the full exchange spectrum rather than bivector generators
-alone. These fields are diagnostics of the represented data, not proofs of
-geometric invariance.
-
 ## Noise Check
 
 ```python
-def noise_test(model, flow, data):
+def noise_test(model, data):
     rows = []
     for noise_std in [0.0, 0.01, 0.05, 0.1, 0.2]:
         coordinates = vector_coordinates(model.algebra, data)
@@ -252,11 +198,11 @@ def noise_test(model, flow, data):
         noisy = model.algebra.layout((1,)).full(noisy_coordinates)
         with torch.no_grad():
             output = model(noisy)
-        rows.append({"noise": noise_std, **measure(flow, model.algebra, output, model)})
+        rows.append({"noise": noise_std, **measure(model.algebra, output, model)})
     return rows
 
 
-noise_rows = noise_test(model, flow, data)
+noise_rows = noise_test(model, data)
 ```
 
 ![Training metrics](../assets/first-guide/training_metrics.png)
@@ -352,9 +298,7 @@ plot_patch(
 | `BladeSelector` | learned lane gate that supplies the projection step |
 | `coordinate_component(..., axis=2)` | z-energy pressure without a basis-lane literal |
 | `model.selector_penalty()` | selector-logit regularization toward pass-through |
-| `GeodesicFlow` | local connection-based curvature metric for analysis |
-| `GeometricAnalyzer` | Broader `core.analysis` report over the result |
 
-The lower reported curvature describes the projected representation produced by
-this model. Because the selector can discard information, it is not evidence of
-an invertible flattening or a change in the surface's intrinsic geometry.
+The selector can discard information, so the projected result is not an
+invertible flattening or evidence of a change in the surface's intrinsic
+geometry.

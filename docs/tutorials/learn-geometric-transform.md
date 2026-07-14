@@ -77,5 +77,5 @@ the model does not learn four unrelated output coefficients. It learns a plane
 parameter whose algebraic action transforms the input.
 
 The [surface projection tutorial](unbend-manifold.md) places the same
-parameterization in a larger experiment with a learned lane gate, analysis,
-regularization, and robustness measurements.
+parameterization in a larger experiment with a learned lane gate,
+regularization, robustness measurements, and surface plots.

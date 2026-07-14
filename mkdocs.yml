@@ -37,7 +37,7 @@ nav:
       - First Clifford Product: tutorials/first-clifford-product.md
       - Layouts and Planned Execution: tutorials/layouts-and-plans.md
       - Learn a Geometric Transformation: tutorials/learn-geometric-transform.md
-      - Train and Analyze a Surface Projection: tutorials/unbend-manifold.md
+      - Train a Surface Projection: tutorials/unbend-manifold.md
   - Explanations:
       - Overview: explanations/index.md
       - Layout, Storage, and TensorContract: explanations/layout-storage-contracts.md

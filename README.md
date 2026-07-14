@@ -11,7 +11,7 @@ Layout-first Clifford algebra tools for PyTorch.
 A clifra algebra host owns its layouts, policies, and operation plans. Full-lane
 tensors and compact grade layouts share that algebra, while planning builds
 static executors for products, metrics, exponentials, and actions. Layers and
-analysis utilities reuse the same operations.
+other library components reuse the same operations.
 
 ## Install
 
