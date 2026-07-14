@@ -1,0 +1,547 @@
+{
+  "schema_version": 1,
+  "seed": 2026,
+  "sweeps": [
+    {
+      "id": "full_layout",
+      "layout_preset": "full",
+      "dimensions": {
+        "min": 2,
+        "max": 8,
+        "step": 1
+      },
+      "signature_families": [
+        "euclidean",
+        "mixed",
+        "degenerate"
+      ],
+      "signatures": [],
+      "devices": [
+        "cpu"
+      ],
+      "dtypes": [
+        "float32",
+        "float64"
+      ],
+      "batch_sizes": [
+        1
+      ],
+      "compile_modes": [
+        "eager"
+      ],
+      "channels": 2,
+      "actions": 2,
+      "pairs": 2,
+      "cases": [
+        {
+          "id": "full_gp",
+          "kind": "product",
+          "operation": "gp",
+          "left_grades": "full",
+          "right_grades": "full",
+          "output_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_wedge",
+          "kind": "product",
+          "operation": "wedge",
+          "left_grades": "full",
+          "right_grades": "full",
+          "output_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_symmetric",
+          "kind": "product",
+          "operation": "symmetric_product",
+          "left_grades": "full",
+          "right_grades": "full",
+          "output_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_commutator",
+          "kind": "product",
+          "operation": "commutator_product",
+          "left_grades": "full",
+          "right_grades": "full",
+          "output_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_anti_commutator",
+          "kind": "product",
+          "operation": "anti_commutator_product",
+          "left_grades": "full",
+          "right_grades": "full",
+          "output_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_left_contraction",
+          "kind": "product",
+          "operation": "left_contraction",
+          "left_grades": "full",
+          "right_grades": "full",
+          "output_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_right_contraction",
+          "kind": "product",
+          "operation": "right_contraction",
+          "left_grades": "full",
+          "right_grades": "full",
+          "output_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_identity",
+          "kind": "unary",
+          "operation": "identity",
+          "input_grades": "full",
+          "output_grades": "same",
+          "backward": true
+        },
+        {
+          "id": "full_reverse",
+          "kind": "unary",
+          "operation": "reverse",
+          "input_grades": "full",
+          "output_grades": "same",
+          "backward": true
+        },
+        {
+          "id": "full_grade_involution",
+          "kind": "unary",
+          "operation": "grade_involution",
+          "input_grades": "full",
+          "output_grades": "same",
+          "backward": true
+        },
+        {
+          "id": "full_clifford_conjugation",
+          "kind": "unary",
+          "operation": "clifford_conjugation",
+          "input_grades": "full",
+          "output_grades": "same",
+          "backward": true
+        },
+        {
+          "id": "full_signature_norm",
+          "kind": "signature_norm",
+          "input_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_pseudoscalar_product",
+          "kind": "pseudoscalar_product",
+          "input_grades": "full",
+          "output_grades": "full",
+          "backward": true
+        },
+        {
+          "id": "full_sandwich",
+          "kind": "sandwich_action",
+          "scale": 0.05,
+          "backward": true
+        },
+        {
+          "id": "full_versor",
+          "kind": "versor_action",
+          "max_mixed_dimension": 9,
+          "grade": 2,
+          "input_grades": "full",
+          "parameter_grades": [
+            2
+          ],
+          "output_grades": "full",
+          "scale": 0.05,
+          "backward": true
+        },
+        {
+          "id": "full_multi_versor",
+          "kind": "multi_versor_action",
+          "max_mixed_dimension": 9,
+          "grade": 2,
+          "input_grades": "full",
+          "parameter_grades": [
+            2
+          ],
+          "output_grades": "full",
+          "scale": 0.05,
+          "backward": true
+        },
+        {
+          "id": "full_paired_bivector",
+          "kind": "paired_bivector_action",
+          "max_mixed_dimension": 9,
+          "input_grades": "full",
+          "parameter_grades": [
+            2
+          ],
+          "output_grades": "full",
+          "scale": 0.05,
+          "backward": true
+        }
+      ]
+    },
+    {
+      "id": "compact_layout",
+      "layout_preset": "compact",
+      "dimensions": {
+        "min": 2,
+        "max": 63,
+        "step": 1
+      },
+      "signature_families": [
+        "euclidean",
+        "mixed",
+        "degenerate"
+      ],
+      "signatures": [],
+      "devices": [
+        "cpu"
+      ],
+      "dtypes": [
+        "float32",
+        "float64"
+      ],
+      "batch_sizes": [
+        1,
+        16
+      ],
+      "compile_modes": [
+        "eager"
+      ],
+      "channels": 4,
+      "actions": 4,
+      "pairs": 4,
+      "cases": [
+        {
+          "id": "vector_gp",
+          "kind": "product",
+          "operation": "gp",
+          "left_grades": [
+            1
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "vector_wedge",
+          "kind": "product",
+          "operation": "wedge",
+          "left_grades": [
+            1
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "vector_symmetric",
+          "kind": "product",
+          "operation": "symmetric_product",
+          "left_grades": [
+            1
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "vector_commutator",
+          "kind": "product",
+          "operation": "commutator_product",
+          "left_grades": [
+            1
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "vector_anti_commutator",
+          "kind": "product",
+          "operation": "anti_commutator_product",
+          "left_grades": [
+            1
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "vector_left_contraction",
+          "kind": "product",
+          "operation": "left_contraction",
+          "left_grades": [
+            1
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "vector_right_contraction",
+          "kind": "product",
+          "operation": "right_contraction",
+          "left_grades": [
+            1
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "mixed_grade_gp",
+          "kind": "product",
+          "operation": "gp",
+          "left_grades": [
+            0,
+            2
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "bivector_gp",
+          "kind": "product",
+          "operation": "gp",
+          "max_dimension": 36,
+          "left_grades": [
+            2
+          ],
+          "right_grades": [
+            2
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "bivector_vector_commutator",
+          "kind": "product",
+          "operation": "commutator_product",
+          "left_grades": [
+            2
+          ],
+          "right_grades": [
+            1
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "bivector_bivector_commutator",
+          "kind": "product",
+          "operation": "commutator_product",
+          "min_dimension": 3,
+          "left_grades": [
+            2
+          ],
+          "right_grades": [
+            2
+          ],
+          "output_grades": "infer",
+          "backward": true
+        },
+        {
+          "id": "compact_identity",
+          "kind": "unary",
+          "operation": "identity",
+          "input_grades": [
+            0,
+            1,
+            2
+          ],
+          "output_grades": "same",
+          "backward": true
+        },
+        {
+          "id": "compact_reverse",
+          "kind": "unary",
+          "operation": "reverse",
+          "input_grades": [
+            0,
+            1,
+            2
+          ],
+          "output_grades": "same",
+          "backward": true
+        },
+        {
+          "id": "compact_grade_involution",
+          "kind": "unary",
+          "operation": "grade_involution",
+          "input_grades": [
+            0,
+            1,
+            2
+          ],
+          "output_grades": "same",
+          "backward": true
+        },
+        {
+          "id": "compact_clifford_conjugation",
+          "kind": "unary",
+          "operation": "clifford_conjugation",
+          "input_grades": [
+            0,
+            1,
+            2
+          ],
+          "output_grades": "same",
+          "backward": true
+        },
+        {
+          "id": "vector_projection",
+          "kind": "unary",
+          "operation": "grade_projection",
+          "input_grades": [
+            0,
+            1,
+            2
+          ],
+          "output_grades": [
+            1
+          ],
+          "backward": true
+        },
+        {
+          "id": "compact_signature_norm",
+          "kind": "signature_norm",
+          "input_grades": [
+            1,
+            2
+          ],
+          "backward": true
+        },
+        {
+          "id": "vector_pseudoscalar_product",
+          "kind": "pseudoscalar_product",
+          "input_grades": [
+            1
+          ],
+          "backward": true
+        },
+        {
+          "id": "bivector_exp",
+          "kind": "bivector_exp",
+          "max_mixed_dimension": 9,
+          "input_grades": [
+            2
+          ],
+          "output_grades": [
+            0,
+            2
+          ],
+          "scale": 0.05,
+          "backward": true
+        },
+        {
+          "id": "versor_vector",
+          "kind": "versor_action",
+          "grade": 2,
+          "input_grades": [
+            1
+          ],
+          "parameter_grades": [
+            2
+          ],
+          "output_grades": [
+            1
+          ],
+          "scale": 0.05,
+          "backward": true
+        },
+        {
+          "id": "multi_versor_vector",
+          "kind": "multi_versor_action",
+          "grade": 2,
+          "input_grades": [
+            1
+          ],
+          "parameter_grades": [
+            2
+          ],
+          "output_grades": [
+            1
+          ],
+          "scale": 0.05,
+          "backward": true
+        },
+        {
+          "id": "paired_bivector_vector",
+          "kind": "paired_bivector_action",
+          "max_dimension": 9,
+          "max_mixed_dimension": 9,
+          "input_grades": [
+            1
+          ],
+          "parameter_grades": [
+            2
+          ],
+          "output_grades": [
+            1
+          ],
+          "scale": 0.05,
+          "backward": true
+        }
+      ]
+    }
+  ],
+  "timing": {
+    "warmup_calls": 3,
+    "samples": 10,
+    "backward_samples": 5
+  },
+  "resources": {
+    "max_estimated_bytes": 2147483648,
+    "max_layout_lanes": 65536,
+    "safety_factor": 2
+  },
+  "cumulative": [
+    {
+      "sweep_id": "compact_layout",
+      "case_id": "versor_vector",
+      "dtypes": [
+        "float32"
+      ],
+      "max_dimension": 9,
+      "steps": 512,
+      "samples": 16
+    }
+  ],
+  "profiler": {
+    "enabled": false,
+    "case_ids": [],
+    "record_shapes": true,
+    "profile_memory": true
+  },
+  "output": {
+    "root": "benchmarks/results",
+    "publish": true,
+    "docs_root": "docs/benchmarks",
+    "baseline": null
+  }
+}
