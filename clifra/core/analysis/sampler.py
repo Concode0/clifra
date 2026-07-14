@@ -4,9 +4,9 @@
 
 """Statistical sampling strategies for geometric data analysis.
 
-The stratified sampler uses geodesic-flow coherence as a universal
-stratification criterion -- it does not assume a specific metric
-signature for the data.
+The stratified sampler uses geodesic-flow coherence as its stratification
+score. It constructs a capped Euclidean algebra internally rather than
+inferring a metric signature from the data.
 """
 
 from typing import Dict, List, Tuple, Union
@@ -23,10 +23,9 @@ class StatisticalSampler:
     ``"passthrough"`` strategies.  All methods are deterministic when a
     seed is provided.
 
-    The ``"stratified"`` strategy uses per-point geodesic-flow coherence
-    to partition data into geometrically meaningful strata (high-structure
-    vs low-structure regions), ensuring coverage of diverse geometric
-    neighborhoods without assuming a specific metric signature.
+    The ``"stratified"`` strategy partitions per-point geodesic-flow
+    coherence scores into quantile strata. It uses a capped Euclidean algebra
+    for this calculation.
     """
 
     @staticmethod
@@ -91,9 +90,7 @@ class StatisticalSampler:
 
         Embeds data as grade-1 in a default Euclidean algebra, computes
         per-point geodesic-flow coherence, then partitions into quantile
-        strata.  This ensures sampling covers both structured (high
-        coherence) and unstructured (low coherence) regions of the data
-        without assuming a specific metric signature.
+        strata, then samples across those score ranges.
         """
         from clifra.core.config import make_algebra
 

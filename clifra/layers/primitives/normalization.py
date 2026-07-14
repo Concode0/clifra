@@ -14,11 +14,14 @@ from ._utils import require_positive_int
 
 
 class CliffordLayerNorm(CliffordModule):
-    """Geometric LayerNorm that preserves direction and recovers scale.
+    """Normalize coefficient magnitude and optionally encode it in grade 0.
 
-    Normalizes the multivector to unit norm (preserving geometric direction),
-    then injects the original log-magnitude into the scalar (grade-0) part
-    via a learnable gate.
+    The input is divided by its Euclidean coefficient norm and multiplied by a
+    learned per-channel scale. A scalar bias is then added. When ``recover`` is
+    enabled, ``log1p(norm)`` is also added to the scalar lane through a learned
+    gate. The scalar additions can change the direction of the final
+    multivector; they encode magnitude information rather than reconstructing
+    the original input scale.
 
     Attributes:
         weight (nn.Parameter): Per-channel direction scale [C].
@@ -65,7 +68,7 @@ class CliffordLayerNorm(CliffordModule):
             self.register_buffer("norm_scale", None)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Normalizes energy, preserves direction, optionally recovers scale in grade-0.
+        """Normalize coefficient magnitude and apply scalar-lane terms.
 
         Args:
             x (torch.Tensor): Input [Batch, Channels, Dim].

@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Automated metric-signature search for optimal geometric signatures.
+"""Probe-based metric-signature estimation.
 
 Provides :class:`MetricSearch` (probe-based signature discovery) and
 :class:`SignatureSearchAnalyzer` (higher-level wrapper with dimension
-reduction and bootstrap confidence intervals).
+reduction and bootstrap agreement estimates).
 """
 
 import concurrent.futures
@@ -121,7 +121,7 @@ def _apply_biased_init(
     algebra: AlgebraLike,
     bias_type: str = "random",
 ) -> None:
-    """Biases VersorLayer bivector weights based on signature type.
+    """Bias probe bivector weights based on signature type.
 
     Uses ``algebra.bivector_squared_signs()`` to classify each basis bivector:
     - bv_sq = -1: elliptic (positive-signature base vectors)
@@ -164,11 +164,11 @@ def _apply_biased_init(
 
 
 class MetricSearch:
-    """Learn an optimal ``(p, q, r)`` signature via rotor probes and bivector energy analysis.
+    """Estimate a ``(p, q, r)`` signature from trained rotor probes.
 
     Trains small single-rotor probes on conformally-lifted data using
     coherence + curvature as the loss. After training, reads the learned
-    bivector energy distribution to infer the optimal signature.
+    bivector energy distribution to select a signature estimate.
 
     Multiple probes with biased initialization combat local minima.
     """
@@ -407,13 +407,13 @@ class MetricSearch:
         return (p, q, r), energy_breakdown
 
     def search(self, data: torch.Tensor) -> Tuple[int, int, int]:
-        """Returns optimal (p, q, r) signature for the data.
+        """Return the selected ``(p, q, r)`` signature estimate.
 
         Args:
             data (torch.Tensor): Input data [N, D].
 
         Returns:
-            Tuple[int, int, int]: Optimal signature (p, q, r).
+            Tuple[int, int, int]: Selected signature estimate.
         """
         result = self.search_detailed(data)
         return result["signature"]
@@ -471,13 +471,13 @@ class MetricSearch:
 
 
 class SignatureSearchAnalyzer:
-    """Discover optimal ``(p, q, r)`` with automatic dimension reduction.
+    """Estimate ``(p, q, r)`` with optional dimension reduction.
 
     Wraps :class:`MetricSearch` and adds:
 
     * Automatic PCA reduction when the input exceeds the algebra
       tractability threshold.
-    * Bootstrap confidence intervals on the signature estimate.
+    * Bootstrap vote distribution and majority agreement.
 
     Args:
         device: Torch device string.
@@ -552,7 +552,7 @@ class SignatureSearchAnalyzer:
         n_bootstrap: int = CONSTANTS.signature_bootstrap_resamples,
         dim_result: Optional[DimensionResult] = None,
     ) -> Tuple[SignatureResult, Dict]:
-        """Signature search with bootstrap confidence estimate.
+        """Run signature search on bootstrap resamples.
 
         Runs the search on *n_bootstrap* resampled datasets and reports
         the majority-vote signature plus the full distribution.

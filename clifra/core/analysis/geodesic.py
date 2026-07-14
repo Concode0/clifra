@@ -2,12 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Geodesic flow analysis in Clifford algebra.
-
-Interprets data points as grade-1 multivectors and computes the *flow
-field* -- a bivector at each point encoding the direction of shortest
-algebraic paths to its k-nearest neighbors.
-"""
+"""Nearest-neighbor bivector-flow diagnostics."""
 
 from typing import Dict
 
@@ -22,26 +17,22 @@ from ._utils import full_grades
 
 
 class GeodesicFlow:
-    """Geodesic flow analysis in Clifford algebra.
+    """Compute bivector-flow statistics over coefficient-space neighbors.
 
-    Interprets data points as grade-1 multivectors and computes the *flow
-    field* -- a bivector at each point that encodes the direction of shortest
-    algebraic paths to its k-nearest neighbors.
+    Data points are interpreted as grade-1 multivectors. Neighbors are selected
+    by Euclidean distance in coefficient space, and each point-neighbor pair is
+    represented by the normalized grade-2 part of their geometric product.
 
     The flow is computed as the mean of *connection bivectors*:
 
         B_ij = <x_i . ~x_j>_2   (grade-2 part of the geometric product)
 
-    This bivector encodes the rotational "turn" needed to map x_i toward
-    x_j, analogous to the parallel transport connection on a Lie group.
-
-    The coherence and curvature of this field reveal whether the data has
-    causal (directional) structure:
+    Coherence and curvature summarize local directional alignment:
 
     - **High coherence, low curvature** -> the flow is smooth and aligned in
-      one direction.  Causality is visible.
+      one direction.
     - **Low coherence, high curvature** -> the flow is fragmented and
-      collides with itself.  The signal is dominated by noise.
+      varies across neighborhoods.
     """
 
     def __init__(self, algebra: AlgebraLike, k: int = CONSTANTS.default_k_neighbors):
@@ -94,10 +85,9 @@ class GeodesicFlow:
         return idx  # [N, k]
 
     def _connection_bivectors(self, mv: torch.Tensor, *, compact_output: bool = False) -> torch.Tensor:
-        """Computes unit connection bivectors for all (point, neighbor) pairs.
+        """Compute normalized grade-2 products for point-neighbor pairs.
 
-        The connection bivector from x_i to x_j encodes the rotational "turn"
-        in the algebra needed to map one vector toward the other:
+        For each coefficient-space neighbor pair, the method computes:
 
             B_ij = unit( <x_i . ~x_j>_2 )
 
@@ -148,8 +138,8 @@ class GeodesicFlow:
         .. note::
             For perfectly symmetric data (e.g. a closed circle) the mean
             cancels to zero -- which is geometrically correct since there is
-            no preferred flow direction.  Use :meth:`coherence` to measure
-            structure without this cancellation.
+            no preferred mean direction. Use :meth:`coherence` to measure
+            pairwise alignment without this cancellation.
 
         Args:
             mv (torch.Tensor): ``[N, dim]`` grade-1 multivectors.
@@ -345,10 +335,12 @@ class GeodesicFlow:
         return math.sqrt(2.0 / (math.pi * d))
 
     def causal_report(self, data: torch.Tensor) -> Dict:
-        """Full geodesic flow analysis with a causal interpretation.
+        """Apply the legacy alignment threshold to geodesic-flow statistics.
 
-        Embeds data, computes coherence and curvature, and returns a
-        human-readable verdict.
+        Embed data, compute coherence and curvature, and apply the configured
+        binary threshold. The returned ``causal`` field and label are legacy
+        names for this threshold result; the calculation does not establish
+        statistical or physical causality.
 
         The causal threshold is adaptive: coherence must exceed the
         midpoint between random baseline and 1.0 (i.e. the measured

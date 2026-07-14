@@ -255,7 +255,10 @@ class DimensionLifter:
 
         1. **Original** Cl(p, q): baseline coherence and curvature.
         2. **Positive lift** Cl(p+1, q): spacelike extra dimension, fill=1.
-        3. **Null lift** Cl(p, q+1): timelike extra dimension, fill=0.
+        3. **Negative-square lift** ``Cl(p, q+1)``: one additional negative
+           generator, with its input coordinate initialized to zero. The
+           returned key ``lift_null`` is retained for API compatibility; the
+           added generator is not signature-null.
 
         Args:
             data: ``[N, d]`` data where d = p + q.
@@ -265,7 +268,8 @@ class DimensionLifter:
 
         Returns:
             Dict with keys ``original``, ``lift_positive``, ``lift_null``,
-            and ``best`` (name of the algebra with highest coherence).
+            and ``best`` (name of the algebra with highest coherence). The
+            key ``lift_null`` denotes the negative-square lift described above.
         """
         from .geodesic import GeodesicFlow
 
@@ -306,7 +310,12 @@ class DimensionLifter:
         return results
 
     def format_report(self, results: Dict) -> str:
-        """Renders a lifting test result as a human-readable string."""
+        """Render a lifting test result.
+
+        The legacy ``Causal`` and ``Noisy`` labels report only the coherence
+        and curvature threshold computed by :meth:`test`; they do not establish
+        causality or a noise model.
+        """
         lines = ["Dimension Lifting Report", "=" * 40]
         for key in ("original", "lift_positive", "lift_null"):
             r = results[key]

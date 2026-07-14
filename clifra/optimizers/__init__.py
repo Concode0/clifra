@@ -1,10 +1,12 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Riemannian optimizers for geometric algebra neural networks.
+"""Tag-aware optimizers for geometric algebra neural networks.
 
-Provides optimizers that respect the manifold structure of parameters:
-Spin group (bivectors), unit sphere (vectors), and Euclidean (unconstrained).
+The optimizers dispatch post-update handling for parameter groups marked
+``spin``, ``sphere``, or ``euclidean``. Their ``from_model()`` constructors
+build those groups from parameter tags. The public class names are retained for
+API compatibility.
 """
 
 from .riemannian import (
