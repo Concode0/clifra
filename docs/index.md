@@ -1,21 +1,26 @@
 # clifra
 
-Clifra is documented from the package outward: API pages render module
-docstrings, while the core design page only keeps the small process snippets
-needed to connect those APIs.
+Clifra provides layout-first Clifford algebra tools for PyTorch. It represents
+geometric values as tensors, plans algebra operations from explicit grade
+layouts, and exposes the resulting work as reusable PyTorch modules. It can be
+used as a Clifford algebra library, a geometric deep-learning toolkit, or the
+foundation of a separate research or domain-specific system.
 
-Start with [Core Design](core-design.md), then use the [API](api/index.md).
+## Choose a Path
 
-See [first-guide](first-guide.md), If you are a little confused or think you need an intuitive understanding, please refer to the first guide and move on to the [API](api/index.md).
+| I want to... | Start here |
+| --- | --- |
+| learn clifra from the beginning | [First Clifford Product](tutorials/first-clifford-product.md) |
+| understand layouts, planning, or learnable geometry | [Explanations](explanations/index.md) |
+| look up a public interface or tensor contract | [API Reference](reference/index.md) |
+| inspect performance and numerical profiles | [Benchmarks](benchmarks/index.md) |
 
----
+## Benchmark Suite
 
-## Performance Foundation
+The configured benchmark separates full-layout measurements through dimension
+8 from compact-layout measurements through dimension 63. It records setup,
+cold-call, forward and backward timing distributions, throughput, tensor
+statistics, cumulative error, and the complete execution context.
 
-The maximum-density verification matrix and all performance profiles rendered in benchmarks section were captured on a baseline workstation to ensure reproducible benchmarks:
-
-- **Hardware:** Apple MacBook Pro (Apple M5 Pro, 48GB Unified Memory)
-- **Execution Target:** Purposely restricted to Host CPU (`torch_num_threads=5`) to isolate core algorithmic efficiency from raw GPU tensor core acceleration.
-- **Framework:** PyTorch `2.10.0` on `macOS` (ARM64)
-
-For comprehensive dimension sweeps up to $Cl(63)$ and accumulated drift topologies, see the [Detailed Benchmarks](benchmarks/index.md)
+See [Benchmarks](benchmarks/index.md) for the matrix, commands, graphs, and raw
+artifacts.

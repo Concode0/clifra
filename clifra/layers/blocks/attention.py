@@ -58,20 +58,19 @@ def _sdpa_from_scores(scores: torch.Tensor, values: torch.Tensor, *, dropout_p: 
 class GeometricProductAttention(CliffordModule):
     """Multi-head attention using geometric product scoring.
 
-    Standard attention: score(Q, K) = <Q, K> / sqrt(d)  (scalar only)
+    Standard attention uses a scalar query-key score.
 
-    GA attention:
-        product = Q_c * reverse(K_c)    (geometric product per head-channel)
-        score   = (<product>_0 + lambda_ * ||<product>_2||_F) / sqrt(H_c * dim)
+    This layer forms a geometric product per head-channel and combines its
+    grade-0 component with the coefficient norm of its grade-2 component.
 
     The grade-0 (scalar) part measures alignment (like dot product).
-    The grade-2 (bivector) part measures relative orientation - novel.
+    The grade-2 contribution records oriented-plane content in the product.
 
     Attributes:
         num_heads (int): Number of attention heads.
         head_channels (int): Channels per head.
         causal (bool): If True, apply autoregressive causal mask.
-        bivector_weight (float): lambda_ - weight of bivector score component.
+        bivector_weight (float): Weight of the bivector score component.
     """
 
     def __init__(
@@ -92,7 +91,7 @@ class GeometricProductAttention(CliffordModule):
             channels: Total number of multivector channels.
             num_heads: Number of attention heads.
             causal: Apply causal mask for autoregressive generation.
-            bivector_weight: lambda_ weight on bivector score component.
+            bivector_weight: Weight on the bivector score component.
             dropout: Dropout rate on attention weights.
             grades: Optional compact input/output grades.
             layout: Optional compact input/output layout.

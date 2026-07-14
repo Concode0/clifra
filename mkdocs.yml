@@ -26,26 +26,30 @@ plugins:
             show_symbol_type_heading: true
             show_symbol_type_toc: true
             members_order: source
+            filters:
+              - "!^_[^_]"
+            show_if_no_docstring: false
 
 nav:
   - Home: index.md
-  - First Guide: first-guide.md
-  - Core Design: core-design.md
+  - Tutorials:
+      - Overview: tutorials/index.md
+      - First Clifford Product: tutorials/first-clifford-product.md
+      - Layouts and Planned Execution: tutorials/layouts-and-plans.md
+      - Learn a Geometric Transformation: tutorials/learn-geometric-transform.md
+      - Train a Surface Projection: tutorials/unbend-manifold.md
+  - Explanations:
+      - Overview: explanations/index.md
+      - Layout, Storage, and TensorContract: explanations/layout-storage-contracts.md
+      - Planning Policy as Dependency Injection: explanations/planning-policy-injection.md
+      - Geometric Parameterization: explanations/clifra-methodology.md
+      - Bivector Exponential Methods: explanations/bivector-exponential.md
+      - Optimizer Parameter Categories: explanations/optimizer-dispatch.md
+      - Signatures and Algebraic Behavior: explanations/signatures-and-learning.md
+      - Using clifra with PyTorch: explanations/clifra-and-pytorch.md
+  - API Reference: reference/index.md
   - Benchmarks:
       - Overview: benchmarks/index.md
-      - Layout Invariants: benchmarks/layouts.md
-      - Performance: benchmarks/performance.md
-      - Correctness: benchmarks/correctness.md
-  - API:
-      - Package: api/index.md
-      - Core: api/core.md
-      - Analysis: api/analysis.md
-      - Functional: api/functional.md
-      - Layers: api/layers.md
-      - Criteria: api/criteria.md
-      - Optimizers: api/optimizers.md
-  - Examples: examples/index.md
-  - Decisions: decisions/index.md
 
 markdown_extensions:
   - admonition

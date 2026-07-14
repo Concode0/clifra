@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Symmetry and null-direction detection in Clifford algebras.
+"""Coefficient-energy and commutator diagnostics for multivector data.
 
-Detects null directions, grade-involution symmetry, reflection
-symmetries, and continuous symmetries (via commutator analysis).
+Computes low-energy grade-1 directions, odd-grade energy fraction, reflection
+scores, and near-zero commutator modes.
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -28,12 +28,12 @@ from .policy import feasibility_record
 
 
 class SymmetryDetector:
-    """Detect symmetries, null directions, and invariances.
+    """Compute coefficient-energy, reflection, and commutator diagnostics.
 
     Args:
         algebra: Layout-first algebra host.
-        null_threshold: Energy threshold below which a direction is
-            considered effectively null.
+        null_threshold: Normalized grade-1 coefficient-energy threshold below
+            which a basis direction is reported.
     """
 
     def __init__(
@@ -89,11 +89,13 @@ class SymmetryDetector:
         )
 
     def detect_null_directions(self, mv_data: torch.Tensor) -> Tuple[List[int], torch.Tensor]:
-        """Detect effectively null basis-vector directions.
+        """Detect low-energy grade-1 basis directions.
 
         For each basis vector ``e_i``, computes the mean squared
         projection energy of the data onto that direction.  Directions
-        below :attr:`null_threshold` are flagged.
+        below :attr:`null_threshold` are flagged. This is an observed-data
+        diagnostic and is unrelated to null generators in the algebra's
+        signature.
 
         Args:
             mv_data: ``[N, dim]`` multivector data.
@@ -117,7 +119,7 @@ class SymmetryDetector:
         return null_dirs.tolist(), scores
 
     def detect_involution_symmetry(self, mv_data: torch.Tensor) -> float:
-        """Measure grade-involution symmetry of the data distribution.
+        """Measure the fraction of coefficient energy in odd grades.
 
         Computes the fraction of total energy in odd-grade components:
 
@@ -252,14 +254,14 @@ class SymmetryDetector:
         commutator_result: Optional[CommutatorResult] = None,
         threshold: Optional[float] = None,
     ) -> int:
-        """Estimate the dimension of the continuous symmetry group.
+        """Count near-zero commutator modes.
 
-        A bivector ``B_j`` generates a continuous symmetry if
-        ``E[||[B_j, x_i]||]`` is near zero for all data points.
+        Without a precomputed commutator result, the method counts basis
+        bivectors whose mean normalized commutator norm is below ``threshold``.
 
-        If a :class:`CommutatorResult` is provided, its exchange
-        spectrum is used directly (eigenvalues near zero -> symmetry
-        generators).  Otherwise the computation is done from scratch.
+        If a :class:`CommutatorResult` is provided, the method instead counts
+        near-zero values in its full exchange spectrum. The two branches do
+        not necessarily count modes in spaces of the same dimension.
 
         Args:
             mv_data: ``[N, dim]`` multivector data.
@@ -268,7 +270,7 @@ class SymmetryDetector:
                 is considered a symmetry generator.
 
         Returns:
-            Estimated dimension of the continuous symmetry group.
+            Number of modes below the selected threshold.
         """
         dim, _ = self._continuous_symmetries_with_skips(
             mv_data,

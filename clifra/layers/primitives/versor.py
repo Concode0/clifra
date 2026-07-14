@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Versor layers that act through learned grade-k parameters."""
+"""Versor layers that act through learned grade-1 or grade-2 parameters."""
 
 import torch
 import torch.nn as nn
@@ -18,11 +18,12 @@ from ._utils import (
 
 
 class VersorLayer(CliffordModule):
-    """Learnable versor layer with universal grade parameterization.
+    """Learnable versor layer for reflection or rotor actions.
 
-    For grade=2 (default): learns R = exp(-B/2) and applies the isometry x' = RxR~.
-    For grade=k: learns a grade-k element V and applies the versor product
-    x' = hat(V) x V^{-1}, where hat denotes grade involution.
+    ``grade=2`` (default) learns ``R = exp(-B/2)`` and applies the rotor
+    action ``x' = R x reverse(R)``. ``grade=1`` learns a vector and applies
+    the corresponding reflection action. These are the currently supported
+    parameter grades.
 
     Preserves origin. For grade=2, also preserves lengths and angles (isometry).
 
@@ -34,7 +35,8 @@ class VersorLayer(CliffordModule):
     Attributes:
         channels (int): Number of versors.
         grade (int): Grade of the learnable parameter. Default 2 (bivector → rotor).
-        grade_weights (nn.Parameter): Learnable grade-k coefficients [channels, num_grade_elements].
+        grade_weights (nn.Parameter): Learnable coefficients with shape
+            ``[channels, num_grade_elements]``.
     """
 
     def __init__(
@@ -53,10 +55,9 @@ class VersorLayer(CliffordModule):
         Args:
             algebra: Planner-capable algebra host.
             channels (int): Number of features.
-            grade (int): Grade of the learnable parameter.
-                grade=2 (default): bivectors → rotors via exp(-B/2), Spin group.
-                grade=1: vectors → reflections via hat(n) x n^{-1}, Pin group.
-                grade=k: general grade-k versor product.
+            grade (int): Grade of the learnable parameter. The supported values
+                are ``1`` for vector reflections and ``2`` for bivector rotor
+                actions. Defaults to ``2``.
         """
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")
@@ -91,7 +92,7 @@ class VersorLayer(CliffordModule):
         nn.init.normal_(self.grade_weights, std=0.01)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply versor product x' = hat(V) x V^{-1} (= RxR~ for grade=2).
+        """Apply the planned reflection or rotor action.
 
         Args:
             x (torch.Tensor): Input [Batch, Channels, Dim].

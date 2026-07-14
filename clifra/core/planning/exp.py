@@ -18,8 +18,7 @@ SPECTRAL_LOCAL_MAX_PLANES = 4
 SPECTRAL_LOCAL_MAX_IDEAL_DIM = 4
 SPECTRAL_LOCAL_TRUNCATION_NOTICE = (
     "spectral_local extracts k dominant orthogonal planes. Clipping errors can occur when rotation energy is "
-    "evenly distributed; because orthogonal plane rotors commute, the strict tail guard is bounded by the sum of "
-    "the clipped tail angles."
+    "evenly distributed; the sum of clipped tail angles is reported as a conservative truncation diagnostic."
 )
 
 
@@ -941,7 +940,10 @@ def spectral_exp_angle_diagnostics(
 ) -> SpectralExpAngleDiagnostics:
     """Return tail-bound and GVC diagnostics for an actual angle spectrum.
 
-    The strict tail guard follows ``||exp(B_tail) - I||_inf <= sum(abs(theta_tail))``.
+    ``tail_angle_sum_bound`` is the sum of the omitted absolute plane angles.
+    It is a conservative truncation diagnostic; interpreting it as a bound on
+    a multivector norm requires a specified representation, norm, and the
+    corresponding assumptions.
     ``geometric_variance_captured`` is the retained squared angle energy divided by
     the total squared angle energy. By default, angles are sorted by absolute value
     before selecting the dominant planes.

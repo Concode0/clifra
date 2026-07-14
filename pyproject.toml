@@ -53,6 +53,9 @@ requires = ["setuptools>=80.10.2"]
 build-backend = "setuptools.build_meta"
 
 [dependency-groups]
+benchmark = [
+    "matplotlib>=3.9.0",
+]
 docs = [
     "mkdocs<2.0",
     "mkdocs-material>=9.7.4",

@@ -22,13 +22,13 @@ EXPLICIT_ACTION_MATRIX_ENTRIES = EXPLICIT_ACTION_MATRIX_LANES * EXPLICIT_ACTION_
 class AnalysisConstants:
     """Central registry of tuneable constants for the analysis toolkit.
 
-    All magic numbers that affect analytical decisions live here so they
-    can be adjusted in one place. Numerical guards belong in
+    Fixed thresholds and budgets that affect analytical decisions are grouped
+    here so they can be adjusted in one place. Numerical guards belong in
     :mod:`clifra.core.foundation.numerics`.
 
     Attributes:
-        curvature_causal_threshold: Maximum curvature score for a flow
-            field to be classified as "causal" (used in
+        curvature_causal_threshold: Maximum curvature score for the legacy
+            ``causal`` threshold result (used in
             :meth:`GeodesicFlow.causal_report` and
             :meth:`DimensionLifter.test`).
         bv_sq_elliptic_bound: Bivector square value below which the

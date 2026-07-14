@@ -24,7 +24,7 @@ from clifra.functional.orthogonality import (
 
 @dataclass
 class OrthogonalitySettings:
-    """Configuration for strict orthogonality enforcement."""
+    """Configuration for target-grade confinement."""
 
     enabled: bool = True
     mode: str = "loss"
@@ -39,7 +39,7 @@ class StrictOrthogonality(CliffordModule):
     """Enforce grade confinement by loss penalty or hard projection."""
 
     def __init__(self, algebra, settings: Optional[OrthogonalitySettings] = None):
-        """Initialize strict orthogonality enforcement."""
+        """Initialize target-grade confinement."""
         super().__init__(algebra)
         self.settings = OrthogonalitySettings() if settings is None else settings
         masks = grade_masks(self.algebra.n + 1, self.algebra.dim)
@@ -57,7 +57,7 @@ class StrictOrthogonality(CliffordModule):
         return project_to_target_grades(x, self.target_mask)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Return either an orthogonality penalty or projected values."""
+        """Return either a non-target-grade penalty or projected values."""
         if not self.settings.enabled:
             return x if self.settings.mode == "project" else x.new_zeros(())
         if self.settings.mode == "project":
@@ -65,7 +65,7 @@ class StrictOrthogonality(CliffordModule):
         return self.settings.weight * self.parasitic_energy(x)
 
     def anneal_weight(self, epoch: int, warmup_epochs: int, total_epochs: int) -> float:
-        """Return linearly warmed orthogonality weight."""
+        """Return the linearly warmed confinement weight."""
         if warmup_epochs <= 0:
             return self.settings.weight
         return self.settings.weight * min(epoch / warmup_epochs, 1.0)
@@ -91,7 +91,7 @@ class StrictOrthogonality(CliffordModule):
         return report
 
     def format_diagnostics(self, x: torch.Tensor) -> str:
-        """Return a compact text report for orthogonality diagnostics."""
+        """Return a compact text report for grade-confinement diagnostics."""
         report = self.diagnostics(x)
         energies = report["grade_energies"]
         target_grades = set(self.settings.target_grades or range(self.algebra.n + 1))

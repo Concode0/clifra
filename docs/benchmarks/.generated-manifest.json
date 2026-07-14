@@ -1,0 +1,23 @@
+[
+  "artifacts/comparison.json",
+  "artifacts/config.json",
+  "artifacts/cumulative.csv",
+  "artifacts/cumulative.jsonl",
+  "artifacts/events.csv",
+  "artifacts/events.jsonl",
+  "artifacts/measurements.csv",
+  "artifacts/measurements.jsonl",
+  "artifacts/metadata.json",
+  "artifacts/profiles.json",
+  "artifacts/summary.json",
+  "graphs/compact-exp-actions.png",
+  "graphs/compact-exponential-routes.png",
+  "graphs/compact-linear-metric.png",
+  "graphs/compact-products.png",
+  "graphs/cumulative-relative-error.png",
+  "graphs/full-actions.png",
+  "graphs/full-linear-metric.png",
+  "graphs/full-products.png",
+  "graphs/startup-costs.png",
+  "index.md"
+]

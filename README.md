@@ -8,9 +8,10 @@
 
 Layout-first Clifford algebra tools for PyTorch.
 
-Clifra exposes one planner-owned algebra host. Full-lane tensors and compact
-grade layouts share the same algebra, while planning builds static executors for
-products, metrics, exponentials, actions, layers, and analysis utilities.
+A clifra algebra host owns its layouts, policies, and operation plans. Full-lane
+tensors and compact grade layouts share that algebra, while planning builds
+static executors for products, metrics, exponentials, and actions. Layers and
+other library components reuse the same operations.
 
 ## Install
 
@@ -56,29 +57,15 @@ uv run ruff check .
 uv run --group docs mkdocs build
 ```
 
-## Docs
-
-> Please check [documentation milestone and status](https://github.com/Concode0/clifra/issues/21)
-
-The docs are intentionally small: API pages come from live docstrings, and
-`docs/core-design.md` keeps the process snippets.
-
-See `docs/first-guide.md`, If you are a little confused or think you need
-an intuitive understanding, please refer to the first guide and move on to the `docs/core-design.md` or `docs/api/`.
+See the [documentation](https://concode0.github.io/clifra/) for tutorials,
+explanations, benchmarks, and the generated API reference.
 
 ## Research
 
-`research/continuum_solver` is a research engine built on clifra for fitting
-stable, fast continuum deformations. It uses diffeomorphism-style coordinate
-morphing over clifra charts and invertible bivector fields, inheriting clifra's
-planned algebra execution.
-
-The strict PGA metamaterial example in
-`research/continuum_solver/examples/metamaterial_design.py` demonstrates a
-difficult auxetic-to-positive phase target with reversible deformation paths.
-The recorded validation run reached the target loss (`0.001632 < 0.01`) with
-no validation failures, zero folded cells, and extremely small inverse-path
-error (`inverse_rmse=4.10e-16`, `inverse_max_abs=2.00e-15`)
+`research/continuum_solver` is one repository-local system built on clifra. It
+uses clifra charts, bivector fields, and planned algebra operations to study
+continuum deformations. It is an example of the library's use as research
+infrastructure, not a definition of clifra's scope.
 
 ## Contribution
 
@@ -107,12 +94,19 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## References
 
-### RotorGadget Layer Architectures
-This project implements the equivariant layer architectures derived from the irreducible decomposition of Clifford multivectors. 
-* *RotorGadget* implementations found in `clifra/layers/primitives/rotor_gadget.py` are based on:
-  - Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers from Irreducibles." *arXiv:2507.11688*.
+### RotorGadget Background
 
-### Optimization on Manifolds
-The core solvers and adaptive optimizers in `clifra/optimizers/` leverage Riemannian optimization techniques to handle the non-linear constraints of multivector rotors and versor transformations:
-  - Absil, P.-A., Mahony, R., & Sepulchre, R. (2008). *Optimization Algorithms on Matrix Manifolds*. Princeton University Press.
-  - Boumal, N. (2023). *An Introduction to Optimization on Smooth Manifolds*. Cambridge University Press.
+The following paper is background reference material for `RotorGadget`. It is
+not maintained as a normative implementation specification, and its inclusion
+does not claim strict reproduction or conformance:
+
+- Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers from Irreducibles." *arXiv:2507.11688*.
+
+### Optimization Background
+
+The tag-aware optimizers in `clifra/optimizers/` dispatch `spin`, `sphere`, and
+`euclidean` post-update handling. The following books are background references,
+not normative specifications for those implementations:
+
+- Absil, P.-A., Mahony, R., & Sepulchre, R. (2008). *Optimization Algorithms on Matrix Manifolds*. Princeton University Press.
+- Boumal, N. (2023). *An Introduction to Optimization on Smooth Manifolds*. Cambridge University Press.

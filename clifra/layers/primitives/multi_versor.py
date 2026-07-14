@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Multi-versor superposition layers with universal grade parameterization.
+"""Multi-versor superposition layers for grade-1 and grade-2 parameters.
 
 Implements versor-based transformations using weighted sums of sandwich products.
 """
@@ -22,11 +22,11 @@ from ._utils import (
 
 
 class MultiVersorLayer(CliffordModule):
-    """Multi-versor layer with weighted superposition: x' = sum_k w_k hat(V_k) x V_k^{-1}.
+    """Weighted superposition of planned reflection or rotor actions.
 
-    For grade=2 (default): each V_k = exp(-B_k/2) is a rotor, reducing to
-    x' = sum_k w_k R_k x R~_k.
-    For grade=k: each V_k is a grade-k versor applied via the general versor product.
+    With ``grade=2`` (default), each parameter is exponentiated to a rotor.
+    With ``grade=1``, each parameter defines a reflection. These are the
+    currently supported parameter grades.
 
     Bivector exponentials are planned by the core exp executor family:
     closed formulas, matrix exp, or spectral-local execution for eligible
@@ -36,7 +36,8 @@ class MultiVersorLayer(CliffordModule):
         channels (int): Input features.
         num_versors (int): Number of overlapping versors.
         grade (int): Grade of the learnable parameters. Default 2 (rotors).
-        grade_weights (nn.Parameter): Grade-k coefficients [num_versors, num_grade_elements].
+        grade_weights (nn.Parameter): Parameter coefficients with shape
+            ``[num_versors, num_grade_elements]``.
         weights (nn.Parameter): Mixing weights [channels, num_versors].
     """
 
@@ -58,9 +59,9 @@ class MultiVersorLayer(CliffordModule):
             algebra: Planner-capable algebra host.
             channels (int): Input features.
             num_versors (int): Number of parallel versor heads.
-            grade (int): Grade of the learnable parameter.
-                grade=2 (default): bivectors → rotors via exp(-B/2), Spin group.
-                grade=k: general grade-k versor product.
+            grade (int): Grade of the learnable parameter. The supported values
+                are ``1`` for vector reflections and ``2`` for bivector rotor
+                actions. Defaults to ``2``.
         """
         super().__init__(algebra)
         self.channels = require_positive_int(channels, "channels")

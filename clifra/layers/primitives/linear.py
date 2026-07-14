@@ -2,10 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Geometric Algebra Linear Layers.
-
-Supports traditional matrix-based mixing and parameter-efficient rotor-based backends.
-"""
+"""Clifford-valued channel-mixing layers."""
 
 from typing import Literal
 
@@ -22,13 +19,10 @@ from ._utils import require_choice, require_positive_int
 class CliffordLinear(CliffordModule):
     """Fully connected layer with optional rotor-based backend.
 
-    Can use either:
-    - Traditional scalar weight matrix (default)
-    - Rotor-based transformation (parameter efficient via RotorGadget)
-
-    The traditional backend uses O(in_channels x out_channels) parameters,
-    while the rotor backend uses O(num_rotor_pairs x n(n-1)/2) parameters
-    where n is the number of basis vectors.
+    The traditional backend uses a scalar channel-mixing matrix and a
+    multivector bias. The rotor backend delegates to :class:`RotorGadget`,
+    whose total parameter count depends on the rotor-pair count, aggregation
+    mode, and bias.
 
     Attributes:
         in_channels (int): Input features.

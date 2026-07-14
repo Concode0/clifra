@@ -1,13 +1,12 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rotor-based linear transformation layer (Generalized Rotor Gadget).
+"""Rotor-based channel transformation layer.
 
-Implements Section 4.2 from Pence et al. (2025), "Composing Linear Layers
-from Irreducibles." Replaces standard linear layers with parameter-efficient
-rotor-sandwich transformations.
+The cited paper is background reference material for the RotorGadget design;
+it is not a normative specification for this implementation.
 
-Reference:
+Background reference:
     Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers
     from Irreducibles." arXiv:2507.11688v1, Section 4.2, Equation 6
 """
@@ -36,16 +35,14 @@ ROTOR_GADGET_INIT_STD = 0.01
 class RotorGadget(CliffordModule):
     """Rotor-based linear transformation (Generalized Rotor Gadget).
 
-    Replaces standard linear layers with parameter-efficient rotor-sandwich
-    transformations. Instead of using O(in_channels x out_channels) parameters,
-    this uses O(num_rotor_pairs x n(n-1)/2) parameters where n is the number
-    of basis vectors in the Clifford algebra.
+    Applies paired rotor-sandwich transformations and then aggregates their
+    channel outputs. Its bivector-coordinate term has
+    ``2 * num_rotor_pairs * n * (n - 1) / 2`` parameters. Learned aggregation
+    and optional bias add parameters when enabled.
 
     Architecture:
         Partition input channels into blocks, apply rotor sandwiches to each
         pair, then aggregate the results to output channels.
-
-    The transformation is: psi(x) = r.x.s.H where r, s are rotors (bivector exponentials).
 
     Attributes:
         algebra: Planner-capable algebra host

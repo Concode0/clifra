@@ -16,9 +16,10 @@ from ._utils import require_positive_int
 
 
 class BladeSelector(CliffordModule):
-    """Blade Selector. Filters insignificant components.
+    """Apply a learned gate to each coefficient lane.
 
-    Learns to weigh geometric grades, suppressing less relevant ones.
+    Gates are learned independently for every channel and lane. Lanes from the
+    same grade do not share a gate.
 
     Attributes:
         weights (nn.Parameter): Gate logits [Channels, Dim].
@@ -46,7 +47,7 @@ class BladeSelector(CliffordModule):
         nn.init.zeros_(self.weights)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Gates the grades.
+        """Gate coefficient lanes.
 
         The gate is ``2 * sigmoid(weights)`` so zero logits preserve the input.
 
@@ -67,10 +68,10 @@ class BladeSelector(CliffordModule):
 
 
 class GeometricNeutralizer(CliffordModule):
-    """Geometric Neutralization. Orthogonalizes Grade-0 against Grade-2 in real-time.
+    """Residualize grade-0 coefficients against grade-2 coefficients.
 
-    Removes the component of the Grade-0 (scalar) signal that is parallel to the
-    Grade-2 (bivector) subspace.
+    Fits a regularized linear projection from centered grade-2 coefficients to
+    grade-0 coefficients and subtracts that projection from grade 0.
 
     Uses Exponential Moving Average (EMA) to maintain stable covariance statistics
     across batches, ensuring batch-independent behavior during inference.
@@ -125,7 +126,7 @@ class GeometricNeutralizer(CliffordModule):
         self.register_buffer("running_cov_bs", torch.zeros(self.channels, self.d2, self.d0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Neutralizes the multivector signal using EMA statistics.
+        """Residualize grade 0 using batch or EMA covariance statistics.
 
         Args:
             x (torch.Tensor): Input [Batch, Channels, Dim].

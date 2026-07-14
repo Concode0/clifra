@@ -1,22 +1,21 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optimizers with retraction dispatch for tagged parameters.
+"""SGD and Adam variants with post-update handling for tagged parameters.
 
-Implements optimization on product manifolds Spin(p,q) x S^{n-1} x R^d
-using per-parameter retraction dispatch.
-
-The optimizer recognizes exactly three simplified tags via ``p._manifold``:
-    - ``'spin'``: Lie algebra bivectors — retracted via bivector norm clipping
-      (the forward-pass exp map completes the Riemannian update on Spin(n))
-    - ``'sphere'``: Unit vectors on S^{n-1} — retracted via L2 normalization
+The ``from_model()`` constructors recognize three simplified tags via
+``p._manifold``:
+    - ``'spin'``: bivector coordinates, optionally clipped by coefficient norm
+    - ``'sphere'``: vectors normalized after each update
     - ``'euclidean'`` (or untagged): Standard unconstrained parameters
 
-Use ``from_model()`` to auto-group parameters by tag. Parameters without a tag
-are treated as Euclidean. These labels are private optimizer metadata, not a
-general classification system for clifra's geometric objects.
+They convert those tags into optimizer parameter groups. Parameters without a
+tag are treated as Euclidean. Parameters passed directly to an optimizer are
+also Euclidean unless their parameter group declares ``manifold``. These labels
+are private optimizer metadata, not a general classification system for
+clifra's geometric objects.
 
-References:
+Background references:
     - Absil et al. "Optimization Algorithms on Matrix Manifolds" (2008)
     - Boumal "An Introduction to Optimization on Smooth Manifolds" (2023)
 """
@@ -95,7 +94,7 @@ def make_riemannian_optimizer(
     optimizer: str = "adam",
     **kwargs,
 ) -> Optimizer:
-    """Create a manifold-aware optimizer from a tagged model.
+    """Create a tag-aware optimizer from a model.
 
     Args:
         model: Model whose parameters may be tagged with ``_manifold``.
@@ -169,39 +168,29 @@ def _retract_parameter_(values: torch.Tensor, *, manifold: str, algebra, max_biv
 
 
 class ExponentialSGD(Optimizer):
-    """SGD with exponential map retraction for rotor parameters.
+    """SGD followed by tag-specific post-update handling.
 
-    Instead of Euclidean update: theta <- theta - lr * grad_theta
-    Uses manifold update: R <- R . exp(lr * grad_B)
-
-    where grad_B is the gradient in the Lie algebra (bivector space).
-
-    Since clifra parameterizes rotors via bivectors (the Lie algebra),
-    Euclidean gradient updates in bivector space ARE geometrically meaningful.
-    The exponential map in the forward pass (R = exp(-B/2)) completes the
-    Riemannian update on the Spin(n) manifold.
+    The optimizer applies an ordinary SGD update to each stored parameter.
+    According to each parameter group's ``manifold`` value, it then clips
+    ``spin`` parameters by coefficient norm, normalizes
+    ``sphere`` parameters, and leaves ``euclidean`` parameters unchanged.
+    For layers parameterized by bivectors, the layer—not this optimizer—uses
+    the updated coordinates to construct a rotor during its forward pass.
 
     Args:
         params (Iterable): Iterable of parameters to optimize
         lr: Learning rate
         momentum: Momentum factor (default: 0)
-        algebra: Layout-first algebra context for exponential map
-        max_bivector_norm: Maximum allowed bivector norm for numerical stability.
-            If not None, clips bivector norms after each update. (default: 10.0)
+        algebra: Algebra context used for signature-aware sphere normalization.
+        max_bivector_norm: Maximum Euclidean coefficient norm for ``spin``
+            parameter groups. ``None`` disables clipping. Defaults to ``10.0``.
 
     Example:
         >>> algebra = AlgebraContext(p=3, q=0, device='cpu')
         >>> model = VersorLayer(algebra, channels=4)
-        >>> optimizer = ExponentialSGD(
-        ...     model.parameters(), lr=0.01, algebra=algebra
+        >>> optimizer = ExponentialSGD.from_model(
+        ...     model, lr=0.01, algebra=algebra
         ... )
-        >>>
-        >>> # Training loop
-        >>> for data in dataloader:
-        ...     optimizer.zero_grad()
-        ...     loss = criterion(model(data), target)
-        ...     loss.backward()
-        ...     optimizer.step()  # Uses exponential map!
     """
 
     def __init__(
@@ -251,7 +240,7 @@ class ExponentialSGD(Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None) -> Optional[torch.Tensor]:
-        """Performs a single optimization step using exponential retraction.
+        """Perform one SGD step and dispatch post-update handling by tag.
 
         Args:
             closure (Callable, optional): A closure that reevaluates the model and returns the loss.
@@ -299,23 +288,24 @@ class ExponentialSGD(Optimizer):
 
 
 class RiemannianAdam(Optimizer):
-    """Adam optimizer with exponential map retraction for rotor parameters.
+    """Adam followed by tag-specific post-update handling.
 
-    Implements Adam momentum in the Lie algebra (bivector space) with
-    exponential map updates on the manifold.
-
-    Since clifra parameterizes rotors via bivectors (the Lie algebra), Adam
-    momentum naturally lives in the tangent space. The exponential map in the
-    forward pass (R = exp(-B/2)) completes the Riemannian update on Spin(n).
+    Adam moments and updates are computed in the stored parameter coordinates.
+    According to each parameter group's ``manifold`` value, the optimizer then
+    clips ``spin`` parameters by coefficient norm,
+    normalizes ``sphere`` parameters, and leaves ``euclidean`` parameters
+    unchanged. A layer may subsequently exponentiate updated bivector
+    coordinates in its forward pass; that exponential is not part of
+    :meth:`step`.
 
     Args:
         params (Iterable): Iterable of parameters to optimize
         lr: Learning rate (default: 1e-3)
         betas: Coefficients for computing running averages (default: (0.9, 0.999))
         eps: Term added for numerical stability (default: 1e-8)
-        algebra: Layout-first algebra context for exponential map
-        max_bivector_norm: Maximum allowed bivector norm for numerical stability.
-            If not None, clips bivector norms after each update. (default: 10.0)
+        algebra: Algebra context used for signature-aware sphere normalization.
+        max_bivector_norm: Maximum Euclidean coefficient norm for ``spin``
+            parameter groups. ``None`` disables clipping. Defaults to ``10.0``.
     """
 
     def __init__(
