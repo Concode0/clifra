@@ -1,63 +1,62 @@
 {
   "raw": {
-    "z": 0.032818734645843506,
-    "curvature": 0.10627681016921997
+    "z": 0.032819,
+    "curvature": 0.106277
   },
-  "unbent": {
-    "z": 0.0006016111583448946,
-    "curvature": 0.03797858953475952,
-    "selector_sparsity": 0.3278277516365051,
-    "weighted_selector_sparsity": 0.00032782775163650514
+  "projected": {
+    "z": 0.000601,
+    "curvature": 0.039095,
+    "selector_deviation": 0.327933
   },
+  "vector_gates": [
+    1.0,
+    1.0,
+    0.13528650999069214
+  ],
   "history_first": {
     "step": 0,
-    "loss": 0.03321905434131622,
-    "z": 0.03321905434131622,
-    "selector_sparsity": 0.0,
-    "weighted_selector_sparsity": 0.0
+    "loss": 0.033047039061784744,
+    "z": 0.033047039061784744,
+    "selector_deviation": 0.0,
+    "weighted_selector_deviation": 0.0
   },
   "history_last": {
     "step": 239,
-    "loss": 0.0009335174690932035,
-    "z": 0.000606103683821857,
-    "selector_sparsity": 0.32741376757621765,
-    "weighted_selector_sparsity": 0.00032741378527134657
+    "loss": 0.000934284646064043,
+    "z": 0.000606764224357903,
+    "selector_deviation": 0.3275204300880432,
+    "weighted_selector_deviation": 0.0003275204508099705
   },
   "noise": [
     {
       "noise": 0.0,
-      "z": 0.0006016111583448946,
-      "curvature": 0.03797858953475952,
-      "selector_sparsity": 0.3278277516365051,
-      "weighted_selector_sparsity": 0.00032782775163650514
+      "z": 0.000601,
+      "curvature": 0.039095,
+      "selector_deviation": 0.327933
     },
     {
       "noise": 0.01,
-      "z": 0.0006027439958415926,
-      "curvature": 0.025275349617004395,
-      "selector_sparsity": 0.3278277516365051,
-      "weighted_selector_sparsity": 0.00032782775163650514
+      "z": 0.000604,
+      "curvature": 0.029121,
+      "selector_deviation": 0.327933
     },
     {
       "noise": 0.05,
-      "z": 0.0006472293171100318,
-      "curvature": 0.11037170886993408,
-      "selector_sparsity": 0.3278277516365051,
-      "weighted_selector_sparsity": 0.00032782775163650514
+      "z": 0.000644,
+      "curvature": 0.106699,
+      "selector_deviation": 0.327933
     },
     {
       "noise": 0.1,
-      "z": 0.0007611940382048488,
-      "curvature": 0.15227890014648438,
-      "selector_sparsity": 0.3278277516365051,
-      "weighted_selector_sparsity": 0.00032782775163650514
+      "z": 0.000779,
+      "curvature": 0.175906,
+      "selector_deviation": 0.327933
     },
     {
       "noise": 0.2,
-      "z": 0.0012554393615573645,
-      "curvature": 0.18613392114639282,
-      "selector_sparsity": 0.3278277516365051,
-      "weighted_selector_sparsity": 0.00032782775163650514
+      "z": 0.001331,
+      "curvature": 0.262139,
+      "selector_deviation": 0.327933
     }
   ],
   "analysis_metadata": {
