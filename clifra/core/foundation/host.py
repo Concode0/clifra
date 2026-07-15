@@ -694,27 +694,27 @@ class AlgebraHostMixin:
         output_layout: Optional[GradeLayout] = None,
         return_layout: bool = False,
     ) -> torch.Tensor:
-        """Project ``values`` onto a blade subspace through planned products."""
+        """Project ``values`` onto a blade subspace through left contraction."""
         input_layout = self._declared_layout(input_grades, input_layout)
         blade_layout = self._declared_layout(blade_grades, blade_layout)
         output_layout = self._optional_layout(output_grades, output_layout) or input_layout
         active_values = self._compact_values_for_layout(values, input_layout, "blade_project values")
         active_blade = self._compact_values_for_layout(blade, blade_layout, "blade_project blade")
-        symmetric_layout = self.layout(
-            expand_output_grades(input_layout.grades, blade_layout.grades, self.n, op="symmetric_product")
+        contraction_layout = self.layout(
+            expand_output_grades(input_layout.grades, blade_layout.grades, self.n, op="left_contraction")
         )
-        symmetric_component = self.symmetric_product(
+        contracted = self.left_contraction(
             active_values,
             active_blade,
             left_layout=input_layout,
             right_layout=blade_layout,
-            output_layout=symmetric_layout,
+            output_layout=contraction_layout,
         )
         blade_inv = self.blade_inverse(active_blade, input_layout=blade_layout)
         output = self.geometric_product(
-            symmetric_component,
+            contracted,
             blade_inv,
-            left_layout=symmetric_layout,
+            left_layout=contraction_layout,
             right_layout=blade_layout,
             output_layout=output_layout,
         )
