@@ -128,6 +128,7 @@ def run_suite(
                                                 callable_target,
                                                 prepared.args,
                                                 device=device,
+                                                warmup_calls=config.timing.backward_warmup_calls,
                                                 samples=config.timing.backward_samples,
                                             )
                                         )
@@ -309,8 +310,10 @@ def add_throughput(row: dict[str, Any], output: torch.Tensor, *, batch: int) -> 
         return
     row["items_per_second"] = batch / seconds
     row["coefficients_per_second"] = int(output.numel()) / seconds
-    row["interactions_per_second"] = batch * int(row.get("pair_count", 0)) / seconds
-    row.setdefault("output_lanes", int(output.shape[-1]) if output.ndim else 1)
+    output_lanes = int(row.setdefault("output_lanes", int(output.shape[-1]) if output.ndim else 1))
+    work_items = int(output.numel()) // max(output_lanes, 1)
+    row["work_items_per_second"] = work_items / seconds
+    row["interactions_per_second"] = work_items * int(row.get("pair_count", 0)) / seconds
 
 
 def profile_case(

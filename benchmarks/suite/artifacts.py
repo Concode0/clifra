@@ -34,7 +34,7 @@ def create_run_directory(config: BenchmarkConfig) -> Path:
 
 
 def environment_metadata(config: BenchmarkConfig, run_dir: Path) -> dict[str, Any]:
-    return {
+    metadata = {
         "schema_version": config.schema_version,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "run_id": run_dir.name,
@@ -45,8 +45,23 @@ def environment_metadata(config: BenchmarkConfig, run_dir: Path) -> dict[str, An
         "torch_version": torch.__version__,
         "mps_available": bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available()),
         "cuda_available": torch.cuda.is_available(),
+        "cuda_version": torch.version.cuda,
+        "cudnn_version": torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else None,
         "torch_threads": torch.get_num_threads(),
     }
+    if torch.cuda.is_available():
+        metadata["cuda_devices"] = [
+            {
+                "index": index,
+                "name": torch.cuda.get_device_name(index),
+                "compute_capability": list(torch.cuda.get_device_capability(index)),
+                "total_memory_bytes": int(torch.cuda.get_device_properties(index).total_memory),
+            }
+            for index in range(torch.cuda.device_count())
+        ]
+    else:
+        metadata["cuda_devices"] = []
+    return metadata
 
 
 def write_run_artifacts(
@@ -346,37 +361,41 @@ def _startup_cost_graph(plt, path: Path, rows: list[dict[str, Any]]) -> list[Pat
 
 
 def _compiler_speedup_graph(plt, path: Path, rows: list[dict[str, Any]]) -> list[Path]:
-    if "inductor" not in _compile_modes(rows):
+    compiled_modes = [mode for mode in _compile_modes(rows) if mode != "eager"]
+    if not compiled_modes:
         return []
-    compiled = "inductor"
     keys = ("sweep_id", "case_id", "signature", "device", "dtype", "batch")
     indexed: dict[tuple[Any, ...], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in rows:
         indexed[tuple(row.get(key) for key in keys)][str(row.get("compile_mode"))] = row
-    grouped: dict[str, list[float]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[float]] = defaultdict(list)
     for pair in indexed.values():
         eager = pair.get("eager")
-        target = pair.get(compiled)
-        if eager is None or target is None:
+        if eager is None:
             continue
-        eager_ms = _number(eager.get("forward_median_ms"))
-        target_ms = _number(target.get("forward_median_ms"))
-        if eager_ms is not None and target_ms is not None and target_ms > 0.0:
-            grouped[_operation_group(eager)].append(eager_ms / target_ms)
+        for compiled in compiled_modes:
+            target = pair.get(compiled)
+            if target is None:
+                continue
+            eager_ms = _number(eager.get("forward_median_ms"))
+            target_ms = _number(target.get("forward_median_ms"))
+            if eager_ms is not None and target_ms is not None and target_ms > 0.0:
+                grouped[(compiled, _operation_group(eager))].append(eager_ms / target_ms)
     if not grouped:
         return []
     labels = sorted(grouped)
+    display_labels = [f"{_compiler_label(mode)}\n{group}" for mode, group in labels]
     figure, axis = plt.subplots(figsize=(10.5, 4.6))
     axis.boxplot(
         [grouped[label] for label in labels],
-        tick_labels=labels,
+        tick_labels=display_labels,
         showfliers=False,
         medianprops={"color": "#d62728", "linewidth": 1.5},
     )
     axis.axhline(1.0, color="black", linewidth=1, linestyle="--")
     axis.set_yscale("log")
-    axis.set_ylabel(f"Eager / {_compiler_label(compiled)} forward latency")
-    axis.set_title(f"{_compiler_label(compiled)} steady-state speedup\nall measured signatures, dtypes, and batches")
+    axis.set_ylabel("Eager / compiled forward latency")
+    axis.set_title("Compiled steady-state speedup\nall measured signatures, dtypes, and batches")
     axis.tick_params(axis="x", rotation=20)
     axis.grid(True, axis="y", alpha=0.25)
     figure.tight_layout()
@@ -470,12 +489,15 @@ def _compile_modes(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def _display_compile_modes(rows: list[dict[str, Any]]) -> list[str]:
-    available = set(_compile_modes(rows))
-    return [mode for mode in ("eager", "inductor") if mode in available]
+    return _compile_modes(rows)
 
 
 def _compiler_label(mode: str) -> str:
-    return {"eager": "Eager", "inductor": "Inductor full graph"}.get(mode, mode.replace("_", " ").title())
+    return {
+        "eager": "Eager",
+        "inductor": "Inductor full graph",
+        "reduce_overhead": "Inductor reduce-overhead",
+    }.get(mode, mode.replace("_", " ").title())
 
 
 def _case_label(case_id: str) -> str:
@@ -673,14 +695,15 @@ def _result_audit(measurements: list[dict[str, Any]], cumulative: list[dict[str,
 
 
 def _compiler_audit(rows: list[dict[str, Any]]) -> list[str]:
-    if "inductor" not in _compile_modes(rows):
+    compiled_modes = [mode for mode in _compile_modes(rows) if mode != "eager"]
+    if not compiled_modes:
         return []
     keys = ("sweep_id", "case_id", "signature", "device", "dtype", "batch")
     indexed: dict[tuple[Any, ...], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in rows:
         indexed[tuple(row.get(key) for key in keys)][str(row.get("compile_mode"))] = row
     lines: list[str] = []
-    for mode in ("inductor",):
+    for mode in compiled_modes:
         speedups: list[float] = []
         for pair in indexed.values():
             eager = pair.get("eager")

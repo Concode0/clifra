@@ -20,7 +20,7 @@ from .models import (
 )
 
 VALID_FAMILIES = {"euclidean", "mixed", "degenerate"}
-VALID_MODES = {"eager", "inductor"}
+VALID_MODES = {"eager", "inductor", "reduce_overhead"}
 VALID_PRESETS = {"full", "compact", "custom"}
 VALID_KINDS = {
     "product",
@@ -51,9 +51,14 @@ def load_config(path: Path) -> BenchmarkConfig:
         raise ValueError("every sweep must have a unique id")
 
     timing_raw = _mapping(raw.get("timing"), "timing")
+    warmup_calls = _nonnegative_int(timing_raw.get("warmup_calls"), "timing.warmup_calls")
     timing = TimingConfig(
-        warmup_calls=_nonnegative_int(timing_raw.get("warmup_calls"), "timing.warmup_calls"),
+        warmup_calls=warmup_calls,
         samples=_positive_int(timing_raw.get("samples"), "timing.samples"),
+        backward_warmup_calls=_nonnegative_int(
+            timing_raw.get("backward_warmup_calls", warmup_calls),
+            "timing.backward_warmup_calls",
+        ),
         backward_samples=_positive_int(timing_raw.get("backward_samples"), "timing.backward_samples"),
     )
     resources_raw = _mapping(raw.get("resources"), "resources")

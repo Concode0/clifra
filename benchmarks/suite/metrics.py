@@ -36,7 +36,9 @@ def compile_callable(module: Callable[..., torch.Tensor] | nn.Module, mode: str)
     if not hasattr(torch, "compile"):
         raise RuntimeError("torch.compile is unavailable")
     if mode == "inductor":
-        return torch.compile(module, fullgraph=True)
+        return torch.compile(module, backend="inductor", fullgraph=True)
+    if mode == "reduce_overhead":
+        return torch.compile(module, backend="inductor", mode="reduce-overhead", fullgraph=True)
     raise ValueError(f"unsupported compile mode {mode!r}")
 
 
@@ -53,12 +55,16 @@ def measure_forward(
     if device.startswith("cuda"):
         torch.cuda.reset_peak_memory_stats(device)
     output, cold_ms = timed_call(lambda: fn(*args), device=device)
+    cold_memory = device_memory_fields(device)
     for _ in range(warmup_calls):
         fn(*args)
     synchronize(device)
+    if device.startswith("cuda"):
+        torch.cuda.reset_peak_memory_stats(device)
     sample_values = [timed_call(lambda: fn(*args), device=device)[1] for _ in range(samples)]
     return output, {
         "cold_forward_ms": cold_ms,
+        "cold_device_peak_bytes": cold_memory["device_peak_bytes"],
         **distribution("forward", sample_values),
         **device_memory_fields(device),
     }
@@ -69,9 +75,31 @@ def measure_backward(
     args: tuple[torch.Tensor, ...],
     *,
     device: str,
+    warmup_calls: int,
     samples: int,
 ) -> dict[str, Any]:
     """Measure isolated backward and complete forward/backward calls."""
+
+    cold_args = differentiable_args(args)
+    cold_output = fn(*cold_args)
+    weights = scalar_loss_weights(cold_output)
+    cold_loss = scalar_loss(cold_output, weights=weights)
+    _, cold_backward_ms = timed_call(cold_loss.backward, device=device)
+
+    cold_complete_args = differentiable_args(args)
+
+    def cold_complete_step() -> torch.Tensor:
+        output = fn(*cold_complete_args)
+        loss = scalar_loss(output, weights=weights)
+        loss.backward()
+        return loss
+
+    _, cold_complete_ms = timed_call(cold_complete_step, device=device)
+    for _ in range(warmup_calls):
+        warmup_args = differentiable_args(args)
+        warmup_output = fn(*warmup_args)
+        scalar_loss(warmup_output, weights=weights).backward()
+    synchronize(device)
 
     backward_values: list[float] = []
     complete_values: list[float] = []
@@ -79,7 +107,7 @@ def measure_backward(
     for _ in range(samples):
         backward_args = differentiable_args(args)
         output = fn(*backward_args)
-        loss = scalar_loss(output)
+        loss = scalar_loss(output, weights=weights)
         _, elapsed = timed_call(loss.backward, device=device)
         backward_values.append(elapsed)
         profile_grads = tuple(arg.grad for arg in backward_args if arg.requires_grad and arg.grad is not None)
@@ -88,13 +116,15 @@ def measure_backward(
 
         def complete_step() -> torch.Tensor:
             complete_output = fn(*complete_args)
-            complete_loss = scalar_loss(complete_output)
+            complete_loss = scalar_loss(complete_output, weights=weights)
             complete_loss.backward()
             return complete_loss
 
         _, elapsed = timed_call(complete_step, device=device)
         complete_values.append(elapsed)
     return {
+        "cold_backward_ms": cold_backward_ms,
+        "cold_forward_backward_ms": cold_complete_ms,
         **distribution("backward", backward_values),
         **distribution("forward_backward", complete_values),
         **aggregate_tensor_stats("gradient", profile_grads),
@@ -111,13 +141,18 @@ def differentiable_args(args: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, .
     return tuple(cloned)
 
 
-def scalar_loss(output: torch.Tensor) -> torch.Tensor:
+def scalar_loss(output: torch.Tensor, *, weights: torch.Tensor | None = None) -> torch.Tensor:
     if not isinstance(output, torch.Tensor):
         raise TypeError(f"benchmark callable must return a Tensor, got {type(output)!r}")
-    weights = torch.linspace(0.5, 1.5, output.numel(), device=output.device, dtype=output.real.dtype).reshape(
-        output.shape
-    )
+    if weights is None:
+        weights = scalar_loss_weights(output)
     return (output.real * weights).mean()
+
+
+def scalar_loss_weights(output: torch.Tensor) -> torch.Tensor:
+    """Build a stable, nonuniform output seed once for repeated backward timing."""
+
+    return torch.linspace(0.5, 1.5, output.numel(), device=output.device, dtype=output.real.dtype).reshape(output.shape)
 
 
 def distribution(prefix: str, values: list[float]) -> dict[str, Any]:

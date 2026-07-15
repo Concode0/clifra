@@ -50,6 +50,7 @@ class SweepConfig:
 class TimingConfig:
     warmup_calls: int
     samples: int
+    backward_warmup_calls: int
     backward_samples: int
 
 
