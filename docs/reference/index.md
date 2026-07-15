@@ -136,9 +136,9 @@ not statistical inference or proofs of causal, metric, or symmetry structure.
         - SamplingConfig
         - AnalysisConfig
         - DimensionResult
-        - SignatureResult
+        - SignatureEstimate
         - SpectralResult
-        - SymmetryResult
+        - TransformationDiagnosticsResult
         - CommutatorResult
         - AnalysisReport
 

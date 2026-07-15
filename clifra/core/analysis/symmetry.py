@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Coefficient-energy and commutator diagnostics for multivector data.
+"""Operational transformation diagnostics for multivector data.
 
 Computes low-energy grade-1 directions, odd-grade energy fraction, reflection
 scores, and near-zero commutator modes.
@@ -17,7 +17,7 @@ from clifra.core.foundation.module import AlgebraLike
 from clifra.core.foundation.numerics import eps_like
 from clifra.core.runtime.tensors import LaneStorage
 
-from ._types import CONSTANTS, CommutatorResult, SymmetryResult
+from ._types import CONSTANTS, CommutatorResult, TransformationDiagnosticsResult
 from ._utils import (
     full_grades,
     full_layout_for_analysis,
@@ -27,29 +27,33 @@ from ._utils import (
 from .policy import feasibility_record
 
 
-class SymmetryDetector:
-    """Compute coefficient-energy, reflection, and commutator diagnostics.
+class TransformationDiagnosticsAnalyzer:
+    """Compute experimental coefficient and transformation diagnostics.
+
+    The methods report explicitly defined energy, distribution-distance, and
+    commutator statistics. They do not prove metric nullity or invariance under
+    a continuous symmetry group.
 
     Args:
         algebra: Layout-first algebra host.
-        null_threshold: Normalized grade-1 coefficient-energy threshold below
+        low_energy_threshold: Normalized grade-1 coefficient-energy threshold below
             which a basis direction is reported.
     """
 
     def __init__(
         self,
         algebra: AlgebraLike,
-        null_threshold: float = CONSTANTS.symmetry_null_threshold,
+        low_energy_threshold: float = CONSTANTS.low_energy_vector_threshold,
     ):
         self.algebra = algebra
-        self.null_threshold = null_threshold
+        self.low_energy_threshold = low_energy_threshold
 
     def analyze(
         self,
         mv_data: torch.Tensor,
         commutator_result: Optional[CommutatorResult] = None,
-    ) -> SymmetryResult:
-        """Full symmetry analysis.
+    ) -> TransformationDiagnosticsResult:
+        """Compute the complete operational transformation report.
 
         Args:
             mv_data: Multivector data.  Accepted shapes:
@@ -59,41 +63,41 @@ class SymmetryDetector:
                   averaged for scalar-valued analyses).
 
             commutator_result: Pre-computed commutator results for
-                continuous-symmetry refinement.
+                optional adjoint-mode counting.
 
         Returns:
-            :class:`SymmetryResult`.
+            :class:`TransformationDiagnosticsResult`.
         """
         if mv_data.ndim == 3:
             flat = mv_data.mean(dim=1)
         else:
             flat = mv_data  # [N, dim]
 
-        null_dirs, null_scores = self.detect_null_directions(flat)
-        inv_sym = self.detect_involution_symmetry(flat)
-        refl_syms, reflection_skipped = self._reflection_symmetries_with_skips(flat)
-        cont_dim, continuous_skipped = self._continuous_symmetries_with_skips(
+        low_energy_directions, normalized_vector_energy = self.low_energy_vector_directions(flat)
+        odd_fraction = self.odd_grade_energy_fraction(flat)
+        reflection_scores, reflection_score_skipped = self._basis_reflection_scores_with_skips(flat)
+        near_commuting_count, commuting_skipped = self._near_commuting_modes_with_skips(
             flat, commutator_result=commutator_result
         )
         skipped = {}
-        skipped.update(reflection_skipped)
-        skipped.update(continuous_skipped)
+        skipped.update(reflection_score_skipped)
+        skipped.update(commuting_skipped)
 
-        return SymmetryResult(
-            null_directions=null_dirs,
-            null_scores=null_scores,
-            involution_symmetry=inv_sym,
-            reflection_symmetries=refl_syms,
-            continuous_symmetry_dim=cont_dim,
+        return TransformationDiagnosticsResult(
+            low_energy_vector_directions=low_energy_directions,
+            normalized_vector_energy=normalized_vector_energy,
+            odd_grade_energy_fraction=odd_fraction,
+            basis_reflection_scores=reflection_scores,
+            near_commuting_mode_count=near_commuting_count,
             skipped=skipped,
         )
 
-    def detect_null_directions(self, mv_data: torch.Tensor) -> Tuple[List[int], torch.Tensor]:
-        """Detect low-energy grade-1 basis directions.
+    def low_energy_vector_directions(self, mv_data: torch.Tensor) -> Tuple[List[int], torch.Tensor]:
+        """Return low-energy grade-1 coordinate directions and their energies.
 
         For each basis vector ``e_i``, computes the mean squared
         projection energy of the data onto that direction.  Directions
-        below :attr:`null_threshold` are flagged. This is an observed-data
+        below :attr:`low_energy_threshold` are reported. This is an observed-data
         diagnostic and is unrelated to null generators in the algebra's
         signature.
 
@@ -101,8 +105,7 @@ class SymmetryDetector:
             mv_data: ``[N, dim]`` multivector data.
 
         Returns:
-            ``(null_indices, scores)`` where *scores* is ``[n]`` and
-            *null_indices* lists those with score < threshold.
+            ``(indices, normalized_energy)`` with one energy per vector lane.
         """
         g1_idx = self.algebra.grade_indices((1,), device=mv_data.device)
 
@@ -115,10 +118,10 @@ class SymmetryDetector:
         if smax > self.algebra.eps_sq:
             scores = scores / smax
 
-        null_dirs = (scores < self.null_threshold).nonzero(as_tuple=True)[0]
-        return null_dirs.tolist(), scores
+        low_energy_directions = (scores < self.low_energy_threshold).nonzero(as_tuple=True)[0]
+        return low_energy_directions.tolist(), scores
 
-    def detect_involution_symmetry(self, mv_data: torch.Tensor) -> float:
+    def odd_grade_energy_fraction(self, mv_data: torch.Tensor) -> float:
         """Measure the fraction of coefficient energy in odd grades.
 
         Computes the fraction of total energy in odd-grade components:
@@ -142,8 +145,8 @@ class SymmetryDetector:
         total_energy = (mv_data**2).sum(dim=-1).clamp_min(eps_like(mv_data))
         return (odd_energy / total_energy).mean().item()
 
-    def detect_reflection_symmetries(self, mv_data: torch.Tensor) -> List[Dict]:
-        """Test reflection symmetry along each basis-vector direction.
+    def basis_reflection_scores(self, mv_data: torch.Tensor) -> List[Dict]:
+        """Compute coefficient-distribution distance after each basis reflection.
 
         For each basis vector ``e_i``, reflects the data
         ``x' = -e_i x e_i^{-1}`` and compares the reflected
@@ -151,13 +154,14 @@ class SymmetryDetector:
 
         Returns:
             List of dicts ``{"direction": i, "score": float}`` sorted
-            by score ascending (lower = more symmetric).
+            by score ascending. Lower means the independently sorted
+            coefficient distributions are closer under this statistic.
         """
-        results, _ = self._reflection_symmetries_with_skips(mv_data)
+        results, _ = self._basis_reflection_scores_with_skips(mv_data)
         return results
 
-    def _reflection_symmetries_with_skips(self, mv_data: torch.Tensor) -> tuple[List[Dict], dict[str, dict]]:
-        """Return reflection symmetries plus feasibility skip metadata."""
+    def _basis_reflection_scores_with_skips(self, mv_data: torch.Tensor) -> tuple[List[Dict], dict[str, dict]]:
+        """Return basis-reflection scores plus feasibility skip metadata."""
         n = self.algebra.n
         dim = self.algebra.dim
         N = mv_data.shape[0]
@@ -183,7 +187,7 @@ class SymmetryDetector:
             max_pairs=CONSTANTS.reflection_product_pairs,
         )
         if not left_feasible or not right_feasible:
-            skipped["reflection_symmetries"] = {
+            skipped["basis_reflection_scores"] = {
                 "reason": _first_skip_reason(left_feasible, right_feasible),
                 "checks": {
                     "left_vector_full_product": feasibility_record(left_feasible),
@@ -248,50 +252,50 @@ class SymmetryDetector:
         ).reshape(n, N, dim)
         return reflected, valid
 
-    def detect_continuous_symmetries(
+    def near_commuting_mode_count(
         self,
         mv_data: torch.Tensor,
         commutator_result: Optional[CommutatorResult] = None,
         threshold: Optional[float] = None,
     ) -> int:
-        """Count near-zero commutator modes.
+        """Count modes below a normalized commutator threshold.
 
         Without a precomputed commutator result, the method counts basis
         bivectors whose mean normalized commutator norm is below ``threshold``.
 
         If a :class:`CommutatorResult` is provided, the method instead counts
-        near-zero values in its full exchange spectrum. The two branches do
+        near-zero values in its full adjoint eigenvalue magnitudes. The two branches do
         not necessarily count modes in spaces of the same dimension.
 
         Args:
             mv_data: ``[N, dim]`` multivector data.
             commutator_result: Pre-computed commutator analysis.
             threshold: Normalized commutator norm below which a bivector
-                is considered a symmetry generator.
+                is counted as near-commuting.
 
         Returns:
             Number of modes below the selected threshold.
         """
-        dim, _ = self._continuous_symmetries_with_skips(
+        dim, _ = self._near_commuting_modes_with_skips(
             mv_data,
             commutator_result=commutator_result,
             threshold=threshold,
         )
         return dim
 
-    def _continuous_symmetries_with_skips(
+    def _near_commuting_modes_with_skips(
         self,
         mv_data: torch.Tensor,
         commutator_result: Optional[CommutatorResult] = None,
         threshold: Optional[float] = None,
     ) -> tuple[int, dict[str, dict]]:
-        """Return continuous-symmetry dimension plus feasibility skip metadata."""
+        """Return the near-commuting mode count plus feasibility metadata."""
         if threshold is None:
-            threshold = CONSTANTS.continuous_symmetry_threshold
+            threshold = CONSTANTS.near_commuting_mode_threshold
         skipped = {}
 
         if commutator_result is not None:
-            spec = commutator_result.exchange_spectrum
+            spec = commutator_result.adjoint_eigenvalue_magnitudes
             if spec.numel() > 0:
                 max_val = spec.abs().max().clamp_min(eps_like(spec))
                 return int((spec.abs() / max_val < threshold).sum().item()), skipped
@@ -302,19 +306,19 @@ class SymmetryDetector:
         full_layout = full_layout_for_analysis(self.algebra)
         commutator_feasible = product_feasibility(
             self.algebra,
-            role="continuous_symmetry_basis_bivectors",
+            role="near_commuting_mode_basis_bivectors",
             op="commutator_product",
             left_layout=bivector_layout,
             right_layout=full_layout,
             output_layout=full_layout,
-            max_pairs=CONSTANTS.continuous_symmetry_product_pairs,
+            max_pairs=CONSTANTS.near_commuting_mode_product_pairs,
         )
         if not commutator_feasible:
-            skipped["continuous_symmetries"] = feasibility_record(commutator_feasible)
+            skipped["near_commuting_modes"] = feasibility_record(commutator_feasible)
             return 0, skipped
 
         if bivector_layout.dim == 0:
-            skipped["continuous_symmetries"] = {
+            skipped["near_commuting_modes"] = {
                 "reason": "grade_absent",
                 "details": {"n": int(self.algebra.n), "required_grade": 2},
             }

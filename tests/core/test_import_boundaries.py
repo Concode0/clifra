@@ -7,8 +7,8 @@ import clifra.core as core
 import clifra.core.analysis as analysis
 import clifra.core.foundation as foundation
 import clifra.core.runtime as runtime
-from clifra.core.analysis.geodesic import GeodesicFlow
-from clifra.core.analysis.signature import MetricSearch
+from clifra.core.analysis.geodesic import NeighborhoodBivectorFlow
+from clifra.core.analysis.signature import RotorProbeSignatureEstimator
 from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit

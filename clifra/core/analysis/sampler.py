@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Statistical sampling strategies for geometric data analysis.
+"""Sampling strategies for experimental geometric diagnostics.
 
-The stratified sampler uses geodesic-flow coherence as its stratification
-score. It constructs a capped Euclidean algebra internally rather than
-inferring a metric signature from the data.
+The stratified strategy bins an operational neighborhood-connection alignment
+score. It constructs a capped Euclidean algebra internally and does not infer a
+metric signature.
 """
 
 from typing import Dict, List, Tuple, Union
@@ -23,9 +23,9 @@ class StatisticalSampler:
     ``"passthrough"`` strategies.  All methods are deterministic when a
     seed is provided.
 
-    The ``"stratified"`` strategy partitions per-point geodesic-flow
-    coherence scores into quantile strata. It uses a capped Euclidean algebra
-    for this calculation.
+    The experimental ``"stratified"`` strategy partitions per-point
+    connection-alignment scores into quantile strata in a capped Euclidean
+    algebra.
     """
 
     @staticmethod
@@ -86,15 +86,15 @@ class StatisticalSampler:
 
     @staticmethod
     def _stratified(data: torch.Tensor, config: SamplingConfig) -> Tuple[torch.Tensor, Dict]:
-        """Coherence-based stratified sampling.
+        """Stratify by the experimental per-point connection-alignment score.
 
         Embeds data as grade-1 in a default Euclidean algebra, computes
-        per-point geodesic-flow coherence, then partitions into quantile
-        strata, then samples across those score ranges.
+        per-point mean absolute connection alignment, partitions it into
+        quantiles, and samples across those score ranges.
         """
         from clifra.core.config import make_algebra
 
-        from .geodesic import GeodesicFlow
+        from .geodesic import NeighborhoodBivectorFlow
 
         N, D = data.shape
         k = min(N, config.max_samples)
@@ -113,11 +113,11 @@ class StatisticalSampler:
         raw = data[:, :alg_dim].to(dtype=dtype)
         mv = algebra.embed_vector(raw)  # [N, 2^alg_dim]
 
-        # Compute per-point coherence as the stratification metric
+        # Compute per-point connection_alignment as the stratification metric
         gf_k = min(CONSTANTS.default_k_neighbors, N - 1)
-        gf = GeodesicFlow(algebra, k=gf_k)
+        gf = NeighborhoodBivectorFlow(algebra, k=gf_k)
         with torch.no_grad():
-            scores = gf.per_point_coherence(mv)  # [N]
+            scores = gf.per_point_connection_alignment(mv)  # [N]
 
         # Assign to quantile strata
         quantiles = torch.linspace(0, 1, n_strata + 1, device=data.device, dtype=scores.dtype)
@@ -145,7 +145,7 @@ class StatisticalSampler:
             "indices": indices,
             "n_strata": n_strata,
             "n_original": N,
-            "coherence_scores": scores,
+            "connection_alignment_scores": scores,
         }
 
     @staticmethod

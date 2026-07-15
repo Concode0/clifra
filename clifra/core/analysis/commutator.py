@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Commutator (Lie bracket) analysis of multivector data.
+"""Operational commutator diagnostics for multivector data.
 
-Computes pairwise commutativity indices, the exchange spectrum of the
-adjoint operator, and tests for Lie-subalgebra closure among data
-bivectors.
+Computes pairwise commutator norms, adjoint eigenvalue magnitudes, and a
+selected coordinate-bivector closure residual.
 """
 
 from typing import Dict
@@ -62,21 +61,21 @@ class CommutatorAnalyzer:
         else:
             flat = mv_data  # [N, dim]
 
-        comm_matrix = self.commutativity_matrix(flat)
-        ex_spectrum, skipped = self._exchange_spectrum_with_skips(flat)
-        mcn = self.mean_commutator_norm(flat)
-        lie_struct = self.lie_bracket_closure(flat)
+        pairwise_norms = self.pairwise_commutator_norms(flat)
+        adjoint_magnitudes, skipped = self._adjoint_eigenvalue_magnitudes_with_skips(flat)
+        mean_norm = self.mean_commutator_norm(flat)
+        closure = self.bivector_bracket_closure(flat)
 
         return CommutatorResult(
-            commutativity_matrix=comm_matrix,
-            exchange_spectrum=ex_spectrum,
-            mean_commutator_norm=mcn,
-            lie_bracket_structure=lie_struct,
+            pairwise_commutator_norms=pairwise_norms,
+            adjoint_eigenvalue_magnitudes=adjoint_magnitudes,
+            mean_commutator_norm=mean_norm,
+            bivector_bracket_closure=closure,
             skipped=skipped,
         )
 
-    def commutativity_matrix(self, mv_data: torch.Tensor) -> torch.Tensor:
-        """Pairwise commutativity index for input dimensions.
+    def pairwise_commutator_norms(self, mv_data: torch.Tensor) -> torch.Tensor:
+        """Return mean commutator norms for pairs of vector coordinates.
 
         For each pair ``(i, j)`` of the *n* basis-vector directions,
         computes ``E[||[x_i, x_j]||]`` where ``x_i`` is the data
@@ -86,7 +85,7 @@ class CommutatorAnalyzer:
             mv_data: ``[N, dim]`` multivector data.
 
         Returns:
-            ``[n, n]`` symmetric matrix of commutativity indices.
+            ``[n, n]`` symmetric matrix of mean commutator norms.
         """
         n = self.algebra.n
         device = mv_data.device
@@ -125,7 +124,7 @@ class CommutatorAnalyzer:
 
         return matrix
 
-    def exchange_spectrum(self, mv_data: torch.Tensor) -> torch.Tensor:
+    def adjoint_eigenvalue_magnitudes(self, mv_data: torch.Tensor) -> torch.Tensor:
         """Eigenvalue magnitudes of the adjoint operator ``ad_mu``.
 
         Constructs the explicit matrix for ``ad_mu(x) = [mu, x]``
@@ -138,11 +137,11 @@ class CommutatorAnalyzer:
             Eigenvalue magnitudes sorted descending.  Returns an
             empty tensor if the algebra is too large.
         """
-        spectrum, _ = self._exchange_spectrum_with_skips(mv_data)
+        spectrum, _ = self._adjoint_eigenvalue_magnitudes_with_skips(mv_data)
         return spectrum
 
-    def _exchange_spectrum_with_skips(self, mv_data: torch.Tensor) -> tuple[torch.Tensor, dict[str, dict]]:
-        """Return exchange spectrum plus feasibility skip metadata."""
+    def _adjoint_eigenvalue_magnitudes_with_skips(self, mv_data: torch.Tensor) -> tuple[torch.Tensor, dict[str, dict]]:
+        """Return adjoint eigenvalue magnitudes plus feasibility metadata."""
         dim = self.algebra.dim
         device = mv_data.device
         dtype = mv_data.dtype
@@ -150,18 +149,18 @@ class CommutatorAnalyzer:
 
         matrix_feasible = full_matrix_feasibility(
             self.algebra,
-            role="adjoint_exchange_spectrum",
+            role="adjoint_eigenvalue_magnitudes",
             max_entries=CONSTANTS.adjoint_matrix_entries,
             matrix_kind="eigensolver",
         )
         product_feasible = full_product_feasibility(
             self.algebra,
-            role="adjoint_exchange_spectrum",
+            role="adjoint_eigenvalue_magnitudes",
             op="commutator_product",
             max_pairs=CONSTANTS.analysis_product_pairs,
         )
         if not matrix_feasible or not product_feasible:
-            skipped["exchange_spectrum"] = {
+            skipped["adjoint_eigenvalue_magnitudes"] = {
                 "reason": _first_skip_reason(matrix_feasible, product_feasible),
                 "checks": {
                     "eigensolver_matrix": feasibility_record(matrix_feasible),
@@ -186,9 +185,6 @@ class CommutatorAnalyzer:
 
     def mean_commutator_norm(self, mv_data: torch.Tensor) -> float:
         """``E[||[x_i, mu]||_2]`` -- scalar non-commutativity summary.
-
-        Generalizes the *Geometric Uncertainty Index* from
-        :func:`clifra.core.analysis.compute_uncertainty_and_alignment`.
 
         Args:
             mv_data: ``[N, dim]`` multivector data.
@@ -219,15 +215,17 @@ class CommutatorAnalyzer:
             return comm.norm(dim=-1).mean().item()
 
         mu = mv_data.mean(dim=0, keepdim=True)  # [1, dim]
-        comm = self.algebra.commutator_product(mv_data, mu.expand_as(mv_data), **declared_full_product_kwargs(self.algebra))
+        comm = self.algebra.commutator_product(
+            mv_data, mu.expand_as(mv_data), **declared_full_product_kwargs(self.algebra)
+        )
         return comm.norm(dim=-1).mean().item()
 
-    def lie_bracket_closure(self, mv_data: torch.Tensor) -> Dict:
-        """Test whether the data bivectors close under the Lie bracket.
+    def bivector_bracket_closure(self, mv_data: torch.Tensor) -> Dict:
+        """Measure bracket closure for selected coordinate basis bivectors.
 
-        Selects the top-*k* energetic bivectors from the batch,
-        computes all pairwise brackets ``[B_i, B_j]``, and measures
-        how well the results lie in the span of the original set.
+        Selects coordinate bivector lanes by mean observed magnitude, builds
+        the corresponding basis bivectors, and measures the residual after
+        projecting their pairwise brackets back into that selected span.
 
         Args:
             mv_data: ``[N, dim]`` multivector data.
@@ -312,16 +310,16 @@ class CommutatorAnalyzer:
         }
 
 
-def compute_uncertainty_and_alignment(algebra: AlgebraLike, data_tensor: torch.Tensor):
-    """Compute Geometric Uncertainty Index (U) and Procrustes Alignment (V).
+def compute_mean_commutator_and_procrustes_alignment(algebra: AlgebraLike, data_tensor: torch.Tensor):
+    """Compute a mean commutator norm and an SVD Procrustes alignment.
 
     Args:
         algebra: Layout-first algebra host.
         data_tensor: ``[N, D]`` tensor of raw features.
 
     Returns:
-        Tuple ``(U, V)`` where *U* is a float (mean commutator norm) and
-        *V* is a ``[D, D]`` Procrustes alignment matrix from SVD.
+        Tuple ``(mean_commutator_norm, alignment_matrix)``. These are
+        descriptive calculations, not an uncertainty estimate.
     """
     N, D = data_tensor.shape
     n = algebra.n

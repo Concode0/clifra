@@ -3,8 +3,8 @@
 
 """Tests for the core/analysis/ toolkit.
 
-Covers: EffectiveDimensionAnalyzer, StatisticalSampler, SpectralAnalyzer,
-SymmetryDetector, CommutatorAnalyzer, compute_uncertainty_and_alignment,
+Covers: CovarianceDimensionAnalyzer, StatisticalSampler, SpectralAnalyzer,
+TransformationDiagnosticsAnalyzer, CommutatorAnalyzer, compute_mean_commutator_and_procrustes_alignment,
 and the GeometricAnalyzer pipeline orchestrator.
 """
 
@@ -20,14 +20,14 @@ from clifra.core.analysis._types import (
     DimensionResult,
     SamplingConfig,
     SpectralResult,
-    SymmetryResult,
+    TransformationDiagnosticsResult,
 )
-from clifra.core.analysis.commutator import CommutatorAnalyzer, compute_uncertainty_and_alignment
-from clifra.core.analysis.dimension import EffectiveDimensionAnalyzer
+from clifra.core.analysis.commutator import CommutatorAnalyzer, compute_mean_commutator_and_procrustes_alignment
+from clifra.core.analysis.dimension import CovarianceDimensionAnalyzer
 from clifra.core.analysis.pipeline import GeometricAnalyzer
 from clifra.core.analysis.sampler import StatisticalSampler
 from clifra.core.analysis.spectral import SpectralAnalyzer
-from clifra.core.analysis.symmetry import SymmetryDetector
+from clifra.core.analysis.symmetry import TransformationDiagnosticsAnalyzer
 from clifra.core.runtime.algebra import AlgebraContext
 
 DEVICE = "cpu"
@@ -80,62 +80,62 @@ def raw_3d_data():
 
 
 # =====================================================================
-# EffectiveDimensionAnalyzer
+# CovarianceDimensionAnalyzer
 # =====================================================================
 
 
-class TestEffectiveDimensionAnalyzer:
+class TestCovarianceDimensionAnalyzer:
     def test_analyze_returns_dimension_result(self, raw_3d_data):
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         result = da.analyze(raw_3d_data)
         assert isinstance(result, DimensionResult)
 
-    def test_intrinsic_dim_rank2_data(self, raw_3d_data):
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+    def test_broken_stick_dimension_rank2_data(self, raw_3d_data):
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         result = da.analyze(raw_3d_data)
         # Data is exactly rank-2 (3rd col = linear combo of first two).
         # Broken-stick is conservative on exact rank-deficiency;
         # participation ratio is the reliable continuous measure here.
-        assert result.intrinsic_dim >= 1
+        assert result.broken_stick_dimension >= 1
         assert 1.5 < result.participation_ratio < 2.5
 
     def test_participation_ratio_rank2(self, raw_3d_data):
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         result = da.analyze(raw_3d_data)
         # PR should be close to 2 for rank-2 data
         assert 1.5 < result.participation_ratio < 2.8
 
     def test_eigenvalues_descending(self, raw_3d_data):
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         result = da.analyze(raw_3d_data)
         evs = result.eigenvalues
         assert (evs[:-1] >= evs[1:] - 1e-6).all()
 
     def test_explained_variance_sums_to_one(self, raw_3d_data):
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         result = da.analyze(raw_3d_data)
         assert abs(result.explained_variance_ratio.sum().item() - 1.0) < 1e-5
 
-    def test_local_dims_computed_for_small_data(self, raw_3d_data):
-        da = EffectiveDimensionAnalyzer(device=DEVICE, k_local=10)
+    def test_local_participation_ratios_computed_for_small_data(self, raw_3d_data):
+        da = CovarianceDimensionAnalyzer(device=DEVICE, k_local=10)
         result = da.analyze(raw_3d_data)
-        assert result.local_dims is not None
-        assert result.local_dims.shape == (raw_3d_data.shape[0],)
+        assert result.local_participation_ratios is not None
+        assert result.local_participation_ratios.shape == (raw_3d_data.shape[0],)
 
-    def test_local_dims_skipped_for_large_k(self):
-        da = EffectiveDimensionAnalyzer(device=DEVICE, k_local=200)
+    def test_local_participation_ratios_skipped_for_large_k(self):
+        da = CovarianceDimensionAnalyzer(device=DEVICE, k_local=200)
         # Only 30 samples — k_local > N, should skip
         data = torch.randn(30, 5)
         result = da.analyze(data)
-        assert result.local_dims is None
+        assert result.local_participation_ratios is None
 
     def test_reduce_output_shape(self, raw_3d_data):
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         reduced = da.reduce(raw_3d_data, target_dim=2)
         assert reduced.shape == (100, 2)
 
     def test_reduce_preserves_variance(self, raw_3d_data):
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         reduced = da.reduce(raw_3d_data, target_dim=2)
         # Most variance should be preserved for rank-2 data
         orig_var = raw_3d_data.var(dim=0).sum().item()
@@ -144,20 +144,20 @@ class TestEffectiveDimensionAnalyzer:
 
     def test_full_rank_data(self):
         torch.manual_seed(3)
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         data = torch.randn(200, 5)  # full rank
         result = da.analyze(data)
         # Broken-stick is conservative; PR is the reliable measure here
-        assert result.intrinsic_dim >= 3
+        assert result.broken_stick_dimension >= 3
         assert result.participation_ratio > 4.0
 
     def test_one_dim_data(self):
         torch.manual_seed(4)
-        da = EffectiveDimensionAnalyzer(device=DEVICE)
+        da = CovarianceDimensionAnalyzer(device=DEVICE)
         t = torch.randn(100, 1)
         data = torch.cat([t, t * 2, t * 3], dim=-1)  # rank 1
         result = da.analyze(data)
-        assert result.intrinsic_dim == 1
+        assert result.broken_stick_dimension == 1
         assert result.participation_ratio < 1.5
 
 
@@ -205,12 +205,12 @@ class TestStatisticalSampler:
         assert isinstance(sampled, torch.Tensor)
         assert sampled.shape[0] <= 40
         assert meta["strategy"] == "stratified"
-        assert "coherence_scores" in meta
+        assert "connection_alignment_scores" in meta
 
-    def test_stratified_coherence_scores_shape(self, raw_3d_data):
+    def test_stratified_connection_alignment_scores_shape(self, raw_3d_data):
         cfg = SamplingConfig(strategy="stratified", max_samples=40, seed=0)
         _, meta = StatisticalSampler.sample(raw_3d_data, cfg)
-        scores = meta["coherence_scores"]
+        scores = meta["connection_alignment_scores"]
         assert scores.shape == (raw_3d_data.shape[0],)
 
     def test_unknown_strategy_raises(self, raw_3d_data):
@@ -254,28 +254,28 @@ class TestSpectralAnalyzer:
         assert result.grade_energy[1] > result.grade_energy[0]
         assert result.grade_energy[1] > result.grade_energy[2]
 
-    def test_bivector_spectrum_nonempty(self, alg3, circle_data_3d):
+    def test_mean_bivector_norm_nonempty(self, alg3, circle_data_3d):
         sa = SpectralAnalyzer(alg3)
         result = sa.analyze(circle_data_3d)
-        assert result.bivector_spectrum.numel() > 0
+        assert result.mean_bivector_norm.numel() > 0
 
-    def test_simple_components_list(self, alg3, circle_data_3d):
+    def test_mean_bivector_components_list(self, alg3, circle_data_3d):
         sa = SpectralAnalyzer(alg3)
         result = sa.analyze(circle_data_3d)
-        assert isinstance(result.simple_components, list)
-        for comp in result.simple_components:
+        assert isinstance(result.mean_bivector_components, list)
+        for comp in result.mean_bivector_components:
             assert comp.shape == (alg3.dim,)
 
-    def test_gp_eigenvalues_present_small_algebra(self, alg3, circle_data_3d):
+    def test_gp_action_eigenvalue_magnitudes_present_small_algebra(self, alg3, circle_data_3d):
         sa = SpectralAnalyzer(alg3)
         result = sa.analyze(circle_data_3d)
-        assert result.gp_eigenvalues is not None
-        assert result.gp_eigenvalues.numel() > 0
+        assert result.gp_action_eigenvalue_magnitudes is not None
+        assert result.gp_action_eigenvalue_magnitudes.numel() > 0
 
-    def test_gp_eigenvalues_sorted_descending(self, alg3, circle_data_3d):
+    def test_gp_action_eigenvalue_magnitudes_sorted_descending(self, alg3, circle_data_3d):
         sa = SpectralAnalyzer(alg3)
         result = sa.analyze(circle_data_3d)
-        eigs = result.gp_eigenvalues
+        eigs = result.gp_action_eigenvalue_magnitudes
         assert (eigs[:-1] >= eigs[1:] - 1e-6).all()
 
     def test_multichannel_input(self, alg3):
@@ -296,84 +296,84 @@ class TestSpectralAnalyzer:
 
 
 # =====================================================================
-# SymmetryDetector
+# TransformationDiagnosticsAnalyzer
 # =====================================================================
 
 
-class TestSymmetryDetector:
+class TestTransformationDiagnosticsAnalyzer:
     def test_analyze_returns_symmetry_result(self, alg3, circle_data_3d):
-        sd = SymmetryDetector(alg3)
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(circle_data_3d)
-        assert isinstance(result, SymmetryResult)
+        assert isinstance(result, TransformationDiagnosticsResult)
 
-    def test_null_scores_shape(self, alg3, circle_data_3d):
-        sd = SymmetryDetector(alg3)
+    def test_normalized_vector_energy_shape(self, alg3, circle_data_3d):
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(circle_data_3d)
-        assert result.null_scores.shape == (3,)
+        assert result.normalized_vector_energy.shape == (3,)
 
     def test_circle_e3_is_null(self, alg3, circle_data_3d):
         """Circle in (e1,e2) plane — e3 direction has zero energy → null."""
-        sd = SymmetryDetector(alg3, null_threshold=0.05)
+        sd = TransformationDiagnosticsAnalyzer(alg3, low_energy_threshold=0.05)
         result = sd.analyze(circle_data_3d)
         # Direction index 2 (e3) should be detected as null
-        assert 2 in result.null_directions
+        assert 2 in result.low_energy_vector_directions
 
-    def test_involution_symmetry_nonneg(self, alg3, circle_data_3d):
-        sd = SymmetryDetector(alg3)
+    def test_odd_grade_energy_fraction_nonneg(self, alg3, circle_data_3d):
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(circle_data_3d)
         # ||α(x) - x||² / ||x||² : for pure grade-1 (odd), α(x) = -x → ratio = 4
-        assert result.involution_symmetry >= 0.0
+        assert result.odd_grade_energy_fraction >= 0.0
 
     def test_grade1_data_high_involution(self, alg3, circle_data_3d):
-        """Grade-1 data is purely odd → involution_symmetry = 1.0
+        """Grade-1 data is purely odd → odd_grade_energy_fraction = 1.0
         (100% of energy in odd grades)."""
-        sd = SymmetryDetector(alg3)
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(circle_data_3d)
-        # Grade-1 data is purely odd → involution_symmetry should be 1.0
-        assert result.involution_symmetry > 0.99
+        # Grade-1 data is purely odd → odd_grade_energy_fraction should be 1.0
+        assert result.odd_grade_energy_fraction > 0.99
 
-    def test_reflection_symmetries_structure(self, alg3, circle_data_3d):
-        sd = SymmetryDetector(alg3)
+    def test_basis_reflection_scores_structure(self, alg3, circle_data_3d):
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(circle_data_3d)
-        assert isinstance(result.reflection_symmetries, list)
-        assert len(result.reflection_symmetries) == 3  # one per basis vector
-        for entry in result.reflection_symmetries:
+        assert isinstance(result.basis_reflection_scores, list)
+        assert len(result.basis_reflection_scores) == 3  # one per basis vector
+        for entry in result.basis_reflection_scores:
             assert "direction" in entry
             assert "score" in entry
             assert entry["score"] >= 0
 
     def test_reflection_sorted_by_score(self, alg3, circle_data_3d):
-        sd = SymmetryDetector(alg3)
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(circle_data_3d)
-        scores = [r["score"] for r in result.reflection_symmetries]
+        scores = [r["score"] for r in result.basis_reflection_scores]
         assert scores == sorted(scores)
 
-    def test_continuous_symmetry_dim_nonneg(self, alg3, circle_data_3d):
-        sd = SymmetryDetector(alg3)
+    def test_near_commuting_mode_count_nonneg(self, alg3, circle_data_3d):
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(circle_data_3d)
-        assert result.continuous_symmetry_dim >= 0
+        assert result.near_commuting_mode_count >= 0
 
-    def test_continuous_symmetry_from_commutator_result(self, alg3, circle_data_3d):
+    def test_near_commuting_mode_from_commutator_result(self, alg3, circle_data_3d):
         """When CommutatorResult is provided, continuous symmetry uses exchange spectrum."""
         ca = CommutatorAnalyzer(alg3)
         comm_result = ca.analyze(circle_data_3d)
-        sd = SymmetryDetector(alg3)
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(circle_data_3d, commutator_result=comm_result)
-        assert result.continuous_symmetry_dim >= 0
+        assert result.near_commuting_mode_count >= 0
 
     def test_multichannel_input(self, alg3):
         torch.manual_seed(20)
         mv = torch.randn(30, 4, alg3.dim)
-        sd = SymmetryDetector(alg3)
+        sd = TransformationDiagnosticsAnalyzer(alg3)
         result = sd.analyze(mv)
-        assert isinstance(result, SymmetryResult)
+        assert isinstance(result, TransformationDiagnosticsResult)
 
-    def test_noise_fewer_null_directions(self, alg3, noise_mv_3d):
+    def test_noise_fewer_low_energy_vector_directions(self, alg3, noise_mv_3d):
         """Random data should have energy in all directions — fewer nulls."""
-        sd = SymmetryDetector(alg3, null_threshold=0.05)
+        sd = TransformationDiagnosticsAnalyzer(alg3, low_energy_threshold=0.05)
         result = sd.analyze(noise_mv_3d)
         # Should have at most 1 null direction (random noise is isotropic)
-        assert len(result.null_directions) <= 1
+        assert len(result.low_energy_vector_directions) <= 1
 
 
 # =====================================================================
@@ -387,28 +387,28 @@ class TestCommutatorAnalyzer:
         result = ca.analyze(circle_data_3d)
         assert isinstance(result, CommutatorResult)
 
-    def test_commutativity_matrix_shape(self, alg3, circle_data_3d):
+    def test_pairwise_commutator_norms_shape(self, alg3, circle_data_3d):
         ca = CommutatorAnalyzer(alg3)
         result = ca.analyze(circle_data_3d)
-        assert result.commutativity_matrix.shape == (3, 3)
+        assert result.pairwise_commutator_norms.shape == (3, 3)
 
-    def test_commutativity_matrix_symmetric(self, alg3, circle_data_3d):
+    def test_pairwise_commutator_norms_symmetric(self, alg3, circle_data_3d):
         ca = CommutatorAnalyzer(alg3)
         result = ca.analyze(circle_data_3d)
-        m = result.commutativity_matrix
+        m = result.pairwise_commutator_norms
         assert torch.allclose(m, m.T, atol=1e-6)
 
-    def test_commutativity_matrix_zero_diagonal(self, alg3, circle_data_3d):
+    def test_pairwise_commutator_norms_zero_diagonal(self, alg3, circle_data_3d):
         """[e_i, e_i] = 0, so diagonal should be zero."""
         ca = CommutatorAnalyzer(alg3)
         result = ca.analyze(circle_data_3d)
-        diag = result.commutativity_matrix.diag()
+        diag = result.pairwise_commutator_norms.diag()
         assert torch.allclose(diag, torch.zeros_like(diag), atol=1e-6)
 
-    def test_exchange_spectrum_sorted(self, alg3, circle_data_3d):
+    def test_adjoint_eigenvalue_magnitudes_sorted(self, alg3, circle_data_3d):
         ca = CommutatorAnalyzer(alg3)
         result = ca.analyze(circle_data_3d)
-        spec = result.exchange_spectrum
+        spec = result.adjoint_eigenvalue_magnitudes
         assert spec.numel() > 0
         assert (spec[:-1] >= spec[1:] - 1e-6).all()
 
@@ -417,24 +417,24 @@ class TestCommutatorAnalyzer:
         result = ca.analyze(circle_data_3d)
         assert result.mean_commutator_norm >= 0
 
-    def test_lie_bracket_structure_keys(self, alg3, circle_data_3d):
+    def test_bivector_bracket_closure_keys(self, alg3, circle_data_3d):
         ca = CommutatorAnalyzer(alg3)
         result = ca.analyze(circle_data_3d)
-        lie = result.lie_bracket_structure
+        lie = result.bivector_bracket_closure
         assert "structure_constants" in lie
         assert "closure_error" in lie
         assert "basis_indices" in lie
 
-    def test_lie_bracket_closure_error_range(self, alg3, circle_data_3d):
+    def test_bivector_bracket_closure_error_range(self, alg3, circle_data_3d):
         ca = CommutatorAnalyzer(alg3)
         result = ca.analyze(circle_data_3d)
-        ce = result.lie_bracket_structure["closure_error"]
+        ce = result.bivector_bracket_closure["closure_error"]
         assert 0.0 <= ce <= 1.0 + 1e-6
 
     def test_structure_constants_antisymmetric(self, alg3, circle_data_3d):
         ca = CommutatorAnalyzer(alg3)
         result = ca.analyze(circle_data_3d)
-        sc = result.lie_bracket_structure["structure_constants"]
+        sc = result.bivector_bracket_closure["structure_constants"]
         if sc.numel() > 0:
             k = sc.shape[0]
             for a in range(k):
@@ -455,35 +455,35 @@ class TestCommutatorAnalyzer:
         mv = alg2.embed_vector(raw)
         ca = CommutatorAnalyzer(alg2)
         result = ca.analyze(mv)
-        assert result.lie_bracket_structure["basis_indices"]
+        assert result.bivector_bracket_closure["basis_indices"]
 
 
 # =====================================================================
-# compute_uncertainty_and_alignment
+# compute_mean_commutator_and_procrustes_alignment
 # =====================================================================
 
 
 class TestComputeUncertaintyAndAlignment:
     def test_returns_tuple(self, alg3):
         data = torch.randn(50, 3)
-        U, V = compute_uncertainty_and_alignment(alg3, data)
+        U, V = compute_mean_commutator_and_procrustes_alignment(alg3, data)
         assert isinstance(U, float)
         assert isinstance(V, torch.Tensor)
 
     def test_V_shape(self, alg3):
         data = torch.randn(50, 3)
-        _, V = compute_uncertainty_and_alignment(alg3, data)
+        _, V = compute_mean_commutator_and_procrustes_alignment(alg3, data)
         assert V.shape == (3, 3)
 
     def test_U_nonnegative(self, alg3):
         data = torch.randn(50, 3)
-        U, _ = compute_uncertainty_and_alignment(alg3, data)
+        U, _ = compute_mean_commutator_and_procrustes_alignment(alg3, data)
         assert U >= 0
 
     def test_padding_when_D_lt_n(self):
         alg = AlgebraContext(4, 0, device=DEVICE)
         data = torch.randn(50, 2)  # D=2 < n=4
-        U, V = compute_uncertainty_and_alignment(alg, data)
+        U, V = compute_mean_commutator_and_procrustes_alignment(alg, data)
         assert V.shape == (2, 2)
         assert U >= 0
 
@@ -499,7 +499,7 @@ class TestGeometricAnalyzerPipeline:
         cfg = AnalysisConfig(
             device=DEVICE,
             sampling=SamplingConfig(strategy="random", max_samples=50),
-            run_signature=False,  # skip signature search for speed
+            run_signature_estimation=False,  # skip signature search for speed
         )
         ga = GeometricAnalyzer(cfg)
         report = ga.analyze(raw_3d_data)
@@ -509,7 +509,7 @@ class TestGeometricAnalyzerPipeline:
         cfg = AnalysisConfig(
             device=DEVICE,
             sampling=SamplingConfig(strategy="random", max_samples=50),
-            run_signature=False,
+            run_signature_estimation=False,
         )
         ga = GeometricAnalyzer(cfg)
         report = ga.analyze(raw_3d_data)
@@ -520,7 +520,7 @@ class TestGeometricAnalyzerPipeline:
         cfg = AnalysisConfig(
             device=DEVICE,
             sampling=SamplingConfig(strategy="random", max_samples=50),
-            run_signature=False,
+            run_signature_estimation=False,
         )
         ga = GeometricAnalyzer(cfg)
         report = ga.analyze(raw_3d_data)
@@ -530,17 +530,17 @@ class TestGeometricAnalyzerPipeline:
         cfg = AnalysisConfig(
             device=DEVICE,
             sampling=SamplingConfig(strategy="random", max_samples=50),
-            run_signature=False,
+            run_signature_estimation=False,
         )
         ga = GeometricAnalyzer(cfg)
         report = ga.analyze(raw_3d_data)
-        assert report.symmetry is not None
+        assert report.transformation is not None
 
     def test_raw_mode_commutator_result(self, raw_3d_data):
         cfg = AnalysisConfig(
             device=DEVICE,
             sampling=SamplingConfig(strategy="random", max_samples=50),
-            run_signature=False,
+            run_signature_estimation=False,
         )
         ga = GeometricAnalyzer(cfg)
         report = ga.analyze(raw_3d_data)
@@ -554,9 +554,9 @@ class TestGeometricAnalyzerPipeline:
         report = ga.analyze(mv_3d, algebra=alg3)
         # Dimension/signature not run in pre-embedded mode
         assert report.dimension is None
-        assert report.signature is None
+        assert report.signature_estimate is None
         assert report.spectral is not None
-        assert report.symmetry is not None
+        assert report.transformation is not None
         assert report.commutator is not None
 
     def test_raw_with_known_algebra(self, alg3, raw_3d_data):
@@ -571,7 +571,7 @@ class TestGeometricAnalyzerPipeline:
         cfg = AnalysisConfig(
             device=DEVICE,
             sampling=SamplingConfig(strategy="random", max_samples=30),
-            run_signature=False,
+            run_signature_estimation=False,
         )
         ga = GeometricAnalyzer(cfg)
         report = ga.analyze(raw_3d_data)
@@ -581,7 +581,7 @@ class TestGeometricAnalyzerPipeline:
         cfg = AnalysisConfig(
             device=DEVICE,
             sampling=SamplingConfig(strategy="random", max_samples=30),
-            run_signature=False,
+            run_signature_estimation=False,
         )
         ga = GeometricAnalyzer(cfg)
         report = ga.analyze(raw_3d_data)
@@ -595,16 +595,16 @@ class TestGeometricAnalyzerPipeline:
             device=DEVICE,
             sampling=SamplingConfig(strategy="random", max_samples=30),
             run_dimension=True,
-            run_signature=False,
+            run_signature_estimation=False,
             run_spectral=False,
-            run_symmetry=True,
+            run_transformation_diagnostics=True,
             run_commutator=False,
         )
         ga = GeometricAnalyzer(cfg)
         report = ga.analyze(raw_3d_data)
         assert report.dimension is not None
         assert report.spectral is None
-        assert report.symmetry is not None
+        assert report.transformation is not None
         assert report.commutator is None
 
     def test_invalid_shape_raises(self):
@@ -635,18 +635,18 @@ class TestCrossComponentIntegration:
         cfg = AnalysisConfig(
             device=DEVICE,
             run_dimension=False,
-            run_signature=False,
+            run_signature_estimation=False,
             run_spectral=False,
-            run_symmetry=True,
+            run_transformation_diagnostics=True,
             run_commutator=True,
         )
         ga = GeometricAnalyzer(cfg)
         mv = circle_data_3d.unsqueeze(1)
         report = ga.analyze(mv, algebra=alg3)
-        assert report.symmetry is not None
+        assert report.transformation is not None
         assert report.commutator is not None
-        # continuous_symmetry_dim should be set
-        assert report.symmetry.continuous_symmetry_dim >= 0
+        # near_commuting_mode_count should be set
+        assert report.transformation.near_commuting_mode_count >= 0
 
     def test_commutator_primitive_in_analysis(self, alg3):
         """End-to-end: commutator primitive produces same result as manual."""

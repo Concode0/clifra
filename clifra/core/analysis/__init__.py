@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Geometric data analysis toolkit."""
+"""Experimental descriptive and geometric-representation diagnostics.
+
+Results report the implemented coefficient-space or operator calculation.
+Heuristic analyzers do not prove metric, manifold, causal, or symmetry claims.
+"""
 
 from ._types import (
     CONSTANTS,
@@ -12,12 +16,12 @@ from ._types import (
     CommutatorResult,
     DimensionResult,
     SamplingConfig,
-    SignatureResult,
+    SignatureEstimate,
     SpectralResult,
-    SymmetryResult,
+    TransformationDiagnosticsResult,
 )
 from .commutator import CommutatorAnalyzer
-from .dimension import EffectiveDimensionAnalyzer
+from .dimension import CovarianceDimensionAnalyzer
 from .pipeline import GeometricAnalyzer
 from .policy import (
     AnalysisCostPolicy,
@@ -26,9 +30,9 @@ from .policy import (
     ProductAnalysisCost,
 )
 from .sampler import StatisticalSampler
-from .signature import SignatureSearchAnalyzer
+from .signature import SignatureProbeAnalyzer
 from .spectral import SpectralAnalyzer
-from .symmetry import SymmetryDetector
+from .symmetry import TransformationDiagnosticsAnalyzer
 
 __all__ = [
     # Constants
@@ -38,9 +42,9 @@ __all__ = [
     "SamplingConfig",
     "AnalysisConfig",
     "DimensionResult",
-    "SignatureResult",
+    "SignatureEstimate",
     "SpectralResult",
-    "SymmetryResult",
+    "TransformationDiagnosticsResult",
     "CommutatorResult",
     "AnalysisReport",
     "AnalysisCostPolicy",
@@ -49,10 +53,10 @@ __all__ = [
     "ProductAnalysisCost",
     # Analyzers
     "StatisticalSampler",
-    "EffectiveDimensionAnalyzer",
-    "SignatureSearchAnalyzer",
+    "CovarianceDimensionAnalyzer",
+    "SignatureProbeAnalyzer",
     "SpectralAnalyzer",
-    "SymmetryDetector",
+    "TransformationDiagnosticsAnalyzer",
     "CommutatorAnalyzer",
     "GeometricAnalyzer",
 ]

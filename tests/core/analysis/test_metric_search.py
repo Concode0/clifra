@@ -1,7 +1,7 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the learned MetricSearch probe approach."""
+"""Tests for the learned RotorProbeSignatureEstimator probe approach."""
 
 import pytest
 import torch
@@ -9,14 +9,14 @@ import torch
 from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.slow
-from clifra.core.analysis.geodesic import GeodesicFlow
-from clifra.core.analysis.signature import MetricSearch, _apply_biased_init, _SignatureProbe
+from clifra.core.analysis.geodesic import NeighborhoodBivectorFlow
+from clifra.core.analysis.signature import RotorProbeSignatureEstimator, _apply_biased_init, _SignatureProbe
 
 
 @pytest.fixture(scope="module")
 def small_searcher():
-    """Create a small MetricSearch instance for testing."""
-    return MetricSearch(
+    """Create a small RotorProbeSignatureEstimator instance for testing."""
+    return RotorProbeSignatureEstimator(
         device="cpu",
         probe_epochs=60,
         num_probes=2,
@@ -31,14 +31,14 @@ def alg_conformal():
     return AlgebraContext(3, 1, 0, device="cpu")
 
 
-class TestMetricSearchAPI:
-    """Tests for MetricSearch public API."""
+class TestRotorProbeSignatureEstimatorAPI:
+    """Tests for RotorProbeSignatureEstimator public API."""
 
     def test_search_returns_3_tuple(self, small_searcher):
         """Verify search returns (p, q, r) signature tuple."""
         torch.manual_seed(0)
         data = torch.randn(16, 2)
-        result = small_searcher.search(data)
+        result = small_searcher.estimate(data)
         assert isinstance(result, tuple)
         assert len(result) == 3
         p, q, r = result
@@ -55,7 +55,7 @@ class TestMetricSearchAPI:
         # 2D circle: unambiguous Euclidean manifold structure
         theta = torch.linspace(0, 2 * 3.141592653589793, 33)[:-1]
         data = torch.stack([theta.cos(), theta.sin()], dim=-1)
-        p, q, r = small_searcher.search(data)
+        p, q, r = small_searcher.estimate(data)
         # Euclidean data should have p >= 1 and p dominates
         assert p >= 1, f"Euclidean data should have p>=1, got p={p}"
         assert p >= q, f"Euclidean data should have p>=q, got p={p}, q={q}"
@@ -64,13 +64,19 @@ class TestMetricSearchAPI:
         """Verify search_detailed returns all expected diagnostic keys."""
         torch.manual_seed(2)
         data = torch.randn(16, 2)
-        result = small_searcher.search_detailed(data)
-        for key in ("signature", "coherence", "curvature", "energy_breakdown", "per_probe_results"):
+        result = small_searcher.estimate_detailed(data)
+        for key in (
+            "estimated_signature",
+            "connection_alignment",
+            "connection_dissimilarity",
+            "energy_breakdown",
+            "per_probe_results",
+        ):
             assert key in result, f"Missing key: {key}"
 
     def test_sequential_small_probes(self):
         """Verify sequential path works with num_probes=1."""
-        searcher = MetricSearch(
+        searcher = RotorProbeSignatureEstimator(
             device="cpu",
             probe_epochs=10,
             num_probes=1,
@@ -79,7 +85,7 @@ class TestMetricSearchAPI:
         )
         torch.manual_seed(3)
         data = torch.randn(12, 2)
-        p, q, r = searcher.search(data)
+        p, q, r = searcher.estimate(data)
         assert p + q + r <= 2
 
 
@@ -101,11 +107,11 @@ class TestSignatureProbe:
 
 
 class TestConformalLifting:
-    """Tests for MetricSearch._lift_data."""
+    """Tests for RotorProbeSignatureEstimator._lift_data."""
 
     def test_lifting_shape(self):
         """Verify data lifting to higher-dimensional multivector space."""
-        searcher = MetricSearch(device="cpu")
+        searcher = RotorProbeSignatureEstimator(device="cpu")
         data = torch.randn(10, 3)
         mv, algebra = searcher._lift_data(data)
         # 3D data -> Cl(4, 1) -> dim = 2^5 = 32
@@ -116,7 +122,7 @@ class TestConformalLifting:
 
     def test_lifting_2d(self):
         """Verify 2D data lifting to Cl(3,1)."""
-        searcher = MetricSearch(device="cpu")
+        searcher = RotorProbeSignatureEstimator(device="cpu")
         data = torch.randn(8, 2)
         mv, algebra = searcher._lift_data(data)
         # 2D data -> Cl(3, 1) -> dim = 2^4 = 16
@@ -152,51 +158,51 @@ class TestBiasedInit:
 
 
 class TestDifferentiableMethods:
-    """Tests for _coherence_tensor and _curvature_tensor."""
+    """Tests for _connection_alignment_tensor and _connection_dissimilarity_tensor."""
 
-    def test_coherence_tensor_differentiable(self):
-        """Verify coherence calculation is differentiable."""
+    def test_connection_alignment_tensor_differentiable(self):
+        """Verify connection_alignment calculation is differentiable."""
         alg = AlgebraContext(3, 0, device="cpu")
         data = torch.randn(16, 3, requires_grad=True)
         mv = alg.embed_vector(data)
-        gf = GeodesicFlow(alg, k=4)
-        coh = gf._coherence_tensor(mv)
+        gf = NeighborhoodBivectorFlow(alg, k=4)
+        coh = gf._connection_alignment_tensor(mv)
         assert isinstance(coh, torch.Tensor)
         assert coh.dim() == 0  # scalar
         # Should have grad_fn (differentiable)
         assert coh.grad_fn is not None
 
-    def test_curvature_tensor_differentiable(self):
-        """Verify curvature calculation is differentiable."""
+    def test_connection_dissimilarity_tensor_differentiable(self):
+        """Verify connection_dissimilarity calculation is differentiable."""
         alg = AlgebraContext(3, 0, device="cpu")
         data = torch.randn(16, 3, requires_grad=True)
         mv = alg.embed_vector(data)
-        gf = GeodesicFlow(alg, k=4)
-        curv = gf._curvature_tensor(mv)
+        gf = NeighborhoodBivectorFlow(alg, k=4)
+        curv = gf._connection_dissimilarity_tensor(mv)
         assert isinstance(curv, torch.Tensor)
         assert curv.dim() == 0
         assert curv.grad_fn is not None
 
-    def test_coherence_tensor_matches_coherence(self):
-        """Verify _coherence_tensor matches coherence float value."""
+    def test_connection_alignment_tensor_matches_connection_alignment(self):
+        """Verify _connection_alignment_tensor matches connection_alignment float value."""
         alg = AlgebraContext(3, 0, device="cpu")
         torch.manual_seed(10)
         data = torch.randn(16, 3)
         mv = alg.embed_vector(data)
-        gf = GeodesicFlow(alg, k=4)
-        coh_float = gf.coherence(mv)
-        coh_tensor = gf._coherence_tensor(mv).item()
+        gf = NeighborhoodBivectorFlow(alg, k=4)
+        coh_float = gf.connection_alignment(mv)
+        coh_tensor = gf._connection_alignment_tensor(mv).item()
         assert abs(coh_float - coh_tensor) < 1e-6
 
 
 class TestBivectorEnergyAnalysis:
-    """Tests for MetricSearch._analyze_bivector_energy."""
+    """Tests for RotorProbeSignatureEstimator._analyze_bivector_energy."""
 
     def test_returns_valid_signature(self):
         """Verify energy analysis returns valid (p, q, r) and breakdown dict."""
         alg = AlgebraContext(3, 1, 0, device="cpu")
         probe = _SignatureProbe(alg, channels=2)
-        searcher = MetricSearch(device="cpu")
+        searcher = RotorProbeSignatureEstimator(device="cpu")
         (p, q, r), breakdown = searcher._analyze_bivector_energy(probe, alg, 2)
         assert isinstance(p, int)
         assert isinstance(q, int)

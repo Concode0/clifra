@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Orchestrates all geometric analyzers into a single pipeline."""
+"""Orchestrate descriptive and experimental diagnostics in one pipeline."""
 
 import concurrent.futures
 import time
@@ -16,15 +16,15 @@ from clifra.core.foundation.module import AlgebraLike
 from ._types import CONSTANTS, AnalysisConfig, AnalysisReport
 from ._utils import as_analysis_tensor
 from .commutator import CommutatorAnalyzer
-from .dimension import EffectiveDimensionAnalyzer
+from .dimension import CovarianceDimensionAnalyzer
 from .sampler import StatisticalSampler
-from .signature import SignatureSearchAnalyzer
+from .signature import SignatureProbeAnalyzer
 from .spectral import SpectralAnalyzer
-from .symmetry import SymmetryDetector
+from .symmetry import TransformationDiagnosticsAnalyzer
 
 
 class GeometricAnalyzer:
-    """Top-level orchestrator for the geometric analysis toolkit.
+    """Top-level orchestrator for the experimental analysis toolkit.
 
     Runs a configurable subset of analyzers in the correct dependency
     order and returns an :class:`AnalysisReport`.
@@ -32,10 +32,10 @@ class GeometricAnalyzer:
     **Input modes:**
 
     * ``data.ndim == 2`` and ``algebra is None`` -- **raw mode**: full
-      pipeline from sampling through signature search to GA analyses.
+      pipeline from sampling through signature estimation to GA diagnostics.
     * ``data.ndim == 3`` and ``algebra is not None`` -- **pre-embedded
-      mode**: skip sampling / dimension / signature; run spectral,
-      symmetry, and commutator analyses directly.
+      mode**: skip sampling, dimension, and signature estimation; run spectral,
+      transformation, and commutator diagnostics directly.
     * ``data.ndim == 2`` and ``algebra is not None`` -- **raw + known
       algebra**: embed data, then run GA analyses.
 
@@ -56,7 +56,7 @@ class GeometricAnalyzer:
         Args:
             data: Raw ``[N, D]`` or pre-embedded ``[N, C, 2^n]`` tensor.
             algebra: Required when *data* is pre-embedded.  Optional
-                when raw -- will be created from the signature search.
+                when raw -- will be created from the signature estimate.
 
         Returns:
             :class:`AnalysisReport`.
@@ -98,26 +98,26 @@ class GeometricAnalyzer:
         # Dimension analysis
         dim_result = None
         if cfg.run_dimension:
-            da = EffectiveDimensionAnalyzer(
+            dimension_analyzer = CovarianceDimensionAnalyzer(
                 device=cfg.device,
                 dtype=cfg.dtype,
                 energy_threshold=cfg.energy_threshold,
             )
-            dim_result = da.analyze(sampled)
+            dim_result = dimension_analyzer.analyze(sampled)
             report.dimension = dim_result
 
-        # Signature search
+        # Experimental signature estimation
         sig_result = None
-        if cfg.run_signature:
-            ssa = SignatureSearchAnalyzer(device=cfg.device, dtype=cfg.dtype)
-            sig_result = ssa.analyze(sampled, dim_result=dim_result)
-            report.signature = sig_result
+        if cfg.run_signature_estimation:
+            signature_analyzer = SignatureProbeAnalyzer(device=cfg.device, dtype=cfg.dtype)
+            sig_result = signature_analyzer.analyze(sampled, dim_result=dim_result)
+            report.signature_estimate = sig_result
 
         # Create algebra and embed (n >= 2 for meaningful GA structure)
         if sig_result is not None:
-            p, q, r = sig_result.signature
+            p, q, r = sig_result.estimated_signature
         elif dim_result is not None:
-            p, q, r = dim_result.intrinsic_dim, 0, 0
+            p, q, r = dim_result.broken_stick_dimension, 0, 0
         else:
             p, q, r = min(sampled.shape[1], CONSTANTS.pipeline_fallback_dim_cap), 0, 0
         # Ensure n >= 2 so grade-2 (bivectors) exist for GA analyses
@@ -143,8 +143,10 @@ class GeometricAnalyzer:
         tasks = {}
         if cfg.run_spectral:
             tasks["spectral"] = lambda: SpectralAnalyzer(algebra).analyze(mv_data)
-        if cfg.run_symmetry:
-            tasks["symmetry"] = lambda: SymmetryDetector(algebra, null_threshold=cfg.energy_threshold).analyze(mv_data)
+        if cfg.run_transformation_diagnostics:
+            tasks["transformation"] = lambda: TransformationDiagnosticsAnalyzer(
+                algebra, low_energy_threshold=cfg.energy_threshold
+            ).analyze(mv_data)
         if cfg.run_commutator:
             tasks["commutator"] = lambda: CommutatorAnalyzer(algebra).analyze(mv_data)
 
@@ -159,20 +161,27 @@ class GeometricAnalyzer:
                 for name, fut in futures.items():
                     setattr(report, name, fut.result())
 
-        # Refine continuous symmetries with commutator result
-        if cfg.run_symmetry and cfg.run_commutator and report.symmetry is not None and report.commutator is not None:
+        # Recount near-commuting modes from the adjoint diagnostics when available.
+        if (
+            cfg.run_transformation_diagnostics
+            and cfg.run_commutator
+            and report.transformation is not None
+            and report.commutator is not None
+        ):
             if mv_data.ndim == 3:
                 flat = mv_data.mean(dim=1)
             else:
                 flat = mv_data
-            detector = SymmetryDetector(algebra, null_threshold=cfg.energy_threshold)
-            continuous_dim, continuous_skipped = detector._continuous_symmetries_with_skips(
+            transformation_analyzer = TransformationDiagnosticsAnalyzer(
+                algebra, low_energy_threshold=cfg.energy_threshold
+            )
+            near_commuting_count, commuting_skipped = transformation_analyzer._near_commuting_modes_with_skips(
                 flat,
                 commutator_result=report.commutator,
             )
-            report.symmetry.continuous_symmetry_dim = continuous_dim
-            report.symmetry.skipped.pop("continuous_symmetries", None)
-            report.symmetry.skipped.update(continuous_skipped)
+            report.transformation.near_commuting_mode_count = near_commuting_count
+            report.transformation.skipped.pop("near_commuting_modes", None)
+            report.transformation.skipped.update(commuting_skipped)
 
         return report
 

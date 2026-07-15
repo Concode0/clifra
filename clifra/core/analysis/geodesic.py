@@ -16,8 +16,8 @@ from ._types import CONSTANTS
 from ._utils import full_grades
 
 
-class GeodesicFlow:
-    """Compute bivector-flow statistics over coefficient-space neighbors.
+class NeighborhoodBivectorFlow:
+    """Compute experimental bivector statistics over coefficient-space neighbors.
 
     Data points are interpreted as grade-1 multivectors. Neighbors are selected
     by Euclidean distance in coefficient space, and each point-neighbor pair is
@@ -27,16 +27,19 @@ class GeodesicFlow:
 
         B_ij = <x_i . ~x_j>_2   (grade-2 part of the geometric product)
 
-    Coherence and curvature summarize local directional alignment:
+    The two scalar summaries are operationally defined as:
 
-    - **High coherence, low curvature** -> the flow is smooth and aligned in
-      one direction.
-    - **Low coherence, high curvature** -> the flow is fragmented and
-      varies across neighborhoods.
+    - ``connection_alignment``: mean absolute cosine between connection
+      bivectors within each neighborhood;
+    - ``connection_dissimilarity``: one minus the mean cross-neighborhood
+      absolute cosine used by this implementation.
+
+    They are exploratory coefficient-space diagnostics, not measurements of
+    manifold curvature, causality, or an exact geodesic connection.
     """
 
     def __init__(self, algebra: AlgebraLike, k: int = CONSTANTS.default_k_neighbors):
-        """Initialize Geodesic Flow.
+        """Initialize the neighborhood-bivector diagnostic.
 
         Args:
             algebra: Layout-first algebra context.
@@ -59,7 +62,7 @@ class GeodesicFlow:
         if d > n:
             raise ValueError(
                 f"Data dimension {d} exceeds algebra dimension {n}. "
-                f"Use DimensionLifter to lift data before flow analysis."
+                f"Use CoordinateLiftAnalyzer to lift data before flow analysis."
             )
         if d < n:
             pad = torch.zeros(N, n - d, device=data.device, dtype=data.dtype)
@@ -138,7 +141,7 @@ class GeodesicFlow:
         .. note::
             For perfectly symmetric data (e.g. a closed circle) the mean
             cancels to zero -- which is geometrically correct since there is
-            no preferred mean direction. Use :meth:`coherence` to measure
+            no preferred mean direction. Use :meth:`connection_alignment` to measure
             pairwise alignment without this cancellation.
 
         Args:
@@ -152,14 +155,14 @@ class GeodesicFlow:
             return mv.new_zeros(mv.shape[0], mv.shape[-1])
         return bv.mean(dim=1)  # [N, dim]
 
-    def _coherence_tensor(self, mv: torch.Tensor) -> torch.Tensor:
-        """Differentiable coherence -- returns a scalar tensor with grad_fn.
+    def _connection_alignment_tensor(self, mv: torch.Tensor) -> torch.Tensor:
+        """Return differentiable mean within-neighborhood absolute-cosine alignment.
 
         Args:
             mv (torch.Tensor): ``[N, dim]`` multivectors.
 
         Returns:
-            torch.Tensor: Scalar coherence in [0, 1].
+            torch.Tensor: Scalar connection_alignment in [0, 1].
         """
         bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
@@ -174,7 +177,7 @@ class GeodesicFlow:
         off_diag = abs_cos[:, mask]  # [N, k*(k-1)]
         return off_diag.mean() if off_diag.numel() > 0 else mv.new_zeros(())
 
-    def coherence(self, mv: torch.Tensor) -> float:
+    def connection_alignment(self, mv: torch.Tensor) -> float:
         """Measures concentration of connection bivectors within each neighborhood.
 
         For each point, computes the mean **absolute** cosine similarity between
@@ -187,25 +190,25 @@ class GeodesicFlow:
 
         .. note::
             In Cl(2,0) the grade-2 space is 1-dimensional (only e_12), so
-            coherence is trivially 1.0 for any data -- use at least Cl(3,0)
+            connection_alignment is trivially 1.0 for any data -- use at least Cl(3,0)
             for meaningful discrimination.
 
         Args:
             mv (torch.Tensor): ``[N, dim]`` multivectors.
 
         Returns:
-            float: Coherence score in [0, 1].
+            float: Connection-alignment score in [0, 1].
         """
-        return self._coherence_tensor(mv).item()
+        return self._connection_alignment_tensor(mv).item()
 
-    def _curvature_tensor(self, mv: torch.Tensor) -> torch.Tensor:
-        """Differentiable curvature -- returns a scalar tensor with grad_fn.
+    def _connection_dissimilarity_tensor(self, mv: torch.Tensor) -> torch.Tensor:
+        """Return differentiable neighboring-connection dissimilarity.
 
         Args:
             mv (torch.Tensor): ``[N, dim]`` multivectors.
 
         Returns:
-            torch.Tensor: Scalar curvature in [0, 1].
+            torch.Tensor: Scalar connection_dissimilarity in [0, 1].
         """
         bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
@@ -224,7 +227,7 @@ class GeodesicFlow:
 
         return (1.0 - alignment.mean()).clamp_min(0.0)
 
-    def curvature(self, mv: torch.Tensor) -> float:
+    def connection_dissimilarity(self, mv: torch.Tensor) -> float:
         """Measures how much connection structure changes across the manifold.
 
         Computes the mean **dissimilarity** of connection bivectors between
@@ -237,25 +240,25 @@ class GeodesicFlow:
         similarity.
 
         - **0.0**: all neighboring points have the same connection structure
-          (flat geodesics, smooth manifold).
+          under this coefficient-space statistic.
         - **High**: the connection direction changes rapidly between neighbors
-          (high curvature, fragmented flow).
+          under this coefficient-space statistic.
 
         Args:
             mv (torch.Tensor): ``[N, dim]`` multivectors.
 
         Returns:
-            float: Curvature score in [0, 1].
+            float: Connection-dissimilarity score in [0, 1].
         """
-        return self._curvature_tensor(mv).item()
+        return self._connection_dissimilarity_tensor(mv).item()
 
-    def interpolate(
+    def approximate_bivector_interpolation(
         self,
         a: torch.Tensor,
         b: torch.Tensor,
-        steps: int = CONSTANTS.geodesic_interpolation_steps,
+        steps: int = CONSTANTS.bivector_interpolation_steps,
     ) -> torch.Tensor:
-        """Interpolates along the geodesic from ``a`` to ``b``.
+        """Return an experimental first-order bivector-log interpolation.
 
         Uses the *Lie group exponential map* on the transition element:
 
@@ -263,7 +266,8 @@ class GeodesicFlow:
             log(T) ~= <T - 1>_2     (grade-2 approximation for small angles)
             gamma(t) = a . exp(t . log(T))
 
-        Exact when a and b are close; a first-order approximation otherwise.
+        This is not a general geodesic solver. It uses the existing regularized
+        blade inverse and a grade-2 first-order logarithm approximation.
 
         Args:
             a (torch.Tensor): Start multivector ``[dim]``.
@@ -320,8 +324,8 @@ class GeodesicFlow:
             output_layout=full_layout,
         )  # [steps, dim]
 
-    def _random_baseline_coherence(self) -> float:
-        """Expected coherence for random unit vectors in the bivector subspace.
+    def _random_connection_alignment_baseline(self) -> float:
+        """Approximate random-vector baseline for absolute-cosine alignment.
 
         For d-dimensional random unit vectors, ``E[|cos theta|] ~= sqrt(2/(pi*d))``.
         In Cl(n), the bivector space has ``n*(n-1)/2`` dimensions.
@@ -334,56 +338,47 @@ class GeodesicFlow:
             return 1.0
         return math.sqrt(2.0 / (math.pi * d))
 
-    def causal_report(self, data: torch.Tensor) -> Dict:
-        """Apply the legacy alignment threshold to geodesic-flow statistics.
+    def alignment_threshold_report(self, data: torch.Tensor) -> Dict:
+        """Apply experimental thresholds to the two connection statistics.
 
-        Embed data, compute coherence and curvature, and apply the configured
-        binary threshold. The returned ``causal`` field and label are legacy
-        names for this threshold result; the calculation does not establish
-        statistical or physical causality.
-
-        The causal threshold is adaptive: coherence must exceed the
-        midpoint between random baseline and 1.0 (i.e. the measured
-        coherence must be at least halfway between chance and perfect
-        alignment).  Curvature must be below 0.5.
+        Alignment must exceed the midpoint between the random-vector baseline
+        and 1.0; dissimilarity must remain below the configured maximum. The
+        boolean reports only these inequalities.
 
         Args:
             data (torch.Tensor): ``[N, d]`` raw data.
 
         Returns:
-            Dict: report with keys ``coherence``, ``curvature``,
-            ``causal``, ``baseline``, ``threshold``, ``label``.
+            Dict: report with keys ``connection_alignment``, ``connection_dissimilarity``,
+            ``passes_alignment_thresholds``, ``baseline``, ``threshold``, and
+            ``label``.
         """
         mv = self._embed(data)
-        coh = self.coherence(mv)
-        curv = self.curvature(mv)
-        baseline = self._random_baseline_coherence()
+        alignment = self.connection_alignment(mv)
+        dissimilarity = self.connection_dissimilarity(mv)
+        baseline = self._random_connection_alignment_baseline()
         threshold = (1.0 + baseline) / 2.0
-        is_causal = (coh > threshold) and (curv < CONSTANTS.curvature_causal_threshold)
+        passes_thresholds = (alignment > threshold) and (dissimilarity < CONSTANTS.alignment_report_max_dissimilarity)
         return {
-            "coherence": coh,
-            "curvature": curv,
+            "connection_alignment": alignment,
+            "connection_dissimilarity": dissimilarity,
             "baseline": baseline,
             "threshold": threshold,
-            "causal": is_causal,
-            "label": (
-                "Causal - smooth, aligned flow (low curvature)"
-                if is_causal
-                else "Noisy - fragmented, colliding flow (high curvature)"
-            ),
+            "passes_alignment_thresholds": passes_thresholds,
+            "label": ("passes thresholds" if passes_thresholds else "outside thresholds"),
         }
 
-    def per_point_coherence(self, mv: torch.Tensor) -> torch.Tensor:
-        """Per-point coherence scores for stratified sampling.
+    def per_point_connection_alignment(self, mv: torch.Tensor) -> torch.Tensor:
+        """Return per-point within-neighborhood absolute-cosine alignment.
 
-        Returns a scalar coherence value per data point, measuring how
+        Returns a scalar connection_alignment value per data point, measuring how
         well-aligned that point's neighborhood connections are.
 
         Args:
             mv (torch.Tensor): ``[N, dim]`` multivectors.
 
         Returns:
-            torch.Tensor: ``[N]`` coherence scores in [0, 1].
+            torch.Tensor: ``[N]`` connection_alignment scores in [0, 1].
         """
         bv = self._connection_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape

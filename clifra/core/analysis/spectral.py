@@ -28,14 +28,15 @@ from .policy import feasibility_record
 
 
 class SpectralAnalyzer:
-    """Spectral analysis of multivector data.
+    """Compute descriptive spectra and mean-coefficient diagnostics.
 
     Three independent analyses are combined:
 
     1. **Grade energy spectrum** -- population-level distribution of positive
        coefficient lane energy across all grades.
-    2. **Bivector field spectrum** -- norm of the mean bivector field.
-    3. **GP operator spectrum** -- eigenvalues of the left-multiplication
+    2. **Mean bivector summary** -- norm and coefficients of the sample mean's
+       grade-2 component. It is not a spectral decomposition.
+    3. **GP action eigenvalue magnitudes** -- magnitudes of eigenvalues of the left-multiplication
        operator :math:`L_x(y) = x \\cdot y` (only for small algebras).
     """
 
@@ -59,25 +60,25 @@ class SpectralAnalyzer:
             mv_data = mv_data.unsqueeze(1)  # [N, 1, dim]
 
         grade_energy = self.grade_energy_spectrum(mv_data)
-        bv_spectrum, simple_comps, skipped = self._bivector_field_spectrum_with_skips(mv_data)
+        mean_bivector_norm, mean_bivector_components, skipped = self._mean_bivector_summary_with_skips(mv_data)
 
-        gp_eigs = None
+        gp_action_magnitudes = None
         gp_matrix = full_matrix_feasibility(
             self.algebra,
-            role="gp_operator_spectrum",
+            role="gp_action_eigenvalue_magnitudes",
             max_entries=CONSTANTS.gp_spectrum_matrix_entries,
             matrix_kind="eigensolver",
         )
         gp_product = full_product_feasibility(
             self.algebra,
-            role="gp_operator_spectrum",
+            role="gp_action_eigenvalue_magnitudes",
             op="gp",
             max_pairs=CONSTANTS.gp_spectrum_product_pairs,
         )
         if gp_matrix and gp_product:
-            gp_eigs = self.gp_operator_spectrum(mv_data)
+            gp_action_magnitudes = self.gp_action_eigenvalue_magnitudes(mv_data)
         else:
-            skipped["gp_operator_spectrum"] = {
+            skipped["gp_action_eigenvalue_magnitudes"] = {
                 "reason": _first_skip_reason(gp_matrix, gp_product),
                 "checks": {
                     "eigensolver_matrix": feasibility_record(gp_matrix),
@@ -87,9 +88,9 @@ class SpectralAnalyzer:
 
         return SpectralResult(
             grade_energy=grade_energy,
-            bivector_spectrum=bv_spectrum,
-            simple_components=simple_comps,
-            gp_eigenvalues=gp_eigs,
+            mean_bivector_norm=mean_bivector_norm,
+            mean_bivector_components=mean_bivector_components,
+            gp_action_eigenvalue_magnitudes=gp_action_magnitudes,
             skipped=skipped,
         )
 
@@ -106,28 +107,28 @@ class SpectralAnalyzer:
         spectrum = lane_grade_energy(self.algebra, flat, grades=full_grades(self.algebra))  # [N, n+1]
         return spectrum.mean(dim=0)  # [n+1]
 
-    def bivector_field_spectrum(self, mv_data: torch.Tensor) -> tuple:
+    def mean_bivector_summary(self, mv_data: torch.Tensor) -> tuple:
         """Return the mean-bivector magnitude and representative component.
 
         Args:
             mv_data: ``[N, C, dim]`` multivector data.
 
         Returns:
-            ``(spectrum, components)`` where *spectrum* is a 1-D tensor
+            ``(norm, components)`` where *norm* is a one-element tensor
             containing the mean-bivector norm and *components* contains the
             corresponding full-layout mean bivector.
         """
-        spectrum, components, _ = self._bivector_field_spectrum_with_skips(mv_data)
-        return spectrum, components
+        mean_norm, components, _ = self._mean_bivector_summary_with_skips(mv_data)
+        return mean_norm, components
 
-    def _bivector_field_spectrum_with_skips(self, mv_data: torch.Tensor) -> tuple:
-        """Return bivector spectrum plus feasibility skip metadata."""
+    def _mean_bivector_summary_with_skips(self, mv_data: torch.Tensor) -> tuple:
+        """Return the mean-bivector summary plus feasibility skip metadata."""
         flat = mv_data.mean(dim=1)  # [N, dim]
         mean_mv = flat.mean(dim=0)  # [dim]
         skipped = {}
 
         if self.algebra.n < 2:
-            skipped["bivector_field_spectrum"] = {
+            skipped["mean_bivector_summary"] = {
                 "reason": "grade_absent",
                 "details": {"n": int(self.algebra.n), "required_grade": 2},
             }
@@ -151,7 +152,7 @@ class SpectralAnalyzer:
             )
         return bv_norm.reshape(1), [mean_bv], skipped
 
-    def gp_operator_spectrum(self, mv_data: torch.Tensor, n_samples: Optional[int] = None) -> torch.Tensor:
+    def gp_action_eigenvalue_magnitudes(self, mv_data: torch.Tensor, n_samples: Optional[int] = None) -> torch.Tensor:
         """Eigenvalue magnitudes of the left-multiplication operator.
 
         For a subsample of data points, constructs the explicit matrix

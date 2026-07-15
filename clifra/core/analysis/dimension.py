@@ -22,12 +22,12 @@ from ._types import CONSTANTS, DimensionResult
 from ._utils import analysis_dtype, as_analysis_tensor
 
 
-class EffectiveDimensionAnalyzer:
-    """Estimate effective intrinsic dimensionality of data.
+class CovarianceDimensionAnalyzer:
+    """Compute experimental covariance-spectrum dimension diagnostics.
 
-    Uses the covariance eigenvalue spectrum together with the
-    participation ratio (random matrix theory) and the broken-stick
-    model (MacArthur 1957) for significance testing.
+    The reported dimension is the number of normalized covariance
+    eigenvalues above a broken-stick reference, clamped to at least one.
+    It is a descriptive heuristic, not an intrinsic-dimension proof.
 
     Args:
         device: Torch device string.
@@ -54,14 +54,14 @@ class EffectiveDimensionAnalyzer:
         self._eps_sq: float = self._eps**2
 
     def analyze(self, data: torch.Tensor) -> DimensionResult:
-        """Full effective-dimension analysis.
+        """Compute covariance eigenvalue and broken-stick diagnostics.
 
         Args:
             data: ``[N, D]`` raw data tensor.
 
         Returns:
             :class:`DimensionResult` with eigenvalues, participation
-            ratio, broken-stick threshold, and optional local dims.
+            ratio, broken-stick count, and optional local participation ratios.
         """
         data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
         if data.ndim != 2:
@@ -69,29 +69,29 @@ class EffectiveDimensionAnalyzer:
         N, D = data.shape
 
         eigenvalues = self._covariance_eigenvalues(data)  # descending
-        pr = self._participation_ratio(eigenvalues)
+        participation_ratio = self._participation_ratio(eigenvalues)
 
         total = eigenvalues.sum()
         if total > 0:
-            evr = eigenvalues / total
+            explained_variance_ratio = eigenvalues / total
         else:
-            evr = torch.zeros_like(eigenvalues)
+            explained_variance_ratio = torch.zeros_like(eigenvalues)
 
-        bs_threshold = self._broken_stick_threshold(eigenvalues, D)
+        broken_stick_count = self._broken_stick_count(eigenvalues, D)
 
-        local_dims = None
+        local_participation_ratios = None
         if N < CONSTANTS.dimension_local_max_samples and N > self.k_local + 1:
-            local_dims = self._local_dimensions(data, self.k_local)
+            local_participation_ratios = self._local_participation_ratios(data, self.k_local)
 
-        intrinsic_dim = max(CONSTANTS.dimension_min_intrinsic_dim, bs_threshold)
+        broken_stick_dimension = max(CONSTANTS.dimension_min_reported_dimension, broken_stick_count)
 
         return DimensionResult(
-            intrinsic_dim=intrinsic_dim,
-            participation_ratio=pr,
+            broken_stick_dimension=broken_stick_dimension,
+            participation_ratio=participation_ratio,
             eigenvalues=eigenvalues,
-            broken_stick_threshold=bs_threshold,
-            explained_variance_ratio=evr,
-            local_dims=local_dims,
+            broken_stick_count=broken_stick_count,
+            explained_variance_ratio=explained_variance_ratio,
+            local_participation_ratios=local_participation_ratios,
         )
 
     def reduce(self, data: torch.Tensor, target_dim: int) -> torch.Tensor:
@@ -147,7 +147,7 @@ class EffectiveDimensionAnalyzer:
         expected = inv.flip(0).cumsum(0).flip(0) / d
         return expected.to(dtype=dtype)
 
-    def _broken_stick_threshold(self, eigenvalues: torch.Tensor, d: int) -> int:
+    def _broken_stick_count(self, eigenvalues: torch.Tensor, d: int) -> int:
         """Number of components exceeding the broken-stick null."""
         if d <= 0:
             return 0
@@ -158,8 +158,8 @@ class EffectiveDimensionAnalyzer:
         normed = eigenvalues[:d] / total
         return int((normed > expected[: len(normed)]).sum().item())
 
-    def _local_dimensions(self, data: torch.Tensor, k: int) -> torch.Tensor:
-        """Per-point local dimension via neighborhood PCA."""
+    def _local_participation_ratios(self, data: torch.Tensor, k: int) -> torch.Tensor:
+        """Return per-point covariance participation ratios over k-neighborhoods."""
         dists = torch.cdist(data, data)  # [N, N]
         # k+1 because the closest point is itself
         _, knn_idx = dists.topk(k + 1, largest=False, dim=1)
@@ -177,27 +177,26 @@ class EffectiveDimensionAnalyzer:
         # Vectorized participation ratio
         s1 = eigvals.sum(dim=-1)
         s2 = (eigvals**2).sum(dim=-1)
-        local_dims = torch.where(s2 > self._eps_sq, s1**2 / s2, torch.zeros_like(s1))
+        local_participation_ratios = torch.where(s2 > self._eps_sq, s1**2 / s2, torch.zeros_like(s1))
 
-        return local_dims
+        return local_participation_ratios
 
 
-class DimensionLifter:
-    """Tests whether lifting data to a higher-dimensional algebra reveals structure.
+class CoordinateLiftAnalyzer:
+    """Experimentally compare connection scores after coordinate lifting.
 
-    The hypothesis: data living on an n-dimensional manifold may possess
-    latent structure that only becomes visible in Cl(n+1, q) or Cl(n, q+1).
+    This heuristic asks whether appending a fixed coordinate changes the
+    neighborhood-bivector alignment measurements. It does not establish that
+    the source data has a latent geometric dimension.
 
     Lifting appends extra coordinates to the grade-1 embedding:
 
     - **Positive lift** ``Cl(p, q) -> Cl(p+1, q)``: adds a spacelike dimension.
       The extra coordinate is set to 1 (projective / homogeneous lift).
-    - **Null lift** ``Cl(p, q) -> Cl(p, q+1)``: adds a timelike dimension.
-      The extra coordinate is set to 0 (null vector lift for conformal-like
-      embeddings).
+    - **Negative-square lift** ``Cl(p, q) -> Cl(p, q+1)``: adds a negative
+      generator and initializes its input coordinate to 0.
 
-    After lifting, geodesic flow coherence is re-measured.  An improvement
-    indicates that the extra dimension captures hidden geometric structure.
+    The comparison reports operational scores only.
     """
 
     def __init__(self, device: str = "cpu", dtype: torch.dtype = CONSTANTS.default_dtype):
@@ -220,7 +219,7 @@ class DimensionLifter:
             target_algebra: Target algebra with n >= d.
             fill: Coordinate value for the new dimensions.
                 Use 1.0 for a projective (homogeneous) lift,
-                0.0 for a null-vector (conformal) lift.
+                0.0 for a zero-initialized added coordinate.
 
         Returns:
             ``[N, target_algebra.dim]`` grade-1 multivectors.
@@ -242,51 +241,50 @@ class DimensionLifter:
         lifted = torch.cat([as_analysis_tensor(data, device=self.device, dtype=dtype), pad], dim=-1)
         return target_algebra.embed_vector(lifted)
 
-    def test(
+    def compare_lifts(
         self,
         data: torch.Tensor,
         p: int,
         q: int,
         k: int = CONSTANTS.default_k_neighbors,
     ) -> Dict:
-        """Compares geodesic flow coherence before and after dimension lifting.
+        """Compare experimental neighborhood-connection scores across lifts.
 
         Tests three algebras:
 
-        1. **Original** Cl(p, q): baseline coherence and curvature.
+        1. **Original** Cl(p, q): baseline connection_alignment and connection_dissimilarity.
         2. **Positive lift** Cl(p+1, q): spacelike extra dimension, fill=1.
         3. **Negative-square lift** ``Cl(p, q+1)``: one additional negative
            generator, with its input coordinate initialized to zero. The
-           returned key ``lift_null`` is retained for API compatibility; the
            added generator is not signature-null.
 
         Args:
             data: ``[N, d]`` data where d = p + q.
             p: Original positive signature.
             q: Original negative signature.
-            k: Nearest neighbors for geodesic flow.
+            k: Number of coefficient-space nearest neighbors.
 
         Returns:
-            Dict with keys ``original``, ``lift_positive``, ``lift_null``,
-            and ``best`` (name of the algebra with highest coherence). The
-            key ``lift_null`` denotes the negative-square lift described above.
+            Operational scores for the original and two lifted embeddings,
+            plus the key with the highest connection alignment.
         """
-        from .geodesic import GeodesicFlow
+        from .geodesic import NeighborhoodBivectorFlow
 
         data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
         results: Dict = {}
 
         def _measure(alg: AlgebraLike, mv: torch.Tensor) -> Dict:
-            gf = GeodesicFlow(alg, k=k)
-            coh = gf.coherence(mv)
-            curv = gf.curvature(mv)
-            baseline = gf._random_baseline_coherence()
-            coh_threshold = (1.0 + baseline) / 2.0
+            gf = NeighborhoodBivectorFlow(alg, k=k)
+            alignment = gf.connection_alignment(mv)
+            dissimilarity = gf.connection_dissimilarity(mv)
+            baseline = gf._random_connection_alignment_baseline()
+            alignment_threshold = (1.0 + baseline) / 2.0
             return {
-                "signature": (alg.p, alg.q),
-                "coherence": coh,
-                "curvature": curv,
-                "causal": (coh > coh_threshold) and (curv < CONSTANTS.curvature_causal_threshold),
+                "algebra_signature": (alg.p, alg.q),
+                "connection_alignment": alignment,
+                "connection_dissimilarity": dissimilarity,
+                "passes_alignment_thresholds": (alignment > alignment_threshold)
+                and (dissimilarity < CONSTANTS.alignment_report_max_dissimilarity),
             }
 
         alg_orig = make_algebra(p, q, device=self.device, dtype=self.dtype)
@@ -295,34 +293,29 @@ class DimensionLifter:
 
         alg_pos = make_algebra(p + 1, q, device=self.device, dtype=self.dtype)
         mv_pos = self.lift(data, alg_pos, fill=CONSTANTS.dimension_lift_positive_fill)
-        results["lift_positive"] = _measure(alg_pos, mv_pos)
+        results["positive_coordinate_lift"] = _measure(alg_pos, mv_pos)
 
         alg_null = make_algebra(p, q + 1, device=self.device, dtype=self.dtype)
-        mv_null = self.lift(data, alg_null, fill=CONSTANTS.dimension_lift_null_fill)
-        results["lift_null"] = _measure(alg_null, mv_null)
+        mv_null = self.lift(data, alg_null, fill=CONSTANTS.dimension_lift_negative_square_fill)
+        results["negative_square_coordinate_lift"] = _measure(alg_null, mv_null)
 
-        best = max(
-            ("original", "lift_positive", "lift_null"),
-            key=lambda key: results[key]["coherence"],
+        highest_alignment = max(
+            ("original", "positive_coordinate_lift", "negative_square_coordinate_lift"),
+            key=lambda key: results[key]["connection_alignment"],
         )
-        results["best"] = best
+        results["highest_alignment"] = highest_alignment
 
         return results
 
     def format_report(self, results: Dict) -> str:
-        """Render a lifting test result.
-
-        The legacy ``Causal`` and ``Noisy`` labels report only the coherence
-        and curvature threshold computed by :meth:`test`; they do not establish
-        causality or a noise model.
-        """
-        lines = ["Dimension Lifting Report", "=" * 40]
-        for key in ("original", "lift_positive", "lift_null"):
+        """Render the experimental coordinate-lift comparison."""
+        lines = ["Coordinate Lift Comparison", "=" * 40]
+        for key in ("original", "positive_coordinate_lift", "negative_square_coordinate_lift"):
             r = results[key]
-            p, q = r["signature"]
-            coh = r["coherence"]
-            curv = r["curvature"]
-            causal = "O Causal" if r["causal"] else "X Noisy"
-            lines.append(f"  Cl({p},{q})  coherence={coh:+.3f}  curvature={curv:.3f}  {causal}")
-        lines.append(f"\n  Best algebra: {results['best']}")
+            p, q = r["algebra_signature"]
+            alignment = r["connection_alignment"]
+            dissimilarity = r["connection_dissimilarity"]
+            status = "passes thresholds" if r["passes_alignment_thresholds"] else "outside thresholds"
+            lines.append(f"  Cl({p},{q})  alignment={alignment:+.3f}  dissimilarity={dissimilarity:.3f}  {status}")
+        lines.append(f"\n  Highest alignment: {results['highest_alignment']}")
         return "\n".join(lines)

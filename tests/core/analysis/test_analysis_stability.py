@@ -7,11 +7,11 @@ import torch
 from clifra.core.analysis._types import CONSTANTS, AnalysisConfig
 from clifra.core.analysis._utils import full_matrix_feasibility, full_product_feasibility
 from clifra.core.analysis.commutator import CommutatorAnalyzer
-from clifra.core.analysis.geodesic import GeodesicFlow
+from clifra.core.analysis.geodesic import NeighborhoodBivectorFlow
 from clifra.core.analysis.pipeline import GeometricAnalyzer
-from clifra.core.analysis.signature import MetricSearch
+from clifra.core.analysis.signature import RotorProbeSignatureEstimator
 from clifra.core.analysis.spectral import SpectralAnalyzer
-from clifra.core.analysis.symmetry import SymmetryDetector
+from clifra.core.analysis.symmetry import TransformationDiagnosticsAnalyzer
 from clifra.core.config import make_algebra
 
 pytestmark = pytest.mark.unit
@@ -19,16 +19,16 @@ pytestmark = pytest.mark.unit
 
 def test_geodesic_flow_handles_single_point_without_nan():
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float64)
-    flow = GeodesicFlow(algebra, k=4)
+    flow = NeighborhoodBivectorFlow(algebra, k=4)
     mv = algebra.embed_vector(torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64))
 
-    coherence = flow._coherence_tensor(mv)
-    curvature = flow._curvature_tensor(mv)
-    per_point = flow.per_point_coherence(mv)
+    connection_alignment = flow._connection_alignment_tensor(mv)
+    connection_dissimilarity = flow._connection_dissimilarity_tensor(mv)
+    per_point = flow.per_point_connection_alignment(mv)
     bivectors = flow.flow_bivectors(mv)
 
-    assert torch.isfinite(coherence)
-    assert torch.isfinite(curvature)
+    assert torch.isfinite(connection_alignment)
+    assert torch.isfinite(connection_dissimilarity)
     assert torch.isfinite(per_point).all()
     assert torch.isfinite(bivectors).all()
 
@@ -44,12 +44,12 @@ def test_analysis_modules_accept_context_without_reference_fallback():
     mv = algebra.embed_vector(torch.randn(16, algebra.n))
 
     spectral = SpectralAnalyzer(algebra).analyze(mv)
-    symmetry = SymmetryDetector(algebra).analyze(mv)
+    symmetry = TransformationDiagnosticsAnalyzer(algebra).analyze(mv)
     commutator = CommutatorAnalyzer(algebra).analyze(mv)
 
     assert spectral.grade_energy.shape == (algebra.n + 1,)
-    assert len(symmetry.reflection_symmetries) == algebra.n
-    assert commutator.commutativity_matrix.shape == (algebra.n, algebra.n)
+    assert len(symmetry.basis_reflection_scores) == algebra.n
+    assert commutator.pairwise_commutator_norms.shape == (algebra.n, algebra.n)
 
 
 def test_geometric_analyzer_preserves_configured_dtype_for_embedding():
@@ -57,9 +57,9 @@ def test_geometric_analyzer_preserves_configured_dtype_for_embedding():
         device="cpu",
         dtype=torch.float64,
         run_dimension=False,
-        run_signature=False,
+        run_signature_estimation=False,
         run_spectral=True,
-        run_symmetry=False,
+        run_transformation_diagnostics=False,
         run_commutator=False,
     )
     report = GeometricAnalyzer(cfg).analyze(torch.randn(20, 3, dtype=torch.float32))
@@ -73,7 +73,7 @@ def test_analysis_feasibility_reports_eigensolver_matrix_cap():
 
     feasibility = full_matrix_feasibility(
         algebra,
-        role="adjoint_exchange_spectrum",
+        role="adjoint_eigenvalue_magnitudes",
         max_entries=CONSTANTS.adjoint_matrix_entries,
         matrix_kind="eigensolver",
     )
@@ -98,8 +98,8 @@ def test_analysis_feasibility_reports_product_pair_cap_without_planning():
     assert feasibility.details["estimated_pairs"] == algebra.dim * algebra.dim
 
 
-def test_metric_search_lift_reports_action_matrix_cap():
-    searcher = MetricSearch(device="cpu")
+def test_signature_probe_lift_reports_action_matrix_cap():
+    searcher = RotorProbeSignatureEstimator(device="cpu")
     data = torch.randn(2, 11)
 
     with pytest.warns(UserWarning, match="action-matrix entries"):
@@ -111,7 +111,7 @@ def test_reflection_analysis_uses_product_feasibility_not_dimension_cap():
     algebra = make_algebra(9, 0, device="cpu", dtype=torch.float32)
     mv = algebra.embed_vector(torch.randn(3, algebra.n))
 
-    result = SymmetryDetector(algebra).detect_reflection_symmetries(mv)
+    result = TransformationDiagnosticsAnalyzer(algebra).basis_reflection_scores(mv)
 
     assert len(result) == algebra.n
 
@@ -123,30 +123,30 @@ def test_spectral_result_reports_skipped_gp_spectrum(monkeypatch):
 
     result = SpectralAnalyzer(algebra).analyze(mv)
 
-    assert result.gp_eigenvalues is None
-    assert result.skipped["gp_operator_spectrum"]["reason"] == "eigensolver_matrix_cap"
+    assert result.gp_action_eigenvalue_magnitudes is None
+    assert result.skipped["gp_action_eigenvalue_magnitudes"]["reason"] == "eigensolver_matrix_cap"
 
 
-def test_commutator_result_reports_skipped_exchange_spectrum(monkeypatch):
+def test_commutator_result_reports_skipped_adjoint_eigenvalue_magnitudes(monkeypatch):
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
     mv = algebra.embed_vector(torch.randn(6, algebra.n))
     monkeypatch.setattr(CONSTANTS, "adjoint_matrix_entries", 1)
 
     result = CommutatorAnalyzer(algebra).analyze(mv)
 
-    assert result.exchange_spectrum.numel() == 0
-    assert result.skipped["exchange_spectrum"]["reason"] == "eigensolver_matrix_cap"
+    assert result.adjoint_eigenvalue_magnitudes.numel() == 0
+    assert result.skipped["adjoint_eigenvalue_magnitudes"]["reason"] == "eigensolver_matrix_cap"
 
 
-def test_symmetry_result_reports_skipped_reflections_and_continuous_symmetries(monkeypatch):
+def test_symmetry_result_reports_skipped_reflections_and_near_commuting_modes(monkeypatch):
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
     mv = algebra.embed_vector(torch.randn(6, algebra.n))
     monkeypatch.setattr(CONSTANTS, "reflection_product_pairs", 1)
-    monkeypatch.setattr(CONSTANTS, "continuous_symmetry_product_pairs", 1)
+    monkeypatch.setattr(CONSTANTS, "near_commuting_mode_product_pairs", 1)
 
-    result = SymmetryDetector(algebra).analyze(mv)
+    result = TransformationDiagnosticsAnalyzer(algebra).analyze(mv)
 
-    assert result.reflection_symmetries == []
-    assert result.continuous_symmetry_dim == 0
-    assert result.skipped["reflection_symmetries"]["reason"] == "product_pair_cap"
-    assert result.skipped["continuous_symmetries"]["reason"] == "product_pair_cap"
+    assert result.basis_reflection_scores == []
+    assert result.near_commuting_mode_count == 0
+    assert result.skipped["basis_reflection_scores"]["reason"] == "product_pair_cap"
+    assert result.skipped["near_commuting_modes"]["reason"] == "product_pair_cap"

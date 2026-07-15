@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Shared dataclass types for the geometric analysis toolkit."""
+"""Public records for experimental, operationally defined diagnostics."""
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -27,22 +27,20 @@ class AnalysisConstants:
     :mod:`clifra.core.foundation.numerics`.
 
     Attributes:
-        curvature_causal_threshold: Maximum curvature score for the legacy
-            ``causal`` threshold result (used in
-            :meth:`GeodesicFlow.causal_report` and
-            :meth:`DimensionLifter.test`).
+        alignment_report_max_dissimilarity: Maximum neighborhood-connection
+            dissimilarity accepted by the experimental alignment report.
+            See :meth:`NeighborhoodBivectorFlow.alignment_threshold_report`
+            and :meth:`CoordinateLiftAnalyzer.compare_lifts`.
         bv_sq_elliptic_bound: Bivector square value below which the
             bivector is classified as *elliptic* (negative definite)
             in signature analysis.
         bv_sq_hyperbolic_bound: Bivector square value above which the
             bivector is classified as *hyperbolic* (positive definite)
             in signature analysis.
-        continuous_symmetry_threshold: Normalized commutator norm below
-            which a bivector is treated as a continuous-symmetry
-            generator.
-        reflection_score_threshold: Maximum reflection score for a
-            direction to be counted as a reflection symmetry in the
-            report summary.
+        near_commuting_mode_threshold: Normalized commutator norm below
+            which a mode is counted as near-commuting.
+        basis_reflection_score_threshold: Maximum basis-reflection
+            distribution score counted in the report summary.
         gp_spectrum_matrix_entries: Maximum square-matrix entries for
             the full geometric-product operator spectrum.
         adjoint_matrix_entries: Maximum square-matrix entries for the
@@ -53,29 +51,29 @@ class AnalysisConstants:
             the GP left-multiplication matrix.
     """
 
-    curvature_causal_threshold: float = 0.5
+    alignment_report_max_dissimilarity: float = 0.5
     bv_sq_elliptic_bound: float = -0.5
     bv_sq_hyperbolic_bound: float = 0.5
-    continuous_symmetry_threshold: float = 0.05
-    reflection_score_threshold: float = 0.1
+    near_commuting_mode_threshold: float = 0.05
+    basis_reflection_score_threshold: float = 0.1
     gp_spectrum_matrix_entries: int = GP_SPECTRUM_MATRIX_ENTRIES
     gp_spectrum_product_pairs: int = GP_SPECTRUM_MATRIX_ENTRIES
     adjoint_matrix_entries: int = ADJOINT_MATRIX_ENTRIES
     analysis_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
     reflection_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
-    continuous_symmetry_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
-    metric_search_action_matrix_entries: int = EXPLICIT_ACTION_MATRIX_ENTRIES
-    metric_search_action_matrix_lanes: int = EXPLICIT_ACTION_MATRIX_LANES
+    near_commuting_mode_product_pairs: int = AUTO_FULL_PRODUCT_PAIRS
+    signature_probe_action_matrix_entries: int = EXPLICIT_ACTION_MATRIX_ENTRIES
+    signature_probe_action_matrix_lanes: int = EXPLICIT_ACTION_MATRIX_LANES
     gp_spectrum_n_samples: int = 50
     default_k_neighbors: int = 8
     default_energy_threshold: float = 0.05
     default_dtype: torch.dtype = torch.float32
     dimension_k_local: int = 20
     dimension_local_max_samples: int = 5000
-    dimension_min_intrinsic_dim: int = 1
+    dimension_min_reported_dimension: int = 1
     dimension_lift_positive_fill: float = 1.0
-    dimension_lift_null_fill: float = 0.0
-    geodesic_interpolation_steps: int = 10
+    dimension_lift_negative_square_fill: float = 0.0
+    bivector_interpolation_steps: int = 10
     sampling_max_samples: int = 500
     sampling_seed: int = 42
     sampling_bootstrap_resamples: int = 100
@@ -85,23 +83,23 @@ class AnalysisConstants:
     stratified_min_strata: int = 2
     stratified_max_strata: int = 10
     stratified_algebra_max_dim: int = 6
-    metric_search_num_probes: int = 6
-    metric_search_probe_epochs: int = 80
-    metric_search_probe_lr: float = 0.005
-    metric_search_probe_channels: int = 4
-    metric_search_curvature_weight: float = 0.3
-    metric_search_sparsity_weight: float = 0.01
-    metric_search_parallel_worker_cap: int = 4
-    metric_search_cga_extra_dims: int = 2
-    metric_search_rotor_init_std: float = 0.01
-    metric_search_bias_minor_weight: float = 0.1
-    metric_search_bias_noise_std: float = 0.05
-    metric_search_projective_init_bound: float = 0.5
-    metric_search_random_init_std: float = 0.3
+    signature_probe_num_probes: int = 6
+    signature_probe_epochs: int = 80
+    signature_probe_lr: float = 0.005
+    signature_probe_channels: int = 4
+    signature_probe_connection_dissimilarity_weight: float = 0.3
+    signature_probe_sparsity_weight: float = 0.01
+    signature_probe_parallel_worker_cap: int = 4
+    signature_probe_cga_extra_dims: int = 2
+    signature_probe_rotor_init_std: float = 0.01
+    signature_probe_bias_minor_weight: float = 0.1
+    signature_probe_bias_noise_std: float = 0.05
+    signature_probe_projective_init_bound: float = 0.5
+    signature_probe_random_init_std: float = 0.3
     signature_search_max_dim: int = FULL_TABLE_EXPLICIT_MAX_N - 2
     signature_bootstrap_resamples: int = 10
     signature_bootstrap_max_samples: int = 500
-    symmetry_null_threshold: float = 0.01
+    low_energy_vector_threshold: float = 0.01
     commutator_max_bivectors: int = 15
     pipeline_parallel_workers: int = 3
     pipeline_fallback_dim_cap: int = 6
@@ -141,10 +139,10 @@ class AnalysisConfig:
     Attributes:
         device: Torch device string.
         sampling: Sampling configuration.
-        run_dimension: Enable effective-dimension analysis.
-        run_signature: Enable metric-signature search.
+        run_dimension: Enable covariance-dimension diagnostics.
+        run_signature_estimation: Enable experimental rotor-probe signature estimation.
         run_spectral: Enable spectral analysis.
-        run_symmetry: Enable symmetry / null detection.
+        run_transformation_diagnostics: Enable operational transformation diagnostics.
         run_commutator: Enable commutator analysis.
         energy_threshold: Cutoff for "active" components (shared across
             analyzers).
@@ -156,9 +154,9 @@ class AnalysisConfig:
     dtype: torch.dtype = CONSTANTS.default_dtype
     sampling: SamplingConfig = field(default_factory=SamplingConfig)
     run_dimension: bool = True
-    run_signature: bool = True
+    run_signature_estimation: bool = True
     run_spectral: bool = True
-    run_symmetry: bool = True
+    run_transformation_diagnostics: bool = True
     run_commutator: bool = True
     energy_threshold: float = CONSTANTS.default_energy_threshold
     k_neighbors: int = CONSTANTS.default_k_neighbors
@@ -167,47 +165,50 @@ class AnalysisConfig:
 
 @dataclass
 class DimensionResult:
-    """Output of :class:`EffectiveDimensionAnalyzer`.
+    """Output of :class:`CovarianceDimensionAnalyzer`.
 
     Attributes:
-        intrinsic_dim: Estimated integer intrinsic dimensionality (via
-            broken-stick).
-        participation_ratio: Smooth dimensionality estimate
+        broken_stick_dimension: Broken-stick component count, clamped to at
+            least one for downstream algebra construction.
+        participation_ratio: Covariance-spectrum participation ratio
             ``(Sum_lam)^2 / Sum_lam^2``.
         eigenvalues: Covariance eigenvalues sorted descending.
-        broken_stick_threshold: Number of significant components exceeding
+        broken_stick_count: Number of components exceeding
             the broken-stick null model.
         explained_variance_ratio: Per-component explained variance ratio.
-        local_dims: Per-point local dimension estimates (optional).
+        local_participation_ratios: Per-point neighborhood covariance
+            participation ratios (optional).
     """
 
-    intrinsic_dim: int
+    broken_stick_dimension: int
     participation_ratio: float
     eigenvalues: torch.Tensor
-    broken_stick_threshold: int
+    broken_stick_count: int
     explained_variance_ratio: torch.Tensor
-    local_dims: Optional[torch.Tensor] = None
+    local_participation_ratios: Optional[torch.Tensor] = None
 
 
 @dataclass
-class SignatureResult:
-    """Output of :class:`SignatureSearchAnalyzer`.
+class SignatureEstimate:
+    """Experimental output of :class:`SignatureProbeAnalyzer`.
 
     Attributes:
-        signature: Discovered ``(p, q, r)`` metric signature.
-        coherence: Best-probe geodesic-flow coherence.
-        curvature: Best-probe geodesic-flow curvature.
+        estimated_signature: Probe-selected ``(p, q, r)`` candidate. This is
+            a learned heuristic, not metric identification.
+        connection_alignment: Best probe's mean absolute connection alignment.
+        connection_dissimilarity: Best probe's neighboring-connection
+            dissimilarity.
         energy_breakdown: Per-bivector energy dict from
-            ``MetricSearch._analyze_bivector_energy``.
-        effective_dim_used: Reduced dimension that was actually searched
+            ``RotorProbeSignatureEstimator._analyze_bivector_energy``.
+        input_dimension_used: Reduced input dimension actually searched
             (``None`` if no reduction was applied).
     """
 
-    signature: Tuple[int, int, int]
-    coherence: float
-    curvature: float
+    estimated_signature: Tuple[int, int, int]
+    connection_alignment: float
+    connection_dissimilarity: float
     energy_breakdown: Dict
-    effective_dim_used: Optional[int] = None
+    input_dimension_used: Optional[int] = None
 
 
 @dataclass
@@ -216,42 +217,43 @@ class SpectralResult:
 
     Attributes:
         grade_energy: Mean positive lane grade energy ``[n+1]``.
-        bivector_spectrum: Norm summary of the mean bivector field.
-        simple_components: Representative full-layout bivector tensors.
-        gp_eigenvalues: Eigenvalues of the geometric-product left-action
+        mean_bivector_norm: Norm summary of the mean bivector field.
+        mean_bivector_components: Representative full-layout bivector tensors.
+        gp_action_eigenvalue_magnitudes: Eigenvalues of the geometric-product left-action
             operator (``None`` if the algebra was too large).
         skipped: Optional analysis subreports skipped by feasibility policy.
     """
 
     grade_energy: torch.Tensor
-    bivector_spectrum: torch.Tensor
-    simple_components: List[torch.Tensor]
-    gp_eigenvalues: Optional[torch.Tensor] = None
+    mean_bivector_norm: torch.Tensor
+    mean_bivector_components: List[torch.Tensor]
+    gp_action_eigenvalue_magnitudes: Optional[torch.Tensor] = None
     skipped: Dict[str, Dict] = field(default_factory=dict)
 
 
 @dataclass
-class SymmetryResult:
-    """Output of :class:`SymmetryDetector`.
+class TransformationDiagnosticsResult:
+    """Operational output of :class:`TransformationDiagnosticsAnalyzer`.
 
     Attributes:
-        null_directions: Indices of near-null basis vectors.
-        null_scores: Per-basis-vector null score ``[n]``.
-        involution_symmetry: Fraction of energy in odd-grade components,
+        low_energy_vector_directions: Indices whose normalized observed
+            grade-1 coefficient energy is below the configured threshold.
+        normalized_vector_energy: Per-basis-vector normalized energy ``[n]``.
+        odd_grade_energy_fraction: Fraction of energy in odd-grade components,
             in ``[0, 1]``.  0 = data lives entirely in the even
             sub-algebra; 1 = entirely odd grades.
-        reflection_symmetries: List of dicts, each with ``direction`` index
-            and ``score`` (lower = more symmetric).
-        continuous_symmetry_dim: Dimension of the detected continuous
-            symmetry group.
-        skipped: Optional symmetry subreports skipped by feasibility policy.
+        basis_reflection_scores: List of dicts, each with ``direction`` index
+            and coefficient-distribution distance ``score`` (lower is closer).
+        near_commuting_mode_count: Number of modes below the configured
+            normalized commutator threshold.
+        skipped: Optional subreports skipped by feasibility policy.
     """
 
-    null_directions: List[int]
-    null_scores: torch.Tensor
-    involution_symmetry: float
-    reflection_symmetries: List[Dict]
-    continuous_symmetry_dim: int
+    low_energy_vector_directions: List[int]
+    normalized_vector_energy: torch.Tensor
+    odd_grade_energy_fraction: float
+    basis_reflection_scores: List[Dict]
+    near_commuting_mode_count: int
     skipped: Dict[str, Dict] = field(default_factory=dict)
 
 
@@ -260,18 +262,18 @@ class CommutatorResult:
     """Output of :class:`CommutatorAnalyzer`.
 
     Attributes:
-        commutativity_matrix: ``[D, D]`` pairwise commutativity indices.
-        exchange_spectrum: Eigenvalues of the adjoint operator ``ad_mu``.
+        pairwise_commutator_norms: ``[D, D]`` mean pairwise commutator norms.
+        adjoint_eigenvalue_magnitudes: Magnitudes of eigenvalues of ``ad_mu``.
         mean_commutator_norm: Scalar summary ``E[||[x_i, mu]||_2]``.
-        lie_bracket_structure: Dict with ``structure_constants`` ``[k, k, k]``
+        bivector_bracket_closure: Dict with ``structure_constants`` ``[k, k, k]``
             tensor, ``closure_error`` scalar, and ``basis_indices`` list.
         skipped: Optional commutator subreports skipped by feasibility policy.
     """
 
-    commutativity_matrix: torch.Tensor
-    exchange_spectrum: torch.Tensor
+    pairwise_commutator_norms: torch.Tensor
+    adjoint_eigenvalue_magnitudes: torch.Tensor
     mean_commutator_norm: float
-    lie_bracket_structure: Dict
+    bivector_bracket_closure: Dict
     skipped: Dict[str, Dict] = field(default_factory=dict)
 
 
@@ -280,18 +282,18 @@ class AnalysisReport:
     """Full analysis report combining all sub-analyzers.
 
     Attributes:
-        dimension: Effective-dimension results.
-        signature: Metric-signature search results.
+        dimension: Covariance-spectrum dimension diagnostics.
+        signature_estimate: Experimental rotor-probe signature estimate.
         spectral: Spectral analysis results.
-        symmetry: Symmetry / null detection results.
+        transformation: Operational transformation diagnostics.
         commutator: Commutator analysis results.
         metadata: Timing, configuration, and data-shape information.
     """
 
     dimension: Optional[DimensionResult] = None
-    signature: Optional[SignatureResult] = None
+    signature_estimate: Optional[SignatureEstimate] = None
     spectral: Optional[SpectralResult] = None
-    symmetry: Optional[SymmetryResult] = None
+    transformation: Optional[TransformationDiagnosticsResult] = None
     commutator: Optional[CommutatorResult] = None
     metadata: Dict = field(default_factory=dict)
 
@@ -302,54 +304,58 @@ class AnalysisReport:
         if self.dimension is not None:
             d = self.dimension
             lines.append(f"\n[Dimension]")
-            lines.append(f"  Intrinsic dim (broken-stick): {d.intrinsic_dim}")
+            lines.append(f"  Broken-stick dimension:       {d.broken_stick_dimension}")
             lines.append(f"  Participation ratio:          {d.participation_ratio:.2f}")
             top_k = min(5, len(d.eigenvalues))
             ev = ", ".join(f"{v:.4f}" for v in d.eigenvalues[:top_k].tolist())
             lines.append(f"  Top eigenvalues:              [{ev}]")
 
-        if self.signature is not None:
-            s = self.signature
-            p, q, r = s.signature
-            lines.append(f"\n[Signature]")
-            lines.append(f"  Cl({p},{q},{r})")
-            lines.append(f"  Coherence: {s.coherence:.3f}  Curvature: {s.curvature:.3f}")
-            if s.effective_dim_used is not None:
-                lines.append(f"  (searched in {s.effective_dim_used}D reduced space)")
+        if self.signature_estimate is not None:
+            s = self.signature_estimate
+            p, q, r = s.estimated_signature
+            lines.append(f"\n[Experimental signature estimate]")
+            lines.append(f"  Candidate Cl({p},{q},{r})")
+            lines.append(
+                f"  Connection alignment: {s.connection_alignment:.3f}  dissimilarity: {s.connection_dissimilarity:.3f}"
+            )
+            if s.input_dimension_used is not None:
+                lines.append(f"  (searched in {s.input_dimension_used}D reduced space)")
 
         if self.spectral is not None:
             sp = self.spectral
             lines.append(f"\n[Spectral]")
             ge = ", ".join(f"{v:.4f}" for v in sp.grade_energy.tolist())
             lines.append(f"  Grade energy: [{ge}]")
-            bv = ", ".join(f"{v:.4f}" for v in sp.bivector_spectrum.tolist())
-            lines.append(f"  Bivector spectrum: [{bv}]")
-            if sp.gp_eigenvalues is not None:
-                top = min(5, len(sp.gp_eigenvalues))
-                gpe = ", ".join(f"{v:.4f}" for v in sp.gp_eigenvalues[:top].tolist())
-                lines.append(f"  GP eigenvalues (top {top}): [{gpe}]")
+            bv = ", ".join(f"{v:.4f}" for v in sp.mean_bivector_norm.tolist())
+            lines.append(f"  Mean bivector norm: [{bv}]")
+            if sp.gp_action_eigenvalue_magnitudes is not None:
+                top = min(5, len(sp.gp_action_eigenvalue_magnitudes))
+                gpe = ", ".join(f"{v:.4f}" for v in sp.gp_action_eigenvalue_magnitudes[:top].tolist())
+                lines.append(f"  GP action eigenvalue magnitudes (top {top}): [{gpe}]")
             if sp.skipped:
                 lines.append(f"  Skipped: {', '.join(sorted(sp.skipped))}")
 
-        if self.symmetry is not None:
-            sy = self.symmetry
-            lines.append(f"\n[Symmetry]")
-            lines.append(f"  Null directions: {sy.null_directions}")
-            lines.append(f"  Involution symmetry: {sy.involution_symmetry:.4f}")
-            lines.append(f"  Continuous symmetry dim: {sy.continuous_symmetry_dim}")
-            n_refl = sum(1 for r in sy.reflection_symmetries if r["score"] < CONSTANTS.reflection_score_threshold)
-            lines.append(f"  Reflection symmetries: {n_refl} detected")
-            if sy.skipped:
-                lines.append(f"  Skipped: {', '.join(sorted(sy.skipped))}")
+        if self.transformation is not None:
+            tr = self.transformation
+            lines.append(f"\n[Transformation diagnostics]")
+            lines.append(f"  Low-energy vector directions: {tr.low_energy_vector_directions}")
+            lines.append(f"  Odd-grade energy fraction: {tr.odd_grade_energy_fraction:.4f}")
+            lines.append(f"  Near-commuting mode count: {tr.near_commuting_mode_count}")
+            close_reflections = sum(
+                1 for item in tr.basis_reflection_scores if item["score"] < CONSTANTS.basis_reflection_score_threshold
+            )
+            lines.append(f"  Low-distance basis reflections: {close_reflections}")
+            if tr.skipped:
+                lines.append(f"  Skipped: {', '.join(sorted(tr.skipped))}")
 
         if self.commutator is not None:
             c = self.commutator
             lines.append(f"\n[Commutator]")
             lines.append(f"  Mean commutator norm: {c.mean_commutator_norm:.4f}")
-            top = min(5, len(c.exchange_spectrum))
-            es = ", ".join(f"{v:.4f}" for v in c.exchange_spectrum[:top].tolist())
-            lines.append(f"  Exchange spectrum (top {top}): [{es}]")
-            ce = c.lie_bracket_structure.get("closure_error", None)
+            top = min(5, len(c.adjoint_eigenvalue_magnitudes))
+            es = ", ".join(f"{v:.4f}" for v in c.adjoint_eigenvalue_magnitudes[:top].tolist())
+            lines.append(f"  Adjoint eigenvalue magnitudes (top {top}): [{es}]")
+            ce = c.bivector_bracket_closure.get("closure_error", None)
             if ce is not None:
                 lines.append(f"  Lie bracket closure error: {ce:.4f}")
             if c.skipped:
