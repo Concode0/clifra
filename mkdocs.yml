@@ -10,6 +10,20 @@ theme:
     - navigation.top
     - content.code.copy
 
+  palette:
+      - scheme: default
+        primary: deep orange
+        accent: indigo
+        toggle:
+            icon: material/weather-night
+            name: Switch to dark mode
+      - scheme: slate
+        primary: black
+        accent: cyan
+        toggle:
+            icon: material/weather-sunny
+            name: Switch to light mode
+      
 plugins:
   - search
   - mkdocstrings:
