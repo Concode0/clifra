@@ -1,19 +1,22 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Strict PGA metamaterial design example with VTK visualization export.
+"""Physics-informed PGA deformation design with VTK visualization export.
 
-The continuum solver stays generic; this script owns the metamaterial target,
-physical policies, guarded optimization loop, validation, and visualization.
+The continuum solver stays generic; this single example owns its material
+profile, virtual loading experiment, constitutive and geometric policies,
+guarded optimization loop, validation, and visualization.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import os
 import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -41,39 +44,72 @@ from research.continuum_solver import (
     PolicyResult,
 )
 
-
 DTYPE_CHOICES = ("float64", "float32")
 DEVICE_CHOICES = ("auto", "cpu", "cuda", "mps")
 
 
 @dataclass(frozen=True)
-class MetamaterialTarget:
-    """A difficult but physically admissible auxetic-to-positive phase target."""
+class RadialElasticProfile:
+    """Smooth isotropic elastic profile used by the virtual specimen."""
 
+    young_modulus: float = 1.0
     core_poisson: float = -0.65
     rim_poisson: float = 0.40
     core_radius: float = 0.34
     rim_radius: float = 0.84
+
+    def as_report(self) -> dict[str, float | str]:
+        return {
+            "constitutive_law": "compressible_neo_hookean",
+            "young_modulus": float(self.young_modulus),
+            "core_poisson": float(self.core_poisson),
+            "rim_poisson": float(self.rim_poisson),
+            "core_radius": float(self.core_radius),
+            "rim_radius": float(self.rim_radius),
+        }
+
+    def poisson_ratio(self, cell_centers: torch.Tensor) -> torch.Tensor:
+        return _phase_profile(
+            _normalized_radius(cell_centers),
+            core_value=self.core_poisson,
+            rim_value=self.rim_poisson,
+            core_radius=self.core_radius,
+            rim_radius=self.rim_radius,
+        )
+
+    def lame_parameters(self, cell_centers: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        poisson = self.poisson_ratio(cell_centers)
+        young = poisson.new_tensor(float(self.young_modulus))
+        shear = young / (2.0 * (1.0 + poisson))
+        first_lame = young * poisson / ((1.0 + poisson) * (1.0 - 2.0 * poisson))
+        return first_lame, shear
+
+
+@dataclass(frozen=True)
+class GradedResponseCriterion:
+    """Target a measured core-to-rim change in effective Poisson response.
+
+    The loss uses the stable strain-form residual ``eps_t + nu * eps_x``.
+    Reported response measures are ratios of region-averaged strains, which
+    corresponds to a small virtual uniaxial homogenization test.  Averaging the
+    per-cell ratios would be ill-conditioned wherever axial strain is small.
+    """
+
+    profile: RadialElasticProfile = dataclass_field(default_factory=RadialElasticProfile)
     axial_log_strain: float = 0.052
     target_twist: float = 0.055
     poisson_weight: float = 3.0
     axial_weight: float = 1.5
     volume_weight: float = 1.0
     curl_weight: float = 0.8
-    name: str = "phase_metamaterial"
+    name: str = "graded_response"
 
     def __call__(self, engine: ContinuumSolverEngine, state) -> CriterionResult:
         log_sx, log_sy, log_sz = _cell_log_stretches(state.reference_coordinates, state.deformed_coordinates)
         centers = _cell_centers(state.reference_coordinates)
         radius = _normalized_radius(centers)
         phase = _smoothstep(engine.fit_progress_like(log_sx))
-        poisson_target = phase * _phase_profile(
-            radius,
-            core_value=self.core_poisson,
-            rim_value=self.rim_poisson,
-            core_radius=self.core_radius,
-            rim_radius=self.rim_radius,
-        )
+        poisson_target = phase * self.profile.poisson_ratio(centers)
         axial_target = log_sx.new_tensor(float(self.axial_log_strain)) * phase
         log_volume_target = axial_target * (1.0 - 2.0 * poisson_target)
 
@@ -103,9 +139,12 @@ class MetamaterialTarget:
             + float(self.curl_weight) * curl_loss
         )
         poisson = _poisson_ratio(log_sx, log_sy, log_sz)
-        core = (radius <= self.core_radius).to(poisson.dtype)
-        transition = ((radius > self.core_radius) & (radius < self.rim_radius)).to(poisson.dtype)
-        rim = (radius >= self.rim_radius).to(poisson.dtype)
+        core = (radius <= self.profile.core_radius).to(poisson.dtype)
+        transition = ((radius > self.profile.core_radius) & (radius < self.profile.rim_radius)).to(poisson.dtype)
+        rim = (radius >= self.profile.rim_radius).to(poisson.dtype)
+        core_effective = _effective_poisson_ratio(log_sx, log_sy, log_sz, core)
+        transition_effective = _effective_poisson_ratio(log_sx, log_sy, log_sz, transition)
+        rim_effective = _effective_poisson_ratio(log_sx, log_sy, log_sz, rim)
         return CriterionResult(
             name=self.name,
             loss=total,
@@ -115,11 +154,15 @@ class MetamaterialTarget:
                 "axial_rmse": axial_loss.sqrt(),
                 "volume_rmse": volume_loss.sqrt(),
                 "curl_rmse": curl_loss.sqrt(),
-                "core_poisson": _masked_mean(poisson, core),
-                "transition_poisson": _masked_mean(poisson, transition),
-                "rim_poisson": _masked_mean(poisson, rim),
-                "target_core_poisson": phase * float(self.core_poisson),
-                "target_rim_poisson": phase * float(self.rim_poisson),
+                "core_poisson": core_effective,
+                "transition_poisson": transition_effective,
+                "rim_poisson": rim_effective,
+                "local_core_poisson": _masked_mean(poisson, core),
+                "local_transition_poisson": _masked_mean(poisson, transition),
+                "local_rim_poisson": _masked_mean(poisson, rim),
+                "poisson_contrast": rim_effective - core_effective,
+                "target_core_poisson": phase * float(self.profile.core_poisson),
+                "target_rim_poisson": phase * float(self.profile.rim_poisson),
                 "mean_axial_log_strain": log_sx.mean(),
                 "mean_log_volume": (log_sx + log_sy + log_sz).mean(),
             },
@@ -127,8 +170,111 @@ class MetamaterialTarget:
 
 
 @dataclass(frozen=True)
-class StrictPhysicalPolicy:
-    """Soft loss counterpart to hard physical guards."""
+class UniaxialBoundaryPolicy:
+    """Define the virtual test used to identify effective Poisson response.
+
+    The end faces receive a prescribed axial log strain while transverse motion
+    remains free.  Removing mean translation prevents a rigid-body mode from
+    satisfying the target without representing a material response.
+    """
+
+    axial_log_strain: float = 0.052
+    face_weight: float = 8.0
+    rigid_drift_weight: float = 2.0
+    weight: float = 1.0
+    strict_tolerance: float = 3e-3
+    name: str = "uniaxial_boundary"
+
+    def __call__(self, engine: ContinuumSolverEngine, state) -> PolicyResult:
+        reference = state.reference_coordinates
+        deformed = state.deformed_coordinates
+        displacement = deformed - reference
+        phase = _smoothstep(engine.fit_progress_like(reference))
+        stretch = torch.exp(reference.new_tensor(float(self.axial_log_strain)) * phase)
+        center_x = 0.5 * (reference[..., 0].amin() + reference[..., 0].amax())
+        target_x = center_x + stretch * (reference[..., 0] - center_x)
+
+        low_face, high_face = _axial_face_masks(reference.shape[:-1], device=reference.device, dtype=reference.dtype)
+        end_faces = low_face + high_face
+        face_residual = (deformed[..., 0] - target_x) * end_faces
+        face_loss = _masked_mean(face_residual.square(), end_faces)
+
+        mean_displacement = displacement.reshape(-1, displacement.shape[-1]).mean(dim=0)
+        drift_loss = mean_displacement.square().sum()
+        loss = float(self.face_weight) * face_loss + float(self.rigid_drift_weight) * drift_loss
+        max_violation = torch.maximum(face_residual.abs().amax(), mean_displacement.abs().amax())
+
+        low_x = _masked_mean(deformed[..., 0], low_face)
+        high_x = _masked_mean(deformed[..., 0], high_face)
+        reference_span = (
+            _masked_mean(reference[..., 0], high_face) - _masked_mean(reference[..., 0], low_face)
+        ).clamp_min(1e-8)
+        observed_log_strain = torch.log(((high_x - low_x) / reference_span).clamp_min(1e-8))
+        return PolicyResult(
+            name=self.name,
+            loss=loss,
+            weight=self.weight,
+            strict_tolerance=self.strict_tolerance,
+            metrics={
+                "phase": phase,
+                "target_axial_log_strain": phase * float(self.axial_log_strain),
+                "observed_axial_log_strain": observed_log_strain,
+                "end_face_rmse": face_loss.sqrt(),
+                "rigid_drift": torch.linalg.vector_norm(mean_displacement),
+            },
+            violations={"loading_residual": max_violation},
+        )
+
+
+@dataclass(frozen=True)
+class HyperelasticEquilibriumPolicy:
+    """Favor low-energy deformations that satisfy material equilibrium.
+
+    A compressible Neo-Hookean density supplies the constitutive law.  The
+    first Piola stress is derived analytically and its reference divergence is
+    penalized on interior cells, making the optimized field physics-informed
+    without turning the generic solver into a mechanics package.
+    """
+
+    profile: RadialElasticProfile = dataclass_field(default_factory=RadialElasticProfile)
+    energy_weight: float = 0.05
+    equilibrium_weight: float = 0.25
+    weight: float = 1.0
+    strict_tolerance: float = 4e-2
+    name: str = "hyperelastic_equilibrium"
+
+    def __call__(self, engine: ContinuumSolverEngine, state) -> PolicyResult:
+        del engine
+        energy_density, first_piola, jacobian = _neo_hookean_fields(
+            state.reference_coordinates,
+            state.deformed_coordinates,
+            profile=self.profile,
+        )
+        equilibrium = _first_piola_divergence(first_piola, state.reference_coordinates)
+        energy = energy_density.mean()
+        equilibrium_mse = equilibrium.square().sum(dim=-1).mean()
+        equilibrium_rmse = equilibrium_mse.sqrt()
+        loss = float(self.energy_weight) * energy + float(self.equilibrium_weight) * equilibrium_mse
+        return PolicyResult(
+            name=self.name,
+            loss=loss,
+            weight=self.weight,
+            strict_tolerance=self.strict_tolerance,
+            metrics={
+                "mean_energy_density": energy,
+                "max_energy_density": energy_density.amax(),
+                "equilibrium_rmse": equilibrium_rmse,
+                "max_equilibrium_residual": torch.linalg.vector_norm(equilibrium, dim=-1).amax(),
+                "mean_first_piola_norm": torch.linalg.matrix_norm(first_piola, dim=(-2, -1)).mean(),
+                "min_jacobian": jacobian.amin(),
+            },
+            violations={"equilibrium_rmse": equilibrium_rmse},
+        )
+
+
+@dataclass(frozen=True)
+class AdmissibleDeformationPolicy:
+    """Soft loss counterpart to hard deformation guards."""
 
     min_jacobian: float = 0.42
     max_jacobian: float = 2.35
@@ -139,13 +285,15 @@ class StrictPhysicalPolicy:
     barrier_width: float = 0.025
     weight: float = 1.0
     strict_tolerance: float = 1e-4
-    name: str = "strict_physical_realism"
+    name: str = "admissible_deformation"
 
     def __call__(self, engine: ContinuumSolverEngine, state) -> PolicyResult:
         del engine
         displacement = state.deformed_coordinates - state.reference_coordinates
         displacement_norm = torch.linalg.vector_norm(displacement, dim=-1)
-        boundary = _boundary_point_mask(state.reference_coordinates.shape[:-1], device=displacement.device, dtype=displacement.dtype)
+        boundary = _boundary_point_mask(
+            state.reference_coordinates.shape[:-1], device=displacement.device, dtype=displacement.dtype
+        )
         boundary_displacement = displacement_norm * boundary
 
         jacobian = _volume_jacobian(state.reference_coordinates, state.deformed_coordinates)
@@ -189,20 +337,20 @@ class StrictPhysicalPolicy:
                 "max_boundary_displacement": boundary_displacement.amax(),
                 "folded_cell_fraction": (jacobian <= 0).to(jacobian.dtype).mean(),
             },
-            violations={"physical_bound_violation": violation},
+            violations={"deformation_bound_violation": violation},
         )
 
 
 @dataclass(frozen=True)
-class SmoothManufacturabilityPolicy:
-    """Favor smooth, printable, low-buckling lattice deformations."""
+class DeformationRegularityPolicy:
+    """Favor smooth strain fields and suppress grid-scale buckling."""
 
     laplacian_weight: float = 1.0
     strain_smoothness_weight: float = 0.7
     off_axis_curl_weight: float = 0.5
     weight: float = 1.0
     strict_tolerance: float = 2e-3
-    name: str = "smooth_manufacturability"
+    name: str = "deformation_regularity"
 
     def __call__(self, engine: ContinuumSolverEngine, state) -> PolicyResult:
         del engine
@@ -210,7 +358,9 @@ class SmoothManufacturabilityPolicy:
         laplacian = _laplacian3(displacement)
         laplacian_energy = laplacian.square().sum(dim=-1).mean()
         log_sx, log_sy, log_sz = _cell_log_stretches(state.reference_coordinates, state.deformed_coordinates)
-        strain_smoothness = _gradient_energy3_scalar(log_sx) + _gradient_energy3_scalar(log_sy) + _gradient_energy3_scalar(log_sz)
+        strain_smoothness = (
+            _gradient_energy3_scalar(log_sx) + _gradient_energy3_scalar(log_sy) + _gradient_energy3_scalar(log_sz)
+        )
         curl = _curl3(displacement, state.reference_coordinates)
         off_axis_curl = curl[..., :2].square().sum(dim=-1).mean()
         loss = (
@@ -230,12 +380,12 @@ class SmoothManufacturabilityPolicy:
                 "off_axis_curl_rmse": off_axis_curl.sqrt(),
                 "max_laplacian": laplacian.abs().amax(),
             },
-            violations={"manufacturability_violation": violation},
+            violations={"regularity_violation": violation},
         )
 
 
 @dataclass(frozen=True)
-class ValidationBounds:
+class DeformationBounds:
     min_jacobian: float = 0.35
     max_jacobian: float = 2.60
     min_edge_stretch: float = 0.48
@@ -247,7 +397,19 @@ class ValidationBounds:
 
 
 @dataclass(frozen=True)
-class ValidationReport:
+class ResponseBounds:
+    """Acceptance bounds for the virtual uniaxial response test."""
+
+    min_axial_log_strain: float = 0.030
+    max_axial_log_strain: float = 0.075
+    max_core_poisson: float = -0.10
+    min_rim_poisson: float = 0.10
+    min_poisson_contrast: float = 0.35
+    max_equilibrium_rmse: float = 4e-2
+
+
+@dataclass(frozen=True)
+class DeformationReport:
     strict_pass: bool
     metrics: dict[str, float | int | bool]
     failures: tuple[str, ...]
@@ -256,27 +418,52 @@ class ValidationReport:
         if self.strict_pass:
             return
         joined = "; ".join(self.failures)
-        raise RuntimeError(f"physical validation failed: {joined}")
+        raise RuntimeError(f"deformation validation failed: {joined}")
+
+
+@dataclass(frozen=True)
+class ResponseReport:
+    before_fit: dict[str, float]
+    after_fit: dict[str, float]
+    delta: dict[str, float]
+    strict_pass: bool
+    failures: tuple[str, ...]
+
+    def as_report(self) -> dict[str, object]:
+        return {
+            "before_fit": self.before_fit,
+            "after_fit": self.after_fit,
+            "delta": self.delta,
+            "strict_pass": self.strict_pass,
+            "failures": list(self.failures),
+        }
+
+    def raise_if_failed(self) -> None:
+        if self.strict_pass:
+            return
+        raise RuntimeError(f"response validation failed: {'; '.join(self.failures)}")
 
 
 @dataclass(frozen=True)
 class VisualizationArtifacts:
     vtk_grid: Path
     glyph_points: Path
-    formation_gif: Path
+    trajectory_gif: Path
+    charts: dict[str, Path]
 
-    def as_report(self) -> dict[str, str]:
+    def as_report(self) -> dict[str, object]:
         return {
             "vtk_grid": str(self.vtk_grid),
             "glyph_points": str(self.glyph_points),
-            "formation_gif": str(self.formation_gif),
+            "optimization_trajectory_gif": str(self.trajectory_gif),
+            "charts": {name: str(path) for name, path in self.charts.items()},
         }
 
 
 class GuardedOptimizerStep:
-    """Rollback optimizer steps that violate physical validation bounds."""
+    """Rollback optimizer steps that violate deformation bounds."""
 
-    def __init__(self, bounds: ValidationBounds, *, max_retries: int = 4, backtracking: float = 0.35):
+    def __init__(self, bounds: DeformationBounds, *, max_retries: int = 4, backtracking: float = 0.35):
         self.bounds = bounds
         self.max_retries = int(max_retries)
         self.backtracking = float(backtracking)
@@ -294,7 +481,7 @@ class GuardedOptimizerStep:
             context.optimizer.load_state_dict(optimizer_snapshot)
             _scale_learning_rates(context.optimizer, base_lrs, self.backtracking**retry)
             last_loss = _optimizer_step(context)
-            report = validate_grid(
+            report = validate_deformation(
                 context.coordinates,
                 context.engine.field(context.coordinates),
                 field=context.engine.field,
@@ -308,11 +495,11 @@ class GuardedOptimizerStep:
         context.optimizer.load_state_dict(optimizer_snapshot)
         if last_report is not None:
             last_report.raise_if_failed()
-        raise RuntimeError("optimizer step failed physical validation")
+        raise RuntimeError("optimizer step failed deformation validation")
 
 
-class FormationRecorder:
-    """Capture sparse deformation snapshots for post-fit visualization."""
+class OptimizationTrajectoryRecorder:
+    """Capture accepted optimizer states for a qualitative trajectory view."""
 
     def __init__(self, *, max_snapshots: int):
         self.max_snapshots = max(2, int(max_snapshots))
@@ -332,7 +519,7 @@ class FormationRecorder:
 class RecordingOptimizerStep:
     """Wrap an optimizer stepper and record accepted grid states."""
 
-    def __init__(self, wrapped, recorder: FormationRecorder, *, capture_every: int):
+    def __init__(self, wrapped, recorder: OptimizationTrajectoryRecorder, *, capture_every: int):
         self.wrapped = wrapped
         self.recorder = recorder
         self.capture_every = max(1, int(capture_every))
@@ -350,7 +537,7 @@ class RecordingOptimizerStep:
 
 def main() -> None:
     parser = ArgumentParser()
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/metamaterial_design"))
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/physics_informed_deformation_design"))
     parser.add_argument("--report-json", type=Path, default=None)
     parser.add_argument("--optimizer", choices=("adamw", "lbfgs", "hybrid"), default="hybrid")
     parser.add_argument("--steps", type=int, default=60)
@@ -370,7 +557,7 @@ def main() -> None:
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="cpu")
     parser.add_argument("--dtype", choices=DTYPE_CHOICES, default="float64")
     parser.add_argument("--max-threads", type=int, default=4)
-    parser.add_argument("--formation-gif", type=Path, default=None)
+    parser.add_argument("--trajectory-gif", type=Path, default=None)
     parser.add_argument("--viz-frames", type=int, default=48)
     parser.add_argument("--viz-final-hold", type=int, default=12)
     parser.add_argument("--viz-sample-stride", type=int, default=2)
@@ -381,9 +568,11 @@ def main() -> None:
     _configure_runtime(seed=67, max_threads=args.max_threads)
     coords, engine, bounds = build_problem(args, device=runtime[0], dtype=runtime[1])
     guard = GuardedOptimizerStep(bounds, max_retries=args.guard_retries)
-    recorder = FormationRecorder(max_snapshots=args.viz_frames)
+    recorder = OptimizationTrajectoryRecorder(max_snapshots=args.viz_frames)
     recorder.capture(coords)
-    optimizer_step = RecordingOptimizerStep(guard, recorder, capture_every=_visualization_capture_every(args))
+    initial_grid = engine(coords).detach()
+    recorder.capture(initial_grid)
+    optimizer_step = RecordingOptimizerStep(guard, recorder, capture_every=_trajectory_capture_every(args))
 
     run = None
     if args.optimizer in {"adamw", "hybrid"} and args.steps > 0:
@@ -422,20 +611,32 @@ def main() -> None:
 
     final_grid = engine(coords).detach()
     recorder.capture(final_grid)
-    validation = validate_grid(coords, final_grid, field=engine.field, bounds=bounds)
+    validation = validate_deformation(coords, final_grid, field=engine.field, bounds=bounds)
     validation.raise_if_failed()
+    target = engine.target_criterion
+    if not isinstance(target, GradedResponseCriterion):
+        raise TypeError("deformation-design example requires GradedResponseCriterion for response validation")
+    response = validate_response_change(
+        coords,
+        initial_grid,
+        final_grid,
+        target=target,
+        bounds=ResponseBounds(),
+    )
+    response.raise_if_failed()
 
     output_dir = args.output_dir
     report_path = args.report_json or output_dir / "validation.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    formation_gif = args.formation_gif or output_dir / "formation.gif"
-    visualization = write_vtk_visualizations(
+    trajectory_gif = args.trajectory_gif or output_dir / "optimization_trajectory.gif"
+    visualization = write_visualizations(
         coords,
         final_grid,
         field=engine.field,
+        target=target,
         snapshots=recorder.snapshots(),
         output_dir=output_dir,
-        formation_gif=formation_gif,
+        trajectory_gif=trajectory_gif,
         frame_count=args.viz_frames,
         final_hold=args.viz_final_hold,
         sample_stride=args.viz_sample_stride,
@@ -446,22 +647,32 @@ def main() -> None:
         "target_loss": float(args.target_loss),
         "target_reached": bool(_to_float(run.evaluation.loss) <= float(args.target_loss)),
         "guard_rejections": int(guard.rejections),
+        "material_profile": target.profile.as_report(),
         "visualization": visualization.as_report(),
         "validation": validation.metrics,
         "validation_failures": list(validation.failures),
+        "effective_response": response.as_report(),
     }
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"output_dir: {output_dir}")
     print(f"validation: {report_path}")
     print(f"vtk_grid: {visualization.vtk_grid}")
     print(f"glyph_points: {visualization.glyph_points}")
-    print(f"formation_gif: {visualization.formation_gif}")
+    print(f"optimization_trajectory_gif: {visualization.trajectory_gif}")
+    for name, path in visualization.charts.items():
+        print(f"chart/{name}: {path}")
     print(f"final_loss: {report['final_loss']:.12g}")
     print(f"target_reached: {report['target_reached']}")
     print(f"guard_rejections: {guard.rejections}")
+    print("effective_response:")
+    for key in ("core_poisson", "rim_poisson", "poisson_contrast", "mean_axial_log_strain"):
+        print(
+            f"  {key}: {response.before_fit[key]:.6g} -> {response.after_fit[key]:.6g} "
+            f"(delta {response.delta[key]:+.6g})"
+        )
 
 
-def build_problem(args, *, device, dtype: torch.dtype) -> tuple[torch.Tensor, ContinuumSolverEngine, ValidationBounds]:
+def build_problem(args, *, device, dtype: torch.dtype) -> tuple[torch.Tensor, ContinuumSolverEngine, DeformationBounds]:
     coords = coordinate_grid_3d(args.grid_size, args.grid_size, args.grid_size, device=device, dtype=dtype)
     algebra = AlgebraContext(p=3, q=0, r=1, device=device, dtype=dtype)
     field = InvertibleBivectorField(
@@ -472,52 +683,91 @@ def build_problem(args, *, device, dtype: torch.dtype) -> tuple[torch.Tensor, Co
         control_shape=(args.control_size, args.control_size, args.control_size),
         init_scale=4e-3,
     )
+    profile = RadialElasticProfile()
+    criterion = GradedResponseCriterion(profile=profile)
     curriculum = PhaseCurriculum(
         (
-            (0.0, {"target": 1.00, "policy": 0.1, "policy:strict_physical_realism": 0.1, "policy:smooth_manufacturability": 0.05}),
-            (0.5, {"target": 1.00, "policy": 1.0, "policy:strict_physical_realism": 1.5, "policy:smooth_manufacturability": 0.5}),
-            (1.0, {"target": 1.00, "policy": 2.5, "policy:strict_physical_realism": 4.0, "policy:smooth_manufacturability": 2.0}),
+            (
+                0.0,
+                {
+                    "target": 1.00,
+                    "policy": 0.1,
+                    "policy:uniaxial_boundary": 0.6,
+                    "policy:hyperelastic_equilibrium": 0.2,
+                    "policy:admissible_deformation": 0.1,
+                    "policy:deformation_regularity": 0.05,
+                },
+            ),
+            (
+                0.5,
+                {
+                    "target": 1.00,
+                    "policy": 1.0,
+                    "policy:uniaxial_boundary": 1.5,
+                    "policy:hyperelastic_equilibrium": 0.6,
+                    "policy:admissible_deformation": 1.5,
+                    "policy:deformation_regularity": 0.5,
+                },
+            ),
+            (
+                1.0,
+                {
+                    "target": 1.00,
+                    "policy": 2.5,
+                    "policy:uniaxial_boundary": 3.0,
+                    "policy:hyperelastic_equilibrium": 1.0,
+                    "policy:admissible_deformation": 4.0,
+                    "policy:deformation_regularity": 2.0,
+                },
+            ),
         )
     )
     engine = ContinuumSolverEngine(
         field,
-        target_criterion=MetamaterialTarget(),
+        target_criterion=criterion,
         geometric_policies=(
-            StrictPhysicalPolicy(),
-            SmoothManufacturabilityPolicy(),
+            UniaxialBoundaryPolicy(axial_log_strain=criterion.axial_log_strain),
+            HyperelasticEquilibriumPolicy(profile=profile),
+            AdmissibleDeformationPolicy(),
+            DeformationRegularityPolicy(),
             InvertiblePathConsistencyPolicy(weight=1.0),
             BivectorNormPolicy(max_norm=0.90, weight=0.08),
         ),
         curriculum=curriculum,
     )
-    return coords, engine, ValidationBounds()
+    return coords, engine, DeformationBounds()
 
 
-def write_vtk_visualizations(
+def write_visualizations(
     reference: torch.Tensor,
     final_grid: torch.Tensor,
     *,
     field: InvertibleBivectorField,
+    target: GradedResponseCriterion,
     snapshots: Sequence[torch.Tensor],
     output_dir: Path,
-    formation_gif: Path,
+    trajectory_gif: Path,
     frame_count: int,
     final_hold: int,
     sample_stride: int,
 ) -> VisualizationArtifacts:
-    vtk, numpy_support, np, imageio = _import_visualization_dependencies()
+    vtk, numpy_support, np, imageio, plt = _import_visualization_dependencies()
     output_dir.mkdir(parents=True, exist_ok=True)
-    formation_gif.parent.mkdir(parents=True, exist_ok=True)
+    trajectory_gif.parent.mkdir(parents=True, exist_ok=True)
 
-    vtk_grid_path = output_dir / "metamaterial_grid.vtu"
-    glyph_points_path = output_dir / "metamaterial_response_points.vtp"
+    vtk_grid_path = output_dir / "deformation_grid.vtu"
+    glyph_points_path = output_dir / "deformation_response_points.vtp"
 
     reference_cpu = reference.detach().cpu()
     final_cpu = final_grid.detach().cpu()
     reference_np = _tensor_grid_to_numpy(reference_cpu, np)
     final_np = _tensor_grid_to_numpy(final_cpu, np)
     displacement_np = final_np - reference_np
-    weights = field.weights_for_shape(tuple(reference.shape[:-1]), device=reference.device, dtype=reference.dtype).detach().cpu()
+    weights = (
+        field.weights_for_shape(tuple(reference.shape[:-1]), device=reference.device, dtype=reference.dtype)
+        .detach()
+        .cpu()
+    )
     response = _bivector_response_vectors(
         weights,
         field.bivector_layout.basis_indices,
@@ -527,6 +777,13 @@ def write_vtk_visualizations(
     response_np = _tensor_grid_to_numpy(response, np)
 
     jacobian = _volume_jacobian(reference_cpu, final_cpu).numpy()
+    log_sx, log_sy, log_sz = _cell_log_stretches(reference_cpu, final_cpu)
+    poisson = _poisson_ratio(log_sx, log_sy, log_sz)
+    target_poisson = target.profile.poisson_ratio(_cell_centers(reference_cpu))
+    energy_density, first_piola, _ = _neo_hookean_fields(reference_cpu, final_cpu, profile=target.profile)
+    equilibrium = _first_piola_divergence(first_piola, reference_cpu)
+    equilibrium_magnitude = _interior_to_cell_grid(torch.linalg.vector_norm(equilibrium, dim=-1))
+    first_piola_norm = torch.linalg.matrix_norm(first_piola, dim=(-2, -1))
     curl = _curl3(final_cpu - reference_cpu, reference_cpu)
     curl_magnitude = torch.linalg.vector_norm(curl, dim=-1).numpy()
     cell_response = _cell_average_values(response)
@@ -553,6 +810,15 @@ def write_vtk_visualizations(
             "cell_bivector_response": cell_response_np,
             "cell_bivector_response_magnitude": cell_response_magnitude,
             "jacobian": jacobian,
+            "axial_log_strain": log_sx.numpy(),
+            "transverse_log_strain": (0.5 * (log_sy + log_sz)).numpy(),
+            "volumetric_log_strain": (log_sx + log_sy + log_sz).numpy(),
+            "effective_poisson_ratio": poisson.numpy(),
+            "target_poisson_ratio": target_poisson.numpy(),
+            "poisson_error": (poisson - target_poisson).numpy(),
+            "strain_energy_density": energy_density.numpy(),
+            "first_piola_stress_norm": first_piola_norm.numpy(),
+            "equilibrium_residual": equilibrium_magnitude.numpy(),
             "curl_magnitude": curl_magnitude,
         },
     )
@@ -568,36 +834,53 @@ def write_vtk_visualizations(
             "displacement": cell_displacement_np,
             "displacement_magnitude": cell_displacement_magnitude,
             "jacobian": jacobian,
+            "axial_log_strain": log_sx.numpy(),
+            "transverse_log_strain": (0.5 * (log_sy + log_sz)).numpy(),
+            "volumetric_log_strain": (log_sx + log_sy + log_sz).numpy(),
+            "effective_poisson_ratio": poisson.numpy(),
+            "target_poisson_ratio": target_poisson.numpy(),
+            "poisson_error": (poisson - target_poisson).numpy(),
+            "strain_energy_density": energy_density.numpy(),
+            "first_piola_stress_norm": first_piola_norm.numpy(),
+            "equilibrium_residual": equilibrium_magnitude.numpy(),
             "curl_magnitude": curl_magnitude,
         },
     )
     _write_vtp(vtk, glyph_points, glyph_points_path)
 
-    _render_formation_gif(
-        vtk,
-        numpy_support,
+    _render_optimization_trajectory_gif(
+        plt,
         np,
         imageio,
         snapshots=snapshots or (reference_cpu, final_cpu),
-        gif_path=formation_gif,
+        gif_path=trajectory_gif,
         frame_count=max(2, int(frame_count)),
         final_hold=max(0, int(final_hold)),
         sample_stride=max(1, int(sample_stride)),
     )
+    charts = _write_diagnostic_charts(
+        plt,
+        np,
+        reference=reference_cpu,
+        deformed=final_cpu,
+        target=target,
+        output_dir=output_dir,
+    )
     return VisualizationArtifacts(
         vtk_grid=vtk_grid_path,
         glyph_points=glyph_points_path,
-        formation_gif=formation_gif,
+        trajectory_gif=trajectory_gif,
+        charts=charts,
     )
 
 
-def validate_grid(
+def validate_deformation(
     reference: torch.Tensor,
     deformed: torch.Tensor,
     *,
     field: InvertibleBivectorField,
-    bounds: ValidationBounds,
-) -> ValidationReport:
+    bounds: DeformationBounds,
+) -> DeformationReport:
     failures: list[str] = []
     metrics: dict[str, float | int | bool] = {}
     finite = bool(torch.isfinite(deformed).all().detach().cpu())
@@ -641,20 +924,108 @@ def validate_grid(
     _require(metrics["inverse_rmse"] <= bounds.max_inverse_rmse, "inverse rmse above strict bound", failures)
     _require(metrics["inverse_max_abs"] <= bounds.max_inverse_abs, "inverse max abs above strict bound", failures)
 
-    return ValidationReport(strict_pass=not failures, metrics=metrics, failures=tuple(failures))
+    return DeformationReport(strict_pass=not failures, metrics=metrics, failures=tuple(failures))
+
+
+def validate_response_change(
+    reference: torch.Tensor,
+    initial: torch.Tensor,
+    final: torch.Tensor,
+    *,
+    target: GradedResponseCriterion,
+    bounds: ResponseBounds,
+) -> ResponseReport:
+    """Measure and validate the optimized field's virtual-test response."""
+
+    before_fit = effective_response_metrics(reference, initial, target=target)
+    after_fit = effective_response_metrics(reference, final, target=target)
+    delta = {key: after_fit[key] - before_fit[key] for key in after_fit}
+    failures: list[str] = []
+    _require(
+        after_fit["mean_axial_log_strain"] >= bounds.min_axial_log_strain,
+        "mean axial log strain below virtual-test bound",
+        failures,
+    )
+    _require(
+        after_fit["mean_axial_log_strain"] <= bounds.max_axial_log_strain,
+        "mean axial log strain above virtual-test bound",
+        failures,
+    )
+    _require(after_fit["core_poisson"] <= bounds.max_core_poisson, "core response is not auxetic", failures)
+    _require(after_fit["rim_poisson"] >= bounds.min_rim_poisson, "rim response is not positive-Poisson", failures)
+    _require(
+        after_fit["poisson_contrast"] >= bounds.min_poisson_contrast,
+        "core-to-rim Poisson contrast below bound",
+        failures,
+    )
+    _require(
+        after_fit["equilibrium_rmse"] <= bounds.max_equilibrium_rmse,
+        "stress-equilibrium residual above bound",
+        failures,
+    )
+    return ResponseReport(
+        before_fit=before_fit,
+        after_fit=after_fit,
+        delta=delta,
+        strict_pass=not failures,
+        failures=tuple(failures),
+    )
+
+
+def effective_response_metrics(
+    reference: torch.Tensor,
+    deformed: torch.Tensor,
+    *,
+    target: GradedResponseCriterion,
+) -> dict[str, float]:
+    """Return homogenized strain-response measures from a virtual uniaxial test."""
+
+    log_sx, log_sy, log_sz = _cell_log_stretches(reference, deformed)
+    centers = _cell_centers(reference)
+    radius = _normalized_radius(centers)
+    core = (radius <= target.profile.core_radius).to(log_sx.dtype)
+    transition = ((radius > target.profile.core_radius) & (radius < target.profile.rim_radius)).to(log_sx.dtype)
+    rim = (radius >= target.profile.rim_radius).to(log_sx.dtype)
+    transverse = 0.5 * (log_sy + log_sz)
+    energy_density, first_piola, _ = _neo_hookean_fields(reference, deformed, profile=target.profile)
+    equilibrium = _first_piola_divergence(first_piola, reference)
+    return {
+        "core_poisson": _to_float(_effective_poisson_ratio(log_sx, log_sy, log_sz, core)),
+        "transition_poisson": _to_float(_effective_poisson_ratio(log_sx, log_sy, log_sz, transition)),
+        "rim_poisson": _to_float(_effective_poisson_ratio(log_sx, log_sy, log_sz, rim)),
+        "poisson_contrast": _to_float(
+            _effective_poisson_ratio(log_sx, log_sy, log_sz, rim)
+            - _effective_poisson_ratio(log_sx, log_sy, log_sz, core)
+        ),
+        "mean_axial_log_strain": _to_float(log_sx.mean()),
+        "mean_transverse_log_strain": _to_float(transverse.mean()),
+        "mean_volumetric_log_strain": _to_float((log_sx + log_sy + log_sz).mean()),
+        "core_axial_log_strain": _to_float(_masked_mean(log_sx, core)),
+        "rim_axial_log_strain": _to_float(_masked_mean(log_sx, rim)),
+        "mean_strain_energy_density": _to_float(energy_density.mean()),
+        "mean_first_piola_norm": _to_float(torch.linalg.matrix_norm(first_piola, dim=(-2, -1)).mean()),
+        "equilibrium_rmse": _to_float(equilibrium.square().sum(dim=-1).mean().sqrt()),
+    }
 
 
 def _import_visualization_dependencies():
     try:
+        cache_dir = Path("/tmp/clifra-matplotlib")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))
         import imageio.v2 as imageio
+        import matplotlib
         import numpy as np
         import vtk
-        from vtk.util import numpy_support # type: ignore
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+        from vtk.util import numpy_support  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
             "visualization requires optional dependencies; install them with `uv sync --group viz`"
         ) from exc
-    return vtk, numpy_support, np, imageio
+    return vtk, numpy_support, np, imageio, plt
 
 
 def _tensor_grid_to_numpy(tensor: torch.Tensor, np_module):
@@ -766,9 +1137,8 @@ def _write_vtp(vtk, polydata, path: Path) -> None:
         raise RuntimeError(f"failed to write VTK glyph points to {path}")
 
 
-def _render_formation_gif(
-    vtk,
-    numpy_support,
+def _render_optimization_trajectory_gif(
+    plt,
     np_module,
     imageio,
     *,
@@ -780,81 +1150,250 @@ def _render_formation_gif(
 ) -> None:
     frames = _interpolate_snapshot_frames(snapshots, frame_count=frame_count)
     if not frames:
-        raise RuntimeError("no formation snapshots were captured")
+        raise RuntimeError("no optimization snapshots were captured")
 
     final_frame = frames[-1]
     frames = [*frames, *([final_frame] * final_hold)]
-    renderer, window = _new_renderer(vtk, width=960, height=720)
-    mapper = vtk.vtkPolyDataMapper()
-    actor = vtk.vtkActor()
-    actor.SetMapper(mapper)
-    actor.GetProperty().SetColor(0.05, 0.08, 0.11)
-    actor.GetProperty().SetLineWidth(1.6)
-    renderer.AddActor(actor)
-
-    surface_mapper = vtk.vtkDataSetMapper()
-    surface_actor = vtk.vtkActor()
-    surface_actor.SetMapper(surface_mapper)
-    surface_actor.GetProperty().SetColor(0.77, 0.86, 0.91)
-    surface_actor.GetProperty().SetOpacity(0.14)
-    renderer.AddActor(surface_actor)
-
+    reference = frames[0]
+    bounds = _shared_projection_bounds(frames)
     images = []
-    total = max(1, len(frames) - 1)
     for index, frame in enumerate(frames):
-        frame_np = _tensor_grid_to_numpy(frame, np_module)
-        mapper.SetInputData(_vtk_lattice_polydata(vtk, numpy_support, frame_np, sample_stride=sample_stride))
-        surface = _vtk_hexahedral_grid(vtk, numpy_support, np_module, frame_np, point_data={}, cell_data={})
-        surface_mapper.SetInputData(surface)
-        _set_camera(vtk, renderer, _grid_bounds(np_module, frame_np), angle_degrees=-18.0 + 30.0 * index / total)
-        images.append(_capture_window(vtk, numpy_support, np_module, window))
+        figure, axes = plt.subplots(1, 3, figsize=(12, 4), dpi=100, facecolor="white")
+        progress = index / max(len(frames) - final_hold - 1, 1)
+        for axis, projection in zip(axes, ((0, 1), (0, 2), (1, 2))):
+            _plot_lattice_projection(
+                axis,
+                frame,
+                projection=projection,
+                sample_stride=sample_stride,
+                bounds=bounds,
+            )
+        axes[0].set_title("top view: x–y")
+        axes[1].set_title("side view: x–z")
+        axes[2].set_title("end view: y–z")
+        max_displacement = torch.linalg.vector_norm(frame - reference, dim=-1).amax().item()
+        figure.suptitle(
+            f"Optimization trajectory  •  progress {min(progress, 1.0):.0%}  •  max displacement {max_displacement:.4f}",
+            fontsize=13,
+        )
+        figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.91))
+        images.append(_figure_to_rgb(figure, np_module))
+        plt.close(figure)
 
-    imageio.mimsave(gif_path, images, duration=0.085, loop=0)
+    imageio.mimsave(gif_path, images, duration=0.09, loop=0)
 
 
-def _new_renderer(vtk, *, width: int, height: int):
-    renderer = vtk.vtkRenderer()
-    renderer.SetBackground(1.0, 1.0, 1.0)
-    window = vtk.vtkRenderWindow()
-    window.SetOffScreenRendering(1)
-    window.SetMultiSamples(0)
-    window.AddRenderer(renderer)
-    window.SetSize(int(width), int(height))
-    return renderer, window
+def _shared_projection_bounds(frames: Sequence[torch.Tensor]) -> tuple[tuple[float, float], ...]:
+    stacked = torch.stack(tuple(frame.reshape(-1, 3) for frame in frames))
+    lower = stacked.amin(dim=(0, 1))
+    upper = stacked.amax(dim=(0, 1))
+    padding = 0.06 * (upper - lower).amax().clamp_min(1e-6)
+    return tuple((float(lower[index] - padding), float(upper[index] + padding)) for index in range(3))
 
 
-def _vtk_lattice_polydata(vtk, numpy_support, grid_np, *, sample_stride: int):
-    depth, height, width = grid_np.shape[:3]
-    polydata = vtk.vtkPolyData()
-    points = vtk.vtkPoints()
-    points.SetData(numpy_support.numpy_to_vtk(grid_np.reshape(-1, 3), deep=True))
-    polydata.SetPoints(points)
-    lines = vtk.vtkCellArray()
-
-    def idx(z: int, y: int, x: int) -> int:
-        return (z * height + y) * width + x
-
-    def add_line(point_ids: Sequence[int]) -> None:
-        line = vtk.vtkPolyLine()
-        line.GetPointIds().SetNumberOfIds(len(point_ids))
-        for local_id, point_id in enumerate(point_ids):
-            line.GetPointIds().SetId(local_id, int(point_id))
-        lines.InsertNextCell(line)
-
+def _plot_lattice_projection(axis, grid: torch.Tensor, *, projection, sample_stride: int, bounds) -> None:
+    grid = grid.detach().cpu()
+    depth, height, width = grid.shape[:3]
     z_indices = _sample_indices(depth, sample_stride)
     y_indices = _sample_indices(height, sample_stride)
     x_indices = _sample_indices(width, sample_stride)
+
+    def draw(line: torch.Tensor, *, alpha: float) -> None:
+        axis.plot(
+            line[..., projection[0]].numpy(),
+            line[..., projection[1]].numpy(),
+            color="#17324d",
+            linewidth=0.72,
+            alpha=alpha,
+        )
+
     for z in z_indices:
         for y in y_indices:
-            add_line([idx(z, y, x) for x in range(width)])
+            draw(grid[z, y, :, :], alpha=0.72)
     for z in z_indices:
         for x in x_indices:
-            add_line([idx(z, y, x) for y in range(height)])
+            draw(grid[z, :, x, :], alpha=0.50)
     for y in y_indices:
         for x in x_indices:
-            add_line([idx(z, y, x) for z in range(depth)])
-    polydata.SetLines(lines)
-    return polydata
+            draw(grid[:, y, x, :], alpha=0.38)
+
+    axis.set_xlim(*bounds[projection[0]])
+    axis.set_ylim(*bounds[projection[1]])
+    axis.set_aspect("equal", adjustable="box")
+    axis.set_xlabel("xyz"[projection[0]])
+    axis.set_ylabel("xyz"[projection[1]])
+    axis.grid(color="#d8e0e8", linewidth=0.5, alpha=0.55)
+
+
+def _figure_to_rgb(figure, np_module):
+    figure.canvas.draw()
+    rgba = np_module.asarray(figure.canvas.buffer_rgba())
+    return rgba[..., :3].copy()
+
+
+def _write_diagnostic_charts(
+    plt,
+    np_module,
+    *,
+    reference: torch.Tensor,
+    deformed: torch.Tensor,
+    target: GradedResponseCriterion,
+    output_dir: Path,
+) -> dict[str, Path]:
+    centers = _cell_centers(reference)
+    radius = _normalized_radius(centers).numpy()
+    log_sx, log_sy, log_sz = _cell_log_stretches(reference, deformed)
+    poisson = _poisson_ratio(log_sx, log_sy, log_sz).numpy()
+    target_poisson = target.profile.poisson_ratio(centers).numpy()
+    jacobian = _volume_jacobian(reference, deformed).numpy()
+    energy, first_piola, _ = _neo_hookean_fields(reference, deformed, profile=target.profile)
+    stress_norm = torch.linalg.matrix_norm(first_piola, dim=(-2, -1)).numpy()
+    equilibrium = _interior_to_cell_grid(
+        torch.linalg.vector_norm(_first_piola_divergence(first_piola, reference), dim=-1)
+    ).numpy()
+
+    charts = {
+        "radial_response": output_dir / "radial_response_profile.png",
+        "mechanics_diagnostics": output_dir / "mechanics_diagnostics.png",
+        "midplane_fields": output_dir / "midplane_fields.png",
+    }
+    _plot_radial_response_chart(
+        plt,
+        np_module,
+        radius=radius,
+        poisson=poisson,
+        target_poisson=target_poisson,
+        axial_strain=log_sx.numpy(),
+        transverse_strain=(0.5 * (log_sy + log_sz)).numpy(),
+        path=charts["radial_response"],
+    )
+    _plot_mechanics_chart(
+        plt,
+        np_module,
+        radius=radius,
+        energy=energy.numpy(),
+        stress_norm=stress_norm,
+        equilibrium=equilibrium,
+        jacobian=jacobian,
+        path=charts["mechanics_diagnostics"],
+    )
+    _plot_midplane_chart(
+        plt,
+        fields={
+            "effective Poisson ratio": (poisson, "coolwarm"),
+            "strain-energy density": (energy.numpy(), "viridis"),
+            "first-Piola stress norm": (stress_norm, "magma"),
+            "equilibrium residual": (equilibrium, "cividis"),
+        },
+        path=charts["midplane_fields"],
+    )
+    return charts
+
+
+def _plot_radial_response_chart(
+    plt,
+    np_module,
+    *,
+    radius,
+    poisson,
+    target_poisson,
+    axial_strain,
+    transverse_strain,
+    path: Path,
+) -> None:
+    figure, axes = plt.subplots(2, 1, figsize=(9, 7), dpi=150, sharex=True)
+    bin_radius, observed = _binned_mean(np_module, radius, poisson)
+    _, desired = _binned_mean(np_module, radius, target_poisson)
+    _, axial = _binned_mean(np_module, radius, axial_strain)
+    _, transverse = _binned_mean(np_module, radius, transverse_strain)
+    axes[0].plot(bin_radius, desired, color="#202020", linestyle="--", linewidth=2.0, label="target")
+    axes[0].plot(bin_radius, observed, color="#2166ac", marker="o", linewidth=2.0, label="observed")
+    axes[0].axhline(0.0, color="#8a8a8a", linewidth=0.8)
+    axes[0].set_ylabel("effective Poisson ratio")
+    axes[0].set_title("Radial response profile")
+    axes[0].legend(frameon=False)
+    axes[1].plot(bin_radius, axial, color="#b2182b", marker="o", label="axial log strain")
+    axes[1].plot(bin_radius, transverse, color="#1b7837", marker="s", label="mean transverse log strain")
+    axes[1].axhline(0.0, color="#8a8a8a", linewidth=0.8)
+    axes[1].set_xlabel("normalized reference radius")
+    axes[1].set_ylabel("log strain")
+    axes[1].legend(frameon=False)
+    _style_chart_axes(axes)
+    _save_figure(plt, figure, path)
+
+
+def _plot_mechanics_chart(
+    plt,
+    np_module,
+    *,
+    radius,
+    energy,
+    stress_norm,
+    equilibrium,
+    jacobian,
+    path: Path,
+) -> None:
+    figure, axes = plt.subplots(2, 2, figsize=(10, 7.5), dpi=150)
+    bin_radius, radial_energy = _binned_mean(np_module, radius, energy)
+    _, radial_stress = _binned_mean(np_module, radius, stress_norm)
+    _, radial_equilibrium = _binned_mean(np_module, radius, equilibrium)
+    axes[0, 0].plot(bin_radius, radial_energy, color="#542788", marker="o")
+    axes[0, 0].set_title("Strain-energy density")
+    axes[0, 1].plot(bin_radius, radial_stress, color="#d95f02", marker="o")
+    axes[0, 1].set_title("First-Piola stress norm")
+    axes[1, 0].plot(bin_radius, radial_equilibrium, color="#1b9e77", marker="o")
+    axes[1, 0].set_title("Equilibrium residual")
+    axes[1, 1].hist(jacobian.reshape(-1), bins=20, color="#4c78a8", edgecolor="white")
+    axes[1, 1].axvline(1.0, color="#202020", linestyle="--", linewidth=1.2)
+    axes[1, 1].set_title("Volume-ratio distribution")
+    axes[1, 1].set_xlabel("det(F)")
+    for axis in axes[:, 0].tolist() + axes[:, 1].tolist():
+        if axis is not axes[1, 1]:
+            axis.set_xlabel("normalized reference radius")
+    _style_chart_axes(axes.reshape(-1))
+    figure.suptitle("Constitutive and equilibrium diagnostics", fontsize=14)
+    _save_figure(plt, figure, path, top=0.92)
+
+
+def _plot_midplane_chart(plt, *, fields, path: Path) -> None:
+    figure, axes = plt.subplots(2, 2, figsize=(10, 8), dpi=150)
+    for axis, (title, (values, color_map)) in zip(axes.reshape(-1), fields.items()):
+        midplane = values[values.shape[0] // 2]
+        kwargs = {}
+        if title == "effective Poisson ratio":
+            kwargs = {"vmin": -0.7, "vmax": 0.5}
+        image = axis.imshow(midplane, origin="lower", cmap=color_map, interpolation="nearest", **kwargs)
+        axis.set_title(title)
+        axis.set_xlabel("x cell")
+        axis.set_ylabel("y cell")
+        figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+    figure.suptitle("Central reference-z cell plane", fontsize=14)
+    _save_figure(plt, figure, path, top=0.92)
+
+
+def _binned_mean(np_module, radius, values, *, bins: int = 12):
+    edges = np_module.linspace(0.0, 1.0, int(bins) + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    flat_radius = radius.reshape(-1)
+    flat_values = values.reshape(-1)
+    means = []
+    for index in range(len(centers)):
+        mask = (flat_radius >= edges[index]) & (flat_radius <= edges[index + 1]) & np_module.isfinite(flat_values)
+        means.append(float(np_module.mean(flat_values[mask])) if np_module.any(mask) else np_module.nan)
+    return centers, np_module.asarray(means)
+
+
+def _style_chart_axes(axes) -> None:
+    for axis in axes:
+        axis.grid(color="#d8e0e8", linewidth=0.6, alpha=0.75)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+
+
+def _save_figure(plt, figure, path: Path, *, top: float = 0.96) -> None:
+    figure.tight_layout(rect=(0.0, 0.0, 1.0, top))
+    figure.savefig(path, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
 
 
 def _interpolate_snapshot_frames(snapshots: Sequence[torch.Tensor], *, frame_count: int) -> list[torch.Tensor]:
@@ -873,58 +1412,6 @@ def _interpolate_snapshot_frames(snapshots: Sequence[torch.Tensor], *, frame_cou
         weight = position - low
         frames.append(snapshots[low].lerp(snapshots[high], float(weight)))
     return frames
-
-
-def _capture_window(vtk, numpy_support, np_module, window):
-    window.Render()
-    window_to_image = vtk.vtkWindowToImageFilter()
-    window_to_image.SetInput(window)
-    window_to_image.SetInputBufferTypeToRGB()
-    window_to_image.ReadFrontBufferOff()
-    window_to_image.Update()
-    image = window_to_image.GetOutput()
-    width, height, _ = image.GetDimensions()
-    scalars = image.GetPointData().GetScalars()
-    components = scalars.GetNumberOfComponents()
-    pixels = numpy_support.vtk_to_numpy(scalars).reshape(height, width, components)
-    return np_module.flipud(pixels[..., :3]).copy()
-
-
-def _set_camera(vtk, renderer, bounds: tuple[float, float, float, float, float, float], *, angle_degrees: float) -> None:
-    import math
-
-    center = (
-        0.5 * (bounds[0] + bounds[1]),
-        0.5 * (bounds[2] + bounds[3]),
-        0.5 * (bounds[4] + bounds[5]),
-    )
-    span = max(bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4], 1e-6)
-    radius = 3.2 * span
-    azimuth = math.radians(42.0 + float(angle_degrees))
-    elevation = math.radians(25.0)
-    camera = vtk.vtkCamera()
-    camera.SetFocalPoint(*center)
-    camera.SetPosition(
-        center[0] + radius * math.cos(elevation) * math.cos(azimuth),
-        center[1] + radius * math.cos(elevation) * math.sin(azimuth),
-        center[2] + radius * math.sin(elevation),
-    )
-    camera.SetViewUp(0.0, 0.0, 1.0)
-    renderer.SetActiveCamera(camera)
-    renderer.ResetCameraClippingRange()
-
-
-def _grid_bounds(np_module, grid_np) -> tuple[float, float, float, float, float, float]:
-    mins = np_module.min(grid_np.reshape(-1, 3), axis=0)
-    maxes = np_module.max(grid_np.reshape(-1, 3), axis=0)
-    return (
-        float(mins[0]),
-        float(maxes[0]),
-        float(mins[1]),
-        float(maxes[1]),
-        float(mins[2]),
-        float(maxes[2]),
-    )
 
 
 def _sample_indices(size: int, stride: int) -> list[int]:
@@ -1004,7 +1491,9 @@ def _scale_learning_rates(optimizer: torch.optim.Optimizer, base_lrs: list[float
         group["lr"] = float(lr) * float(factor)
 
 
-def coordinate_grid_3d(depth: int, height: int, width: int, *, device, dtype: torch.dtype, extent: float = 1.0) -> torch.Tensor:
+def coordinate_grid_3d(
+    depth: int, height: int, width: int, *, device, dtype: torch.dtype, extent: float = 1.0
+) -> torch.Tensor:
     z = torch.linspace(-float(extent), float(extent), int(depth), device=device, dtype=dtype)
     y = torch.linspace(-float(extent), float(extent), int(height), device=device, dtype=dtype)
     x = torch.linspace(-float(extent), float(extent), int(width), device=device, dtype=dtype)
@@ -1025,7 +1514,9 @@ def _cell_edges_3d(coordinates: torch.Tensor) -> tuple[torch.Tensor, torch.Tenso
     return dx, dy, dz
 
 
-def _cell_log_stretches(reference: torch.Tensor, deformed: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _cell_log_stretches(
+    reference: torch.Tensor, deformed: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     return tuple(torch.log(stretch.clamp_min(1e-8)) for stretch in _edge_stretches(reference, deformed).unbind(dim=0))
 
 
@@ -1060,11 +1551,58 @@ def _cell_centers(coordinates: torch.Tensor) -> torch.Tensor:
 
 
 def _volume_jacobian(reference: torch.Tensor, deformed: torch.Tensor) -> torch.Tensor:
-    dx_ref, dy_ref, dz_ref = _cell_edges_3d(reference)
-    dx_def, dy_def, dz_def = _cell_edges_3d(deformed)
-    det_ref = torch.linalg.det(torch.stack((dx_ref, dy_ref, dz_ref), dim=-1))
-    det_def = torch.linalg.det(torch.stack((dx_def, dy_def, dz_def), dim=-1))
-    return det_def / _signed_clamp(det_ref, 1e-8)
+    return torch.linalg.det(_deformation_gradient(reference, deformed))
+
+
+def _deformation_gradient(reference: torch.Tensor, deformed: torch.Tensor) -> torch.Tensor:
+    """Return the cellwise gradient mapping reference edges to deformed edges."""
+
+    reference_basis = torch.stack(_cell_edges_3d(reference), dim=-1)
+    deformed_basis = torch.stack(_cell_edges_3d(deformed), dim=-1)
+    return torch.linalg.solve(reference_basis.transpose(-1, -2), deformed_basis.transpose(-1, -2)).transpose(-1, -2)
+
+
+def _neo_hookean_fields(
+    reference: torch.Tensor,
+    deformed: torch.Tensor,
+    *,
+    profile: RadialElasticProfile,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return Neo-Hookean energy, first Piola stress, and volume ratio."""
+
+    deformation_gradient = _deformation_gradient(reference, deformed)
+    jacobian = torch.linalg.det(deformation_gradient)
+    log_jacobian = torch.log(jacobian.clamp_min(1e-8))
+    first_lame, shear = profile.lame_parameters(_cell_centers(reference))
+    inverse_transpose = torch.linalg.inv(deformation_gradient).transpose(-1, -2)
+    first_invariant = deformation_gradient.square().sum(dim=(-2, -1))
+    energy_density = (
+        0.5 * shear * (first_invariant - 3.0) - shear * log_jacobian + 0.5 * first_lame * log_jacobian.square()
+    )
+    first_piola = (
+        shear[..., None, None] * (deformation_gradient - inverse_transpose)
+        + (first_lame * log_jacobian)[..., None, None] * inverse_transpose
+    )
+    return energy_density, first_piola, jacobian
+
+
+def _first_piola_divergence(first_piola: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+    """Return ``Div(P)`` on interior cells of an axis-aligned reference grid."""
+
+    centers = _cell_centers(reference)
+    dx = (centers[1:-1, 1:-1, 2:, 0] - centers[1:-1, 1:-1, :-2, 0]).unsqueeze(-1)
+    dy = (centers[1:-1, 2:, 1:-1, 1] - centers[1:-1, :-2, 1:-1, 1]).unsqueeze(-1)
+    dz = (centers[2:, 1:-1, 1:-1, 2] - centers[:-2, 1:-1, 1:-1, 2]).unsqueeze(-1)
+    d_p_dx = (first_piola[1:-1, 1:-1, 2:, :, 0] - first_piola[1:-1, 1:-1, :-2, :, 0]) / dx
+    d_p_dy = (first_piola[1:-1, 2:, 1:-1, :, 1] - first_piola[1:-1, :-2, 1:-1, :, 1]) / dy
+    d_p_dz = (first_piola[2:, 1:-1, 1:-1, :, 2] - first_piola[:-2, 1:-1, 1:-1, :, 2]) / dz
+    return d_p_dx + d_p_dy + d_p_dz
+
+
+def _interior_to_cell_grid(values: torch.Tensor) -> torch.Tensor:
+    """Pad an interior-cell scalar field for structured-grid export."""
+
+    return F.pad(values, (1, 1, 1, 1, 1, 1), value=float("nan"))
 
 
 def _curl3(displacement: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
@@ -1083,13 +1621,41 @@ def _laplacian3(values: torch.Tensor) -> torch.Tensor:
     z_axis = values.ndim - 4
     y_axis = values.ndim - 3
     x_axis = values.ndim - 2
-    center = values.narrow(z_axis, 1, values.shape[z_axis] - 2).narrow(y_axis, 1, values.shape[y_axis] - 2).narrow(x_axis, 1, values.shape[x_axis] - 2)
-    x_plus = values.narrow(z_axis, 1, values.shape[z_axis] - 2).narrow(y_axis, 1, values.shape[y_axis] - 2).narrow(x_axis, 2, values.shape[x_axis] - 2)
-    x_minus = values.narrow(z_axis, 1, values.shape[z_axis] - 2).narrow(y_axis, 1, values.shape[y_axis] - 2).narrow(x_axis, 0, values.shape[x_axis] - 2)
-    y_plus = values.narrow(z_axis, 1, values.shape[z_axis] - 2).narrow(y_axis, 2, values.shape[y_axis] - 2).narrow(x_axis, 1, values.shape[x_axis] - 2)
-    y_minus = values.narrow(z_axis, 1, values.shape[z_axis] - 2).narrow(y_axis, 0, values.shape[y_axis] - 2).narrow(x_axis, 1, values.shape[x_axis] - 2)
-    z_plus = values.narrow(z_axis, 2, values.shape[z_axis] - 2).narrow(y_axis, 1, values.shape[y_axis] - 2).narrow(x_axis, 1, values.shape[x_axis] - 2)
-    z_minus = values.narrow(z_axis, 0, values.shape[z_axis] - 2).narrow(y_axis, 1, values.shape[y_axis] - 2).narrow(x_axis, 1, values.shape[x_axis] - 2)
+    center = (
+        values.narrow(z_axis, 1, values.shape[z_axis] - 2)
+        .narrow(y_axis, 1, values.shape[y_axis] - 2)
+        .narrow(x_axis, 1, values.shape[x_axis] - 2)
+    )
+    x_plus = (
+        values.narrow(z_axis, 1, values.shape[z_axis] - 2)
+        .narrow(y_axis, 1, values.shape[y_axis] - 2)
+        .narrow(x_axis, 2, values.shape[x_axis] - 2)
+    )
+    x_minus = (
+        values.narrow(z_axis, 1, values.shape[z_axis] - 2)
+        .narrow(y_axis, 1, values.shape[y_axis] - 2)
+        .narrow(x_axis, 0, values.shape[x_axis] - 2)
+    )
+    y_plus = (
+        values.narrow(z_axis, 1, values.shape[z_axis] - 2)
+        .narrow(y_axis, 2, values.shape[y_axis] - 2)
+        .narrow(x_axis, 1, values.shape[x_axis] - 2)
+    )
+    y_minus = (
+        values.narrow(z_axis, 1, values.shape[z_axis] - 2)
+        .narrow(y_axis, 0, values.shape[y_axis] - 2)
+        .narrow(x_axis, 1, values.shape[x_axis] - 2)
+    )
+    z_plus = (
+        values.narrow(z_axis, 2, values.shape[z_axis] - 2)
+        .narrow(y_axis, 1, values.shape[y_axis] - 2)
+        .narrow(x_axis, 1, values.shape[x_axis] - 2)
+    )
+    z_minus = (
+        values.narrow(z_axis, 0, values.shape[z_axis] - 2)
+        .narrow(y_axis, 1, values.shape[y_axis] - 2)
+        .narrow(x_axis, 1, values.shape[x_axis] - 2)
+    )
     return x_plus + x_minus + y_plus + y_minus + z_plus + z_minus - 6.0 * center
 
 
@@ -1111,6 +1677,16 @@ def _boundary_point_mask(shape: tuple[int, ...], *, device, dtype: torch.dtype) 
     return mask
 
 
+def _axial_face_masks(shape: tuple[int, ...], *, device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    if len(shape) != 3:
+        raise ValueError(f"expected 3D grid shape, got {shape}")
+    low = torch.zeros(shape, device=device, dtype=dtype)
+    high = torch.zeros(shape, device=device, dtype=dtype)
+    low[:, :, 0] = 1.0
+    high[:, :, -1] = 1.0
+    return low, high
+
+
 def _interior_cell_mask(shape: torch.Size | tuple[int, ...], *, device, dtype: torch.dtype) -> torch.Tensor:
     shape = tuple(int(v) for v in shape)
     mask = torch.ones(shape, device=device, dtype=dtype)
@@ -1128,10 +1704,14 @@ def _interior_cell_mask(shape: torch.Size | tuple[int, ...], *, device, dtype: t
 def _checkerboard(shape: torch.Size | tuple[int, ...], *, device, dtype: torch.dtype) -> torch.Tensor:
     axes = torch.meshgrid(*(torch.arange(int(size), device=device) for size in shape), indexing="ij")
     parity = sum(axes).remainder(2)
-    return torch.where(parity == 0, torch.ones((), device=device, dtype=dtype), -torch.ones((), device=device, dtype=dtype))
+    return torch.where(
+        parity == 0, torch.ones((), device=device, dtype=dtype), -torch.ones((), device=device, dtype=dtype)
+    )
 
 
-def _phase_profile(radius: torch.Tensor, *, core_value: float, rim_value: float, core_radius: float, rim_radius: float) -> torch.Tensor:
+def _phase_profile(
+    radius: torch.Tensor, *, core_value: float, rim_value: float, core_radius: float, rim_radius: float
+) -> torch.Tensor:
     t = ((radius - float(core_radius)) / max(float(rim_radius) - float(core_radius), 1e-8)).clamp(0.0, 1.0)
     smooth = _smoothstep(t)
     return float(core_value) + (float(rim_value) - float(core_value)) * smooth
@@ -1144,6 +1724,17 @@ def _normalized_radius(coordinates: torch.Tensor) -> torch.Tensor:
 
 def _poisson_ratio(log_sx: torch.Tensor, log_sy: torch.Tensor, log_sz: torch.Tensor) -> torch.Tensor:
     return -0.5 * (log_sy + log_sz) / _signed_clamp(log_sx, 7e-4)
+
+
+def _effective_poisson_ratio(
+    log_sx: torch.Tensor,
+    log_sy: torch.Tensor,
+    log_sz: torch.Tensor,
+    mask: torch.Tensor,
+) -> torch.Tensor:
+    axial = _masked_mean(log_sx, mask)
+    transverse = 0.5 * (_masked_mean(log_sy, mask) + _masked_mean(log_sz, mask))
+    return -transverse / _signed_clamp(axial, 7e-4)
 
 
 def _smoothstep(values: torch.Tensor) -> torch.Tensor:
@@ -1174,8 +1765,8 @@ def _guard_problem_size(args) -> None:
     total_steps = _total_optimizer_steps(args)
     if total_steps > int(args.max_total_steps):
         raise ValueError(f"requested {total_steps} optimizer steps, exceeding --max-total-steps={args.max_total_steps}")
-    if args.grid_size < 4:
-        raise ValueError("--grid-size must be at least 4 for 3D curl and validation")
+    if args.grid_size < 5:
+        raise ValueError("--grid-size must be at least 5 so the core and rim response regions contain cells")
     if args.control_size < 2:
         raise ValueError("--control-size must be at least 2")
     if args.viz_frames < 2:
@@ -1190,7 +1781,7 @@ def _total_optimizer_steps(args) -> int:
     )
 
 
-def _visualization_capture_every(args) -> int:
+def _trajectory_capture_every(args) -> int:
     return max(1, _total_optimizer_steps(args) // max(1, int(args.viz_frames) - 2))
 
 

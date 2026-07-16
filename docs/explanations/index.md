@@ -8,8 +8,9 @@ structure and application policy.
    how clifra represents a selected set of blades as an ordinary dense tensor.
 2. [Planning Policy as Dependency Injection](planning-policy-injection.md)
    explains resource limits and executor selection.
-3. [Geometric Parameterization](clifra-methodology.md) describes geometric objects as
-   learnable coordinate systems and places the continuum solver in that method.
+3. [Geometric Parameterization](clifra-methodology.md) describes geometric
+   objects as learnable coordinate systems and positions the physics-informed
+   bivector-field showcase within that method.
 4. [Bivector Exponential Methods](bivector-exponential.md) separates
    exact low-dimensional formulas, matrix exponentiation, and spectral-local
    approximation.

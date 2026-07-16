@@ -57,24 +57,30 @@ the representation interpretable and computationally tractable, but it also
 excludes components. Clifra leaves this choice visible instead of silently
 embedding every object in a full $2^n$-lane multivector.
 
-## The continuum solver is one local example
+## Advanced showcase: a bivector deformation field
 
-The continuum solver demonstrates the proposal without defining it. Its
-`CoordinateChart` embeds ordinary coordinates into a declared grade-1 space and
-extracts them again. An `InvertibleBivectorField` learns a sequence or control
-lattice of grade-2 generators. Planned versor actions exponentiate and apply
-those generators along a path; reversing their order and sign constructs the
-inverse path.
+The repository-local continuum solver demonstrates the proposal without
+defining clifra's scope. Its `CoordinateChart` embeds ordinary coordinates into
+a declared grade-1 space and extracts them again. An
+`InvertibleBivectorField` learns a sequence or control lattice of grade-2
+generators. Planned versor actions exponentiate and apply those generators
+along a path; reversing their order and sign reconstructs indexed grid samples.
 
 The learnable object is therefore the transformation field itself, expressed by
 bivector coordinates. Ordinary PyTorch optimization updates those coordinates
 through losses evaluated on the transformed points.
 
-The solver also shows what the algebra does not supply. Target criteria,
-sampling, curriculum, path-consistency checks, boundary conditions, and other
-domain constraints are application policy. They are injected by the solver or
-training program. Clifford structure can make an action invertible by
-construction while still leaving the learned field scientifically unsuitable.
+The physics-informed deformation-design example adds a virtual loading test,
+constitutive energy, stress-equilibrium residuals, validation, VTK export, an
+optimization-trajectory GIF, and response charts. This makes it an advanced
+end-to-end showcase: one method and one inspectable result, rather than a
+minimal tutorial or prescribed architecture.
+
+The showcase also makes the library boundary visible. Target criteria,
+sampling, curriculum, path-consistency checks, boundary conditions, mechanics,
+and visualization are application policy. Clifford structure supplies the
+declared generator space and differentiable action; it does not by itself make
+the learned field scientifically suitable.
 
 ## Other applications
 

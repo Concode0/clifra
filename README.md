@@ -60,12 +60,22 @@ uv run --group docs mkdocs build
 See the [documentation](https://concode0.github.io/clifra/) for tutorials,
 explanations, benchmarks, and the generated API reference.
 
-## Research
+## Advanced Showcase
 
-`research/continuum_solver` is one repository-local system built on clifra. It
-uses clifra charts, bivector fields, and planned algebra operations to study
-continuum deformations. It is an example of the library's use as research
-infrastructure, not a definition of clifra's scope.
+[Physics-informed deformation design](research/continuum_solver/examples/physics_informed_deformation_design.py)
+is one complete system built on clifra: a projective Clifford algebra declares
+the coordinate and bivector spaces, a trainable control lattice generates the
+deformation, and application-owned mechanics guide the result. The run exports
+VTK data, an optimization-trajectory GIF, and response charts.
+
+```bash
+uv run --group viz python research/continuum_solver/examples/physics_informed_deformation_design.py
+```
+
+This is one possible workflow, not a prescribed clifra architecture. The core
+library supplies the algebraic representation and differentiable operations;
+the continuum solver, physics, objective, and visualization belong to the
+example system.
 
 ## Contribution
 

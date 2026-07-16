@@ -64,6 +64,7 @@ docs = [
 ]
 viz = [
     "imageio>=2.37.0",
+    "matplotlib>=3.9.0",
     "numpy>=2.0.0",
     "vtk>=9.4.0",
 ]
