@@ -9,8 +9,8 @@ import torch
 from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.slow
-from clifra.core.analysis.geodesic import NeighborhoodBivectorFlow
-from clifra.core.analysis.signature import RotorProbeSignatureEstimator, _apply_biased_init, _SignatureProbe
+from clifra.analysis.geodesic import NeighborhoodBivectorFlow
+from clifra.analysis.signature import RotorProbeSignatureEstimator, _apply_biased_init, _SignatureProbe
 
 
 @pytest.fixture(scope="module")

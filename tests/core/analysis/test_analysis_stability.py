@@ -4,14 +4,14 @@
 import pytest
 import torch
 
-from clifra.core.analysis._types import CONSTANTS, AnalysisConfig
-from clifra.core.analysis._utils import full_matrix_feasibility, full_product_feasibility
-from clifra.core.analysis.commutator import CommutatorAnalyzer
-from clifra.core.analysis.geodesic import NeighborhoodBivectorFlow
-from clifra.core.analysis.pipeline import GeometricAnalyzer
-from clifra.core.analysis.signature import RotorProbeSignatureEstimator
-from clifra.core.analysis.spectral import SpectralAnalyzer
-from clifra.core.analysis.symmetry import TransformationDiagnosticsAnalyzer
+from clifra.analysis._types import CONSTANTS, AnalysisConfig
+from clifra.analysis._utils import full_matrix_feasibility, full_product_feasibility
+from clifra.analysis.commutator import CommutatorAnalyzer
+from clifra.analysis.geodesic import NeighborhoodBivectorFlow
+from clifra.analysis.pipeline import GeometricAnalyzer
+from clifra.analysis.signature import RotorProbeSignatureEstimator
+from clifra.analysis.spectral import SpectralAnalyzer
+from clifra.analysis.symmetry import TransformationDiagnosticsAnalyzer
 from clifra.core.config import make_algebra
 
 pytestmark = pytest.mark.unit

@@ -13,7 +13,7 @@ import math
 import pytest
 import torch
 
-from clifra.core.analysis._types import (
+from clifra.analysis._types import (
     AnalysisConfig,
     AnalysisReport,
     CommutatorResult,
@@ -22,12 +22,12 @@ from clifra.core.analysis._types import (
     SpectralResult,
     TransformationDiagnosticsResult,
 )
-from clifra.core.analysis.commutator import CommutatorAnalyzer, compute_mean_commutator_and_procrustes_alignment
-from clifra.core.analysis.dimension import CovarianceDimensionAnalyzer
-from clifra.core.analysis.pipeline import GeometricAnalyzer
-from clifra.core.analysis.sampler import StatisticalSampler
-from clifra.core.analysis.spectral import SpectralAnalyzer
-from clifra.core.analysis.symmetry import TransformationDiagnosticsAnalyzer
+from clifra.analysis.commutator import CommutatorAnalyzer, compute_mean_commutator_and_procrustes_alignment
+from clifra.analysis.dimension import CovarianceDimensionAnalyzer
+from clifra.analysis.pipeline import GeometricAnalyzer
+from clifra.analysis.sampler import StatisticalSampler
+from clifra.analysis.spectral import SpectralAnalyzer
+from clifra.analysis.symmetry import TransformationDiagnosticsAnalyzer
 from clifra.core.runtime.algebra import AlgebraContext
 
 DEVICE = "cpu"

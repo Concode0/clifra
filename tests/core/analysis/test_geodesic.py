@@ -15,8 +15,8 @@ import math
 import pytest
 import torch
 
-from clifra.core.analysis.dimension import CoordinateLiftAnalyzer
-from clifra.core.analysis.geodesic import NeighborhoodBivectorFlow
+from clifra.analysis.dimension import CoordinateLiftAnalyzer
+from clifra.analysis.geodesic import NeighborhoodBivectorFlow
 from clifra.core.runtime.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit

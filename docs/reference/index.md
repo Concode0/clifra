@@ -129,7 +129,7 @@ These interfaces provide experimental geometric diagnostics. Their outputs
 describe the implemented tensor and coefficient-space calculations; they are
 not statistical inference or proofs of causal, metric, or symmetry structure.
 
-::: clifra.core.analysis
+::: clifra.analysis
     options:
       members:
         - AnalysisConstants
@@ -142,23 +142,23 @@ not statistical inference or proofs of causal, metric, or symmetry structure.
         - CommutatorResult
         - AnalysisReport
 
-::: clifra.core.analysis.commutator
+::: clifra.analysis.commutator
 
-::: clifra.core.analysis.dimension
+::: clifra.analysis.dimension
 
-::: clifra.core.analysis.geodesic
+::: clifra.analysis.geodesic
 
-::: clifra.core.analysis.pipeline
+::: clifra.analysis.pipeline
 
-::: clifra.core.analysis.policy
+::: clifra.analysis.policy
 
-::: clifra.core.analysis.sampler
+::: clifra.analysis.sampler
 
-::: clifra.core.analysis.signature
+::: clifra.analysis.signature
 
-::: clifra.core.analysis.spectral
+::: clifra.analysis.spectral
 
-::: clifra.core.analysis.symmetry
+::: clifra.analysis.symmetry
 
 ## Utilities
 
