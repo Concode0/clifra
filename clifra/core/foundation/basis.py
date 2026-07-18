@@ -193,11 +193,11 @@ def basis_product(index_a: int, index_b: int, p: int, q: int, r: int) -> tuple[i
 
     sign = -1.0 if swap_count % 2 else 1.0
 
-    negative_mask = sum(1 << bit for bit in range(p, p + q))
+    negative_mask = ((1 << q) - 1) << p
     if ((index_a & index_b & negative_mask).bit_count() % 2) == 1:
         sign = -sign
 
-    null_mask = sum(1 << bit for bit in range(p + q, n))
+    null_mask = ((1 << r) - 1) << (p + q)
     if (index_a & index_b & null_mask) != 0:
         sign = 0.0
 
