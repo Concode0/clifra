@@ -60,22 +60,39 @@ uv run --group docs mkdocs build
 See the [documentation](https://concode0.github.io/clifra/) for tutorials,
 explanations, benchmarks, and the generated API reference.
 
-## Advanced Showcase
+## Research Showcase: Clifford Transformation Fields
 
-[Physics-informed deformation design](research/continuum_solver/examples/physics_informed_deformation_design.py)
-is one complete system built on clifra: a projective Clifford algebra declares
-the coordinate and bivector spaces, a trainable control lattice generates the
-deformation, and application-owned mechanics guide the result. The run exports
-VTK data, an optimization-trajectory GIF, and response charts.
+`research/continuum_solver` is Clifra's clearest end-to-end demonstration of
+layout-directed geometric learning. It turns sampled bivector generators into
+differentiable fields of local Clifford actions. Coordinate values and
+persistent sample labels remain distinct, while samplers, action paths, and
+differentiable objectives are independently configurable.
+
+[Bivector field basics](research/continuum_solver/examples/bivector_field_basics.py)
+is the compact introduction. It learns a coordinate-dependent action on
+unordered points and demonstrates metric preservation, labeled inversion, and
+permutation equivariance.
 
 ```bash
-uv run --group viz python research/continuum_solver/examples/physics_informed_deformation_design.py
+uv run research/continuum_solver/examples/bivector_field_basics.py
 ```
 
-This is one possible workflow, not a prescribed clifra architecture. The core
-library supplies the algebraic representation and differentiable operations;
-the continuum solver, physics, objective, and visualization belong to the
-example system.
+[Physics-informed deformation design](research/continuum_solver/examples/physics_informed_deformation_design.py)
+drives the same transformation-field mechanism with material mechanics,
+boundary conditions, guarded optimization, strict validation, and
+visualization. It demonstrates a complete scientific system built from the
+general field construction.
+
+```bash
+uv run --group viz research/continuum_solver/examples/physics_informed_deformation_design.py
+```
+
+Clifra compiles declared geometric coordinates into differentiable actions. The
+continuum solver assembles those actions into trainable fields, and applications
+decide what those fields learn through their objectives and constraints.
+
+See [Why bivector coordinate fields work](https://concode0.github.io/clifra/explanations/transformation-fields/)
+for the derivation, field semantics, and inversion model.
 
 ## Contribution
 
@@ -104,19 +121,17 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## References
 
-### RotorGadget Background
+These works provide conceptual background for `RotorGadget` and the tag-aware
+optimizers. Clifra's behavior is defined by its public API, source, and tests.
 
-The following paper is background reference material for `RotorGadget`. It is
-not maintained as a normative implementation specification, and its inclusion
-does not claim strict reproduction or conformance:
+### RotorGadget Background
 
 - Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers from Irreducibles." *arXiv:2507.11688*.
 
 ### Optimization Background
 
 The tag-aware optimizers in `clifra/optimizers/` dispatch `spin`, `sphere`, and
-`euclidean` post-update handling. The following books are background references,
-not normative specifications for those implementations:
+`euclidean` post-update handling.
 
 - Absil, P.-A., Mahony, R., & Sepulchre, R. (2008). *Optimization Algorithms on Matrix Manifolds*. Princeton University Press.
 - Boumal, N. (2023). *An Introduction to Optimization on Smooth Manifolds*. Cambridge University Press.

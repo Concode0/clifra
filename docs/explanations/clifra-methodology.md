@@ -1,7 +1,7 @@
 # Geometric Parameterization
 
-Clifra is a set of Clifford algebra tools for PyTorch, independent of any one
-model architecture, training objective, or scientific domain. One supported
+Clifra provides Clifford algebra tools for PyTorch that can serve individual
+operations, geometric learning modules, and complete domain systems. A central
 method is to represent a geometric object's generating coordinates directly and
 construct its action with the algebra.
 
@@ -40,9 +40,8 @@ sandwich product construct the action at each forward pass. The model therefore
 learns the plane generator of the transformation in a fixed grade-2 coordinate
 space.
 
-This parameterization is useful when the chosen signature, grades, and action
-match the problem structure. A mismatch can instead impose an unnecessary
-restriction, so performance remains an empirical question.
+The signature, grades, and action form an explicit model hypothesis. Selecting
+them from the geometry gives the learned parameters both structure and meaning.
 
 ## Layout is part of the hypothesis
 
@@ -57,30 +56,36 @@ the representation interpretable and computationally tractable, but it also
 excludes components. Clifra leaves this choice visible instead of silently
 embedding every object in a full $2^n$-lane multivector.
 
-## Advanced showcase: a bivector deformation field
+## Research showcase: a bivector transformation field
 
-The repository-local continuum solver illustrates this approach as one
-application. Its `CoordinateChart` embeds ordinary coordinates into a declared
-grade-1 space and extracts them again. An
-`InvertibleBivectorField` learns a sequence or control lattice of grade-2
+The continuum solver is Clifra's clearest end-to-end demonstration of this
+method. It turns compiled Clifford actions into a reusable, trainable field of
+local transformations. Its `CoordinateChart` embeds ordinary coordinates into
+a declared grade-1 space and extracts them again. An
+`InvertibleBivectorField` learns a sequence or sampled field of grade-2
 generators. Planned versor actions exponentiate and apply those generators
-along a path; reversing their order and sign reconstructs indexed grid samples.
+along a path; reversing their order and sign reconstructs samples when their
+material or index identity is retained. Generator samplers may broadcast one
+global path, interpolate a regular control lattice, or evaluate controls from
+arbitrary sample coordinates.
 
 The learnable object is therefore the transformation field itself, expressed by
 bivector coordinates. Ordinary PyTorch optimization updates those coordinates
 through losses evaluated on the transformed points.
 
-The physics-informed deformation-design example adds a virtual loading test,
-constitutive energy, stress-equilibrium residuals, validation, VTK export, an
-optimization-trajectory GIF, and response charts. This makes it an advanced
-end-to-end showcase: one method and one inspectable result, rather than a
-minimal tutorial or prescribed architecture.
+The physics-informed deformation-design example drives this general mechanism
+with a virtual loading test, constitutive energy, stress-equilibrium residuals,
+guarded optimization, validation, VTK export, an optimization-trajectory GIF,
+and response charts. It is a complete, inspectable scientific application of
+the field abstraction.
 
-The showcase also separates library structure from application policy. Target
-criteria, sampling, curriculum, path-consistency checks, boundary conditions,
-mechanics, and visualization belong to the application. Clifford structure
-supplies the declared generator space and differentiable action, while the
-field's scientific suitability depends on those surrounding choices.
+The showcase demonstrates the whole progression from declared generator space
+to differentiable action and learned field. Target criteria, sampling,
+curriculum, path-consistency checks, boundary conditions, mechanics, and
+visualization then specialize that field for the application.
+
+See [Why Bivector Coordinate Fields Work](transformation-fields.md) for the
+input, sampler, action, and inversion contracts.
 
 ## Other applications
 
@@ -98,18 +103,17 @@ foundation is the algebra specification, layout contracts, static planners,
 tensor executors, and differentiable operations. A project may use one layer,
 build a new family of geometric modules, or use clifra only for computation.
 
-## What the application decides
+## Building an application
 
-A geometric parameterization identifies structure; choosing the right structure
-remains an application decision. In particular, the application must determine:
+A geometric parameterization makes structural choices explicit. Building an
+application involves selecting:
 
 - whether the signature represents the intended geometry;
 - whether the selected grades are sufficient;
 - which action should be generated from the parameters;
-- which invariants must hold for the whole model rather than one layer;
+- which model-level invariants to enforce;
 - how numerical approximation affects the intended regime;
 - which data and objective identify the desired solution.
 
-Clifra keeps these decisions explicit and supplies algebraic structure once
-they are made, leaving object classification and domain policy to the
-application.
+Clifra keeps these decisions visible and supplies the algebraic structure that
+connects them to an executable PyTorch model.

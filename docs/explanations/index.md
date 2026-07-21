@@ -1,8 +1,7 @@
 # Explanations
 
-These chapters describe the design decisions behind clifra, the mathematical
-boundaries of its execution routes, and the distinction between algebraic
-structure and application policy.
+These chapters develop the design of clifra from tensor representation through
+geometric parameterization, numerical execution, and PyTorch integration.
 
 1. [Layout, Storage, and `TensorContract`](layout-storage-contracts.md) explains
    how clifra represents a selected set of blades as an ordinary dense tensor.
@@ -11,15 +10,18 @@ structure and application policy.
 3. [Geometric Parameterization](clifra-methodology.md) describes geometric
    objects as learnable coordinate systems and positions the physics-informed
    bivector-field showcase within that method.
-4. [Bivector Exponential Methods](bivector-exponential.md) separates
+4. [Why Bivector Coordinate Fields Work](transformation-fields.md) derives the
+   generalized input, sampling, action, and inversion contracts behind the
+   continuum-solver research package.
+5. [Bivector Exponential Methods](bivector-exponential.md) separates
    exact low-dimensional formulas, matrix exponentiation, and spectral-local
    approximation.
-5. [Optimizer Parameter Categories](optimizer-dispatch.md) explains the three
+6. [Optimizer Parameter Categories](optimizer-dispatch.md) explains the three
    parameter tags and the role of bivector coordinates.
-6. [Signatures and Algebraic Behavior](signatures-and-learning.md) distinguishes
+7. [Signatures and Algebraic Behavior](signatures-and-learning.md) distinguishes
    signed Clifford forms from positive coefficient-lane energy and relates both
    to differentiation.
-7. [Using clifra with PyTorch](clifra-and-pytorch.md) explains how clifra's
+8. [Using clifra with PyTorch](clifra-and-pytorch.md) explains how clifra's
    algebraic machinery and the surrounding PyTorch system divide the work.
 
 The chapters are independent of the tutorials. Each introduces the definitions

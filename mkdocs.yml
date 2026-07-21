@@ -57,6 +57,7 @@ nav:
       - Layout, Storage, and TensorContract: explanations/layout-storage-contracts.md
       - Planning Policy as Dependency Injection: explanations/planning-policy-injection.md
       - Geometric Parameterization: explanations/clifra-methodology.md
+      - Why Bivector Coordinate Fields Work: explanations/transformation-fields.md
       - Bivector Exponential Methods: explanations/bivector-exponential.md
       - Optimizer Parameter Categories: explanations/optimizer-dispatch.md
       - Signatures and Algebraic Behavior: explanations/signatures-and-learning.md
