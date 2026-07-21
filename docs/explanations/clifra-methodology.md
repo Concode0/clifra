@@ -1,6 +1,6 @@
 # Geometric Parameterization
 
-Clifra is a set of Clifford algebra tools for PyTorch. It does not prescribe a
+Clifra is a set of Clifford algebra tools for PyTorch, independent of any one
 model architecture, training objective, or scientific domain. One supported
 method is to represent a geometric object's generating coordinates directly and
 construct its action with the algebra.
@@ -40,9 +40,9 @@ sandwich product construct the action at each forward pass. The model therefore
 learns the plane generator of the transformation in a fixed grade-2 coordinate
 space.
 
-The parameterization supplies no performance guarantee. It applies when the
-chosen signature, grades, and action match the problem structure; otherwise it
-can impose an unnecessary restriction.
+This parameterization is useful when the chosen signature, grades, and action
+match the problem structure. A mismatch can instead impose an unnecessary
+restriction, so performance remains an empirical question.
 
 ## Layout is part of the hypothesis
 
@@ -59,9 +59,9 @@ embedding every object in a full $2^n$-lane multivector.
 
 ## Advanced showcase: a bivector deformation field
 
-The repository-local continuum solver demonstrates the proposal without
-defining clifra's scope. Its `CoordinateChart` embeds ordinary coordinates into
-a declared grade-1 space and extracts them again. An
+The repository-local continuum solver illustrates this approach as one
+application. Its `CoordinateChart` embeds ordinary coordinates into a declared
+grade-1 space and extracts them again. An
 `InvertibleBivectorField` learns a sequence or control lattice of grade-2
 generators. Planned versor actions exponentiate and apply those generators
 along a path; reversing their order and sign reconstructs indexed grid samples.
@@ -76,11 +76,11 @@ optimization-trajectory GIF, and response charts. This makes it an advanced
 end-to-end showcase: one method and one inspectable result, rather than a
 minimal tutorial or prescribed architecture.
 
-The showcase also makes the library boundary visible. Target criteria,
-sampling, curriculum, path-consistency checks, boundary conditions, mechanics,
-and visualization are application policy. Clifford structure supplies the
-declared generator space and differentiable action; it does not by itself make
-the learned field scientifically suitable.
+The showcase also separates library structure from application policy. Target
+criteria, sampling, curriculum, path-consistency checks, boundary conditions,
+mechanics, and visualization belong to the application. Clifford structure
+supplies the declared generator space and differentiable action, while the
+field's scientific suitability depends on those surrounding choices.
 
 ## Other applications
 
@@ -93,15 +93,15 @@ Applications can include:
 - research on alternative signatures, layouts, actions, or planning policies;
 - direct Clifford algebra computation inside a larger scientific program.
 
-None of these uses requires adopting the continuum solver. Clifra's reusable
+These uses are independent of the continuum solver. Clifra's reusable
 foundation is the algebra specification, layout contracts, static planners,
 tensor executors, and differentiable operations. A project may use one layer,
 build a new family of geometric modules, or use clifra only for computation.
 
-## Application responsibilities
+## What the application decides
 
-Learning a geometric object does not establish that it is the correct object.
-The application must still determine:
+A geometric parameterization identifies structure; choosing the right structure
+remains an application decision. In particular, the application must determine:
 
 - whether the signature represents the intended geometry;
 - whether the selected grades are sufficient;
@@ -110,5 +110,6 @@ The application must still determine:
 - how numerical approximation affects the intended regime;
 - which data and objective identify the desired solution.
 
-Clifra exposes these decisions and supplies algebraic structure after they are
-made. It does not enforce them or classify every tensor as geometric.
+Clifra keeps these decisions explicit and supplies algebraic structure once
+they are made, leaving object classification and domain policy to the
+application.

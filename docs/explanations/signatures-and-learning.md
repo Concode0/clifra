@@ -61,9 +61,8 @@ gather, multiply, and reduction operations.
 
 The resulting tensor program is signature-specific even though its runtime
 operations look like ordinary PyTorch arithmetic. Changing $Cl(3, 0, 0)$ to
-$Cl(1, 2, 0)$ does not merely rename the same coefficients; it changes basis
-products, signed forms, exponential behavior, and potentially executor
-eligibility.
+$Cl(1, 2, 0)$ changes more than coefficient names: it changes basis products,
+signed forms, exponential behavior, and potentially executor eligibility.
 
 ## Forward and backward use the same algebra
 
@@ -82,19 +81,19 @@ $c_{ijk}$:
 = \sum_{j,k} c_{ijk} b_j \frac{\partial L}{\partial y_k}.
 \]
 
-Clifra does not replace the algebraic signs with a positive metric during
-backpropagation. The signed forward calculation determines the gradient.
+Backpropagation retains the algebraic signs from the forward calculation; the
+gradient follows that signed tensor program, with no substituted positive
+metric.
 
 Using lane energy as a loss or regularizer introduces a positive Euclidean
 objective on coefficient space. That choice changes the optimization geometry
-and therefore the path taken by learning, but it does not alter the Clifford
-product implemented in the model. An indefinite algebra can be optimized with a
-positive coefficient-space objective without being redefined as a Euclidean
-Clifford algebra.
+and therefore the path taken by learning, while leaving the model's Clifford
+product unchanged. An indefinite algebra can therefore use a positive
+coefficient-space objective and still retain its original signature.
 
 ## Algebra and optimization geometry
 
-Three layers of claims must remain separate:
+Keep three layers of claims distinct:
 
 1. **Algebraic definition.** Exact product, reverse, projection, and exact
    exponential routes implement the declared Clifford operations up to ordinary
@@ -104,16 +103,15 @@ Three layers of claims must remain separate:
 3. **Learning objective.** Lane losses, signed invariants, regularizers, and
    domain constraints define what the model is trained to prefer.
 
-A positive coordinate-space loss does not alter the Clifford product used by
-the forward program. An invariant form of the Clifford algebra and an
+A positive coordinate-space loss leaves the Clifford product in the forward
+program unchanged. An invariant form of the Clifford algebra and an
 optimization geometry on its coefficients are different definitions and should
-not be presented as equivalent.
+be presented accordingly.
 
 The same distinction applies to numerical safeguards. Taking the absolute value
-before a square root yields a stable magnitude-like scalar, but it does not turn
-an indefinite form into a positive-definite norm. Falling back to Euclidean
-normalization near a null vector avoids division by zero, but it does not prove
-that the result has unit signed norm.
+before a square root yields a stable magnitude-like scalar while the underlying
+form remains indefinite. A Euclidean fallback near a null vector avoids division
+by zero without certifying unit signed norm.
 
 ## Scope of approximate exponentials
 
@@ -124,8 +122,8 @@ truncation occurs, both forward and backward belong to the truncated model.
 
 This remains a valid differentiable numerical method, but identities that
 depend on the exact full exponential must be validated to the required tolerance
-for that method. The algebraic foundation specifies the target operation; it
-does not make every approximation exact.
+for that method. The algebraic target and its numerical approximation remain
+distinct.
 
 ## Choosing a quantity for learning
 

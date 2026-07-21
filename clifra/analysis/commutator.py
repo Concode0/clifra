@@ -318,8 +318,8 @@ def compute_mean_commutator_and_procrustes_alignment(algebra: AlgebraLike, data_
         data_tensor: ``[N, D]`` tensor of raw features.
 
     Returns:
-        Tuple ``(mean_commutator_norm, alignment_matrix)``. These are
-        descriptive calculations, not an uncertainty estimate.
+        Tuple ``(mean_commutator_norm, alignment_matrix)``. These descriptive
+        calculations contain no uncertainty estimate.
     """
     N, D = data_tensor.shape
     n = algebra.n

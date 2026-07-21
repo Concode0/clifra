@@ -5,8 +5,8 @@
 """Sampling strategies for experimental geometric diagnostics.
 
 The stratified strategy bins an operational neighborhood-connection alignment
-score. It constructs a capped Euclidean algebra internally and does not infer a
-metric signature.
+score. Its capped Euclidean algebra is an internal implementation choice rather
+than a metric-signature inference.
 """
 
 from typing import Dict, List, Tuple, Union

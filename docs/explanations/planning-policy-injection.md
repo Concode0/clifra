@@ -1,8 +1,7 @@
 # Planning Policy as Dependency Injection
 
-The algebra defines which products are mathematically valid. It does not define
-how much memory a deployment can spend, when a large plan should be rejected,
-or which executor family is fastest on a particular backend. Those are
+The algebra defines which products are mathematically valid. Memory budgets,
+plan rejection thresholds, and backend-specific executor choices are
 operational decisions, so clifra receives them as injected policy.
 
 ## Inject policy when the algebra is constructed
@@ -54,8 +53,8 @@ Injection has three consequences:
 - tests or analysis can use strict limits without changing global state;
 - the policy that produced a plan can be kept with the experiment configuration.
 
-Existing plans are not retroactively rebuilt when a policy object is replaced.
-Constructing the policy first makes it clear which policy produced each plan.
+Replacing a policy object leaves existing plans unchanged. Constructing the
+policy first makes it clear which policy produced each plan.
 
 ## `PlanningLimits`: reject static costs before allocation
 
@@ -85,8 +84,9 @@ input widths to reject a request above the configured pair bound before construc
 basis interactions. The realized plan may contain fewer pairs after grade,
 projection, and metric-zero filtering.
 
-These limits are not mathematical restrictions. Raising or removing them means
-that the caller accepts the resulting allocation and planning cost.
+These limits regulate operational cost; mathematical validity is unchanged.
+Raising or removing them means that the caller accepts the resulting allocation
+and planning cost.
 
 ## `ProductExecutionPolicy`: choose an executor by a static score
 
@@ -131,16 +131,15 @@ also constrain eligibility.
 
 Unlike exact product executor selection, a capped spectral-local route can be
 an approximation. Its policy must therefore be justified with angle-spectrum
-and drift analysis for the intended workload. The complete boundary is covered
-   in [Bivector Exponential Methods](bivector-exponential.md).
+and drift analysis for the intended workload. Detailed constraints are covered
+in [Bivector Exponential Methods](bivector-exponential.md).
 
 ## Defaults are presets, not learned decisions
 
-The default weights encode a usable starting policy. Clifra does not profile a
-machine during import and does not automatically fit these values. Automatic
-profiling would make algebra construction stateful, slow, and difficult to
-reproduce; a result measured on one batch or compiler may also be a poor policy
-for another workload.
+The default weights provide a usable starting policy without profiling a machine
+or fitting values during import. Automatic profiling would make algebra
+construction stateful, slow, and difficult to reproduce; a result measured on
+one batch or compiler may also be a poor policy for another workload.
 
 To tune a policy:
 

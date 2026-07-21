@@ -5,7 +5,8 @@
 """Experimental descriptive and geometric-representation diagnostics.
 
 Results report the implemented coefficient-space or operator calculation.
-Heuristic analyzers do not prove metric, manifold, causal, or symmetry claims.
+Metric, manifold, causal, and symmetry conclusions require evidence beyond
+these heuristic outputs.
 """
 
 from ._types import (

@@ -126,8 +126,9 @@ are omitted.
 ## Analysis
 
 These interfaces provide experimental geometric diagnostics. Their outputs
-describe the implemented tensor and coefficient-space calculations; they are
-not statistical inference or proofs of causal, metric, or symmetry structure.
+describe implemented tensor and coefficient-space calculations. Statistical
+inference and causal, metric, or symmetry conclusions require separate methods
+and evidence.
 
 ::: clifra.analysis
     options:

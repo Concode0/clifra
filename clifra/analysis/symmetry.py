@@ -31,8 +31,9 @@ class TransformationDiagnosticsAnalyzer:
     """Compute experimental coefficient and transformation diagnostics.
 
     The methods report explicitly defined energy, distribution-distance, and
-    commutator statistics. They do not prove metric nullity or invariance under
-    a continuous symmetry group.
+    commutator statistics. These quantities characterize the implemented
+    transformations without establishing metric nullity or invariance under a
+    continuous symmetry group.
 
     Args:
         algebra: Layout-first algebra host.

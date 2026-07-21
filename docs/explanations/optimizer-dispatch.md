@@ -2,8 +2,8 @@
 
 Clifra's tag-aware optimizers recognize only three parameter tags:
 `spin`, `sphere`, and `euclidean`. These tags are update and retraction metadata.
-They are not intended to classify every geometric object that can be represented
-by a Clifford algebra.
+They describe optimizer behavior. Classification of every geometric object that
+a Clifford algebra can represent is a separate concern.
 
 The limited dispatch is deliberate. Most geometric structure belongs in a
 layer's parameterization and forward action. The optimizer only handles the
@@ -22,9 +22,9 @@ group. `RiemannianAdam.from_model` and `ExponentialSGD.from_model` preserve the
 usual optimizer parameter-group model while dispatching the post-update step by
 tag.
 
-The `spin` branch does not calculate a rotor inside the optimizer. Adam or SGD
-updates the bivector coefficients, and the branch applies a numerical norm cap.
-The layer's forward pass maps those coefficients into a rotor through the
+The layer constructs the rotor; the optimizer's `spin` branch only applies a
+numerical norm cap after Adam or SGD updates the bivector coefficients. During
+the forward pass, the layer maps those coefficients into a rotor through the
 planned bivector exponential.
 
 The `sphere` branch checks whether the parameter width matches the algebra's
@@ -60,39 +60,39 @@ The parameterization has the following properties:
 - learned coefficients describe plane generators, so the parameter itself has
   geometric meaning.
 
-The entire geometric object is learned through its coordinates. The optimizer
-does not need a separate case for every rotor dimension or every composition of
-planes because the exponential and action already encode those distinctions.
+The entire geometric object is learned through its coordinates. Because the
+exponential and action already encode rotor dimension and plane composition,
+the optimizer can use the same case for all of them.
 
-## Scope of optimizer tags
+## When to add optimizer tags
 
 An optimizer tag should answer a narrow question: what correction is required
-immediately after updating this parameter? Many useful objects require no new
-answer.
+immediately after updating this parameter? Many useful objects already fit the
+existing categories.
 
 A mixed-grade feature can be an ordinary Euclidean parameter even though its
 forward interpretation is geometric. A constrained field may need a loss or a
 domain-specific projection rather than a universal optimizer retraction. An
-invariant readout is a property of the layer composition, not a new kind of
+invariant readout belongs to the layer composition and calls for no new kind of
 parameter update.
 
 Adding tags for these cases would move model semantics into optimizer dispatch
-and imply guarantees that a local update cannot provide. New categories are
-justified only when a distinct parameter-level constraint has a well-defined,
+and overstate the guarantees available from a local update. A new category is
+justified when a distinct parameter-level constraint has a well-defined,
 reusable retraction.
 
 ## Parameterization limits
 
-Exponential coordinates are not globally one-to-one. Different bivectors may
-produce the same or equivalent group action, and large coordinates can create
-poorly conditioned optimization paths. The spin norm cap is a numerical guard;
-it is not an exact Riemannian exponential update and does not remove global
-coordinate ambiguity.
+Exponential coordinates can be many-to-one: different bivectors may produce the
+same or equivalent group action, and large coordinates can create poorly
+conditioned optimization paths. The spin norm cap is a numerical guard rather
+than an exact Riemannian exponential update, and global coordinate ambiguity
+remains.
 
-Likewise, a versor layer does not make an entire model invariant or isometric.
-Euclidean channel mixing, nonlinearities, readouts, losses, and numerical
-approximations can change the complete model's behavior. Required invariants
-must be tested at the level where they are claimed.
+Likewise, a versor layer alone guarantees neither invariance nor isometry for an
+entire model. Euclidean channel mixing, nonlinearities, readouts, losses, and
+numerical approximations can change the complete model's behavior. Required
+invariants must be tested at the level where they are claimed.
 
 The optimizer remains simple because it is the final part of a larger design:
 the layout chooses the coordinate space, the layer constructs the geometric

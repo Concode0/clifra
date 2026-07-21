@@ -34,8 +34,9 @@ class NeighborhoodBivectorFlow:
     - ``connection_dissimilarity``: one minus the mean cross-neighborhood
       absolute cosine used by this implementation.
 
-    They are exploratory coefficient-space diagnostics, not measurements of
-    manifold curvature, causality, or an exact geodesic connection.
+    They characterize exploratory coefficient-space behavior; manifold
+    curvature, causality, and exact geodesic connections lie beyond what these
+    scores measure.
     """
 
     def __init__(self, algebra: AlgebraLike, k: int = CONSTANTS.default_k_neighbors):
@@ -266,8 +267,9 @@ class NeighborhoodBivectorFlow:
             log(T) ~= <T - 1>_2     (grade-2 approximation for small angles)
             gamma(t) = a . exp(t . log(T))
 
-        This is not a general geodesic solver. It uses the existing regularized
-        blade inverse and a grade-2 first-order logarithm approximation.
+        This provides a local approximation using the existing regularized blade
+        inverse and a grade-2 first-order logarithm. It is not a general geodesic
+        solution.
 
         Args:
             a (torch.Tensor): Start multivector ``[dim]``.

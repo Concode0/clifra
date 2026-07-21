@@ -78,8 +78,8 @@ ambient algebra. Clifra retains at most four planes. Degenerate handling also
 has a bounded null-ideal dimension of four.
 
 This removes the exponential dependence on ambient dimension when the useful
-generator is spectrally local. It does not make an arbitrary high-rank
-bivector's exponential exact at constant cost.
+generator is spectrally local. Arbitrary high-rank bivectors still require more
+than a constant-cost local representation for an exact exponential.
 
 ## Eligibility and fallback constraints
 
@@ -97,8 +97,8 @@ Spectral-local selection is constrained deliberately:
   plane rank cannot be represented completely.
 
 An ineligible case uses matrix exponentiation. On MPS, a mixed-signature matrix
-case is routed through the CPU fallback. These constraints describe implemented
-numerical methods, not unsupported Clifford algebras.
+case is routed through the CPU fallback. The underlying Clifford algebras remain
+supported; only the available numerical methods carry these constraints.
 
 ## Truncation and diagnostics
 
@@ -112,11 +112,10 @@ approximate.
 Spectral concentration can occur when the task has low intrinsic geometric
 dimension. Correlated gradients, small residual updates, explicit norm
 penalties, or a low-rank parameterization can leave most of a generator in a
-small number of planes. Ambient dimension does not cause concentration by
-itself.
+small number of planes. Ambient dimension alone provides no such concentration.
 
 A dense grade-2 parameter has $n(n-1)/2$ independent coordinates. Standard
-initialization, Adam, and SGD do not constrain its skew rank. Isotropic random
+initialization, Adam, and SGD leave its skew rank unconstrained. Isotropic random
 initialization tends to distribute energy across the available planes, and
 gradient noise or composition can populate weak planes. Concentration must be
 measured on trained parameters.
@@ -134,15 +133,16 @@ still leave a material tail when the generator is large.
 
 ### Static stress and measured spectra
 
-`spectral_exp_uniform_tail_stress` evaluates a conservative pre-training case in
-which a fixed bivector norm is distributed uniformly across
+`spectral_exp_uniform_tail_stress` evaluates a deliberately demanding
+pre-training case in which a fixed bivector norm is distributed uniformly across
 $M = \lfloor n/2 \rfloor$ planes. With four retained planes, its GVC is $4/M$ and
-the tail bound grows with the number of omitted planes. This is a stress case,
-not a prediction of training behavior.
+the tail bound grows with the number of omitted planes. It serves as a stress
+case, not as a prediction of training behavior.
 
 `spectral_exp_angle_diagnostics` evaluates an angle spectrum obtained from a
-specific generator or checkpoint. Its input contains one angle magnitude per
-orthogonal plane. It does not convert raw bivector coefficients into a spectrum.
+specific generator or checkpoint. Its input expects one angle magnitude per
+orthogonal plane; raw bivector coefficients must first be converted into that
+spectrum.
 For a definite nondegenerate signature, the angles can be obtained from the
 paired spectrum of the skew generator representing the bivector. In a supported
 degenerate signature, these angles describe the nondegenerate block; mixed and
@@ -192,13 +192,14 @@ differentiable spectrum calculation.
   total squared-angle energy;
 - `tail_angle_sum_bound`, the sum of omitted absolute angles.
 
-The tail-angle sum is a conservative truncation diagnostic. Interpreting it as
-a bound on the norm of an omitted multivector factor requires a specified
-representation, norm, and the assumptions under which that inequality holds.
+The tail-angle sum reports cumulative omitted angle. Treat it as a bound on the
+norm of an omitted multivector factor only after specifying the representation,
+norm, and assumptions behind that inequality.
 
-GVC is not an error bound. A small amount of squared energy distributed across
-many planes can still produce a material cumulative angle. Interpret the tail
-bound with the coefficient scale, step count, and downstream sensitivity.
+GVC measures spectral concentration and supplies no approximation-error bound. A
+small amount of squared energy distributed across many planes can still produce
+a material cumulative angle. Interpret the tail bound with the coefficient
+scale, step count, and downstream sensitivity.
 
 The diagnostic is intended for checkpoint analysis or inference logging. Keep
 it outside a compiled training step; scalar extraction and reporting can
@@ -212,10 +213,10 @@ eigenvalues, its backward suppresses unstable inverse eigenvalue gaps instead of
 allowing them to diverge. This gives a finite derivative convention through
 locally non-unique eigenspaces.
 
-When the plane spectrum is truncated, backward differentiates the truncated
-spectral-local computation. It is not the derivative of the omitted full
-exponential. A small forward discrepancy does not establish that long-horizon
-optimization follows the same path as an exact exponential.
+When the plane spectrum is truncated, backward differentiates the retained
+spectral-local computation; omitted parts of the full exponential contribute no
+derivative. A small forward discrepancy alone says little about whether
+long-horizon optimization follows the exact exponential's path.
 
 ## Validation criteria for `spectral_local`
 
@@ -229,12 +230,12 @@ workload:
    within the application's tolerance.
 4. Representative forward values and gradients have been compared with a
    higher-precision matrix-exponential reference at tractable dimensions.
-5. The complete model, not only a single exponential, satisfies its required
-   invariants.
+5. Required invariants hold for the complete model as well as for the individual
+   exponential.
 
 The route applies when ambient dimension is high and measured generators remain
 low-rank or dominated by a few planes. Persistent tails require a different
 design: a constrained low-rank generator, a sequence of local exponentials, a
 smaller integration step, or an exact fallback where its cost is tractable. A
-sequence of exponentials changes the parameterization and is not generally equal
-to the exponential of their summed generators.
+sequence of exponentials changes the parameterization and generally differs
+from the exponential of their summed generators.

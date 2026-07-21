@@ -19,8 +19,8 @@ structure and application policy.
 6. [Signatures and Algebraic Behavior](signatures-and-learning.md) distinguishes
    signed Clifford forms from positive coefficient-lane energy and relates both
    to differentiation.
-7. [Using clifra with PyTorch](clifra-and-pytorch.md) defines the boundary between
-   clifra's algebraic machinery and the surrounding PyTorch system.
+7. [Using clifra with PyTorch](clifra-and-pytorch.md) explains how clifra's
+   algebraic machinery and the surrounding PyTorch system divide the work.
 
 The chapters are independent of the tutorials. Each introduces the definitions
 needed for its own argument; the [API reference](../reference/index.md) provides

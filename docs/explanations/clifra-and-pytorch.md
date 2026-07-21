@@ -8,7 +8,7 @@ Clifford structure belongs in the parts of a model where grades, signatures, or
 generated geometric actions carry meaning. Other components can remain ordinary
 PyTorch tensor operations.
 
-## Responsibility boundaries
+## Division of work
 
 | Concern | Primary owner |
 | --- | --- |
@@ -23,8 +23,8 @@ PyTorch tensor operations.
 
 Planned clifra executors are `torch.nn.Module` objects with structural indices
 and coefficients stored as buffers. Their runtime path is ordinary tensor work,
-so gradients pass into the inputs and learnable parameters through PyTorch.
-Clifra does not introduce a second autograd system.
+so gradients pass into the inputs and learnable parameters through PyTorch's
+existing autograd system.
 
 ## Use geometry where it changes the model
 
@@ -79,10 +79,10 @@ compilation a fixed tensor program.
 
 Compilation support remains backend- and operation-specific. A graph can be
 captured successfully while a particular compiler backend fails to lower one
-of its scatter, matrix-exponential, or decomposition operations. That is a
-backend capability boundary, not sufficient evidence of an algebraic error.
-Conversely, successful compilation does not establish numerical correctness;
-the two questions require separate checks.
+of its scatter, matrix-exponential, or decomposition operations. Such a failure
+reflects backend capability; by itself, it says nothing about algebraic
+correctness. Successful compilation and numerical correctness likewise require
+separate checks.
 
 ## Design sequence
 
@@ -101,7 +101,7 @@ angle spectra and accumulated drift. For a full-layout product, it includes
 accepting the canonical lane and pair cost explicitly. Policy can select among
 implemented routes; it cannot make an unsuitable representation cheap.
 
-## Representation and validation boundaries
+## Common design mistakes
 
 - **Using full layouts by default.** Full storage is appropriate when the model
   needs all grades, not as a substitute for deciding what a tensor means.
@@ -116,18 +116,18 @@ implemented routes; it cannot make an unsuitable representation cheap.
 - **Equating compiler failure with operation failure.** Confirm eager execution
   and numerical behavior separately from backend lowering.
 
-## Scope limits
+## Practical limits
 
-Layouts do not eliminate exponential basis growth when all grades are requested.
-Planning does not guarantee that a large valid operation fits a device.
-Spectral-local exponentiation has signature and rank boundaries. Geometric
-parameterization does not supply an objective, data, physical constraints, or a
-proof of identifiability.
+Full-grade layouts retain exponential basis growth, and a mathematically valid
+plan can still exceed device capacity. Spectral-local exponentiation has
+signature and rank constraints. Objectives, data, physical constraints, and
+identifiability arguments come from the application, outside the geometric
+parameterization.
 
 The algebra host and execution engine support research modules, geometric deep
 learning, scientific computation, and isolated Clifford operations. The stated
 limits identify decisions that remain with the application.
 
 PyTorch provides the general differentiable computing environment. Clifra adds
-explicit Clifford structure. The application remains responsible for the
-scientific or modeling claim.
+explicit Clifford structure. Scientific and modeling conclusions belong to the
+application.

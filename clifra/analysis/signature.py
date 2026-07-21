@@ -8,8 +8,9 @@ Provides :class:`RotorProbeSignatureEstimator` (a learned heuristic) and
 :class:`SignatureProbeAnalyzer` (higher-level wrapper with dimension
 reduction and bootstrap agreement estimates).
 
-These routines select a candidate signature from trained probe energy. They
-do not identify or prove the metric signature of the source data.
+These routines select a candidate signature from trained probe energy. The
+result characterizes the learned probes. Identifying the source data's metric
+signature requires separate evidence.
 """
 
 import concurrent.futures
@@ -174,7 +175,8 @@ class RotorProbeSignatureEstimator:
     bivector energy distribution to select a signature estimate.
 
     Multiple biased initializations reduce sensitivity to local minima. The
-    returned tuple is a model-dependent estimate, not metric identification.
+    returned tuple is a model-dependent estimate; metric identification requires
+    separate evidence.
     """
 
     def __init__(

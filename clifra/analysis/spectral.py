@@ -35,7 +35,7 @@ class SpectralAnalyzer:
     1. **Grade energy spectrum** -- population-level distribution of positive
        coefficient lane energy across all grades.
     2. **Mean bivector summary** -- norm and coefficients of the sample mean's
-       grade-2 component. It is not a spectral decomposition.
+       grade-2 component, reported separately from spectral decomposition.
     3. **GP action eigenvalue magnitudes** -- magnitudes of eigenvalues of the left-multiplication
        operator :math:`L_x(y) = x \\cdot y` (only for small algebras).
     """

@@ -27,7 +27,8 @@ class CovarianceDimensionAnalyzer:
 
     The reported dimension is the number of normalized covariance
     eigenvalues above a broken-stick reference, clamped to at least one.
-    It is a descriptive heuristic, not an intrinsic-dimension proof.
+    This is a descriptive heuristic; establishing intrinsic dimension requires
+    separate analysis.
 
     Args:
         device: Torch device string.
@@ -185,9 +186,9 @@ class CovarianceDimensionAnalyzer:
 class CoordinateLiftAnalyzer:
     """Experimentally compare connection scores after coordinate lifting.
 
-    This heuristic asks whether appending a fixed coordinate changes the
-    neighborhood-bivector alignment measurements. It does not establish that
-    the source data has a latent geometric dimension.
+    This heuristic measures how appending a fixed coordinate changes the
+    neighborhood-bivector alignment scores. Those changes alone are insufficient
+    to infer a latent geometric dimension in the source data.
 
     Lifting appends extra coordinates to the grade-1 embedding:
 

@@ -1,7 +1,7 @@
 # Layout, Storage, and `TensorContract`
 
 A Clifford algebra with $n = p + q + r$ generators has $2^n$ basis blades.
-Most operations do not use all of them. A vector has $n$ coefficients, a
+Most operations touch only a subset. A vector has $n$ coefficients, a
 bivector has $n(n - 1)/2$, and a rotor generated from a bivector occupies only
 even grades.
 
@@ -25,8 +25,9 @@ a grade-2 layout has 28, and a layout containing grades 1 and 2 has 36.
 
 ![Basis-lane counts by grade in Cl(8,0), with grades 1 and 2 highlighted](../assets/explanations/layout-lane-counts.png)
 
-The layout is not optional metadata. Two tensors with the same width can refer
-to different blades, and their coefficient positions are not interchangeable.
+The layout is required semantic metadata. Two tensors with the same width can
+refer to different blades, and their coefficient positions are not
+interchangeable.
 By carrying a `GradeLayout`, clifra can map through canonical blade indices
 instead of assuming that equal positions have equal meanings.
 
@@ -45,8 +46,8 @@ v_in_both = both.convert(v, vectors)
 ```
 
 The conversion places vector coefficients in their matching canonical blade
-positions and fills the bivector positions with zero. It does not reinterpret a
-four-lane tensor based on its width.
+positions and fills the bivector positions with zero, preserving vector meaning
+instead of inferring it from a four-lane width.
 
 ## Storage is the physical final axis
 
@@ -108,10 +109,9 @@ ordering in application code.
 | `infer_contract(...)` | Storage inference from width at an external boundary, followed by validation. |
 | `compact_values(...)` / `canonical_values(...)` | Conversion at a public boundary when compact or canonical input is accepted. |
 
-`positions_for_grades` returns positions in compact storage.
-`indices_tensor` returns canonical blade indices. They are not interchangeable.
-Use the former to select lanes from a compact tensor and the latter only when a
-canonical index is required.
+`positions_for_grades` returns positions in compact storage, whereas
+`indices_tensor` returns canonical blade indices. Use the former to select lanes
+from a compact tensor and the latter only when a canonical index is required.
 
 `algebra.embed_vector` is a specialized convenience function. It maps ordinary
 vector coordinates to canonical full storage. `ProjectiveEmbedding` and
@@ -172,9 +172,9 @@ boundary and resolved immediately to a contract.
 
 ## Static sparsity, dense tensor execution
 
-`GradeLayout` is not a dynamic sparse-tensor format such as COO or CSR. Its
-sparsity is known from the algebra and grade declaration before tensor values
-arrive. Planning uses that static structure to build the required interactions:
+`GradeLayout` represents statically known sparsity. Unlike a dynamic format such
+as COO or CSR, the algebra and grade declaration determine its structure before
+tensor values arrive. Planning then uses it to build the required interactions:
 
 1. The left, right, and output layouts determine possible grade paths.
 2. Metric-zero and projection-zero products are removed from the realized plan.
@@ -190,9 +190,9 @@ The execution model has two properties:
   dense tensors, so broadcasting, autograd, modules, device placement, and
   compilation remain available.
 
-The product executor therefore works with a compact dense coefficient axis. It
-does not search a sparse structure during every forward pass. For a planned
-product, its equivalent hot path is conceptually:
+The product executor therefore works with a compact dense coefficient axis and
+uses the structure computed during planning. For a planned product, its
+equivalent hot path is conceptually:
 
 ```text
 gather declared left lanes
@@ -213,12 +213,11 @@ operation projected to scalars and bivectors need not allocate arbitrary grades.
 A bivector field need not carry a $2^n$-wide parameter tensor merely because
 its exponential may later produce several even grades.
 
-They do not remove Clifford algebra's combinatorial growth. A request for all
-grades still has $2^n$ lanes. A narrow output can still require many input
-pairs. Some operations, notably general bivector exponentiation, may need a
-larger intermediate representation than their inputs. Planning limits and
-execution policies exist because layouts make costs explicit; they do not make
-every declared cost small.
+Clifford algebra's combinatorial growth still applies. A request for all grades
+has $2^n$ lanes, and a narrow output can still require many input pairs. Some
+operations, notably general bivector exponentiation, may need a larger
+intermediate representation than their inputs. Planning limits and execution
+policies make these costs explicit; declared costs can still be large.
 
 The default representation should use the narrowest layout required by the
 operation. Preserve the contract at module boundaries and expand only at an
