@@ -392,6 +392,44 @@ def test_compact_versor_action_routes_vector_actions_without_full_rotor_layouts(
     assert reflection.executor.action.flat_positions_1.numel() == vector_layout.dim * vector_layout.dim
 
 
+def test_compact_vector_bivector_action_has_nonzero_infinitesimal_gradient_at_identity():
+    context = AlgebraContext(2, 0, 0, device=DEVICE, dtype=torch.float64)
+    vector_layout = context.layout((1,))
+    action = context.plan_versor_action(
+        grade=2,
+        input_layout=vector_layout,
+        output_layout=vector_layout,
+        parameter_layout=context.layout((2,)),
+    )
+    values = torch.tensor([[[1.0, 0.0]]], dtype=torch.float64, device=DEVICE)
+    weights = torch.zeros(1, 1, dtype=torch.float64, device=DEVICE, requires_grad=True)
+
+    output = action(values, weights)
+    output[0, 0, 1].backward()
+
+    assert torch.allclose(weights.grad, torch.ones_like(weights), atol=1e-12, rtol=1e-12)
+
+
+@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
+def test_compact_vector_bivector_identity_gradient_compiles_fullgraph():
+    context = AlgebraContext(2, 0, 0, device=DEVICE, dtype=torch.float64)
+    vector_layout = context.layout((1,))
+    action = context.plan_versor_action(
+        grade=2,
+        input_layout=vector_layout,
+        output_layout=vector_layout,
+        parameter_layout=context.layout((2,)),
+    )
+    values = torch.tensor([[[1.0, 0.0]]], dtype=torch.float64, device=DEVICE)
+    weights = torch.zeros(1, 1, dtype=torch.float64, device=DEVICE, requires_grad=True)
+    compiled = torch.compile(action, backend="aot_eager", fullgraph=True)
+
+    output = compiled(values, weights)
+    output[0, 0, 1].backward()
+
+    assert torch.allclose(weights.grad, torch.ones_like(weights), atol=1e-12, rtol=1e-12)
+
+
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 def test_compact_vector_bivector_action_uses_vector_matrix_fullgraph():
     context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float32)

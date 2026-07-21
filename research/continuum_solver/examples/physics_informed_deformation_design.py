@@ -423,17 +423,13 @@ class DeformationReport:
 
 @dataclass(frozen=True)
 class ResponseReport:
-    before_fit: dict[str, float]
-    after_fit: dict[str, float]
-    delta: dict[str, float]
+    metrics: dict[str, float]
     strict_pass: bool
     failures: tuple[str, ...]
 
     def as_report(self) -> dict[str, object]:
         return {
-            "before_fit": self.before_fit,
-            "after_fit": self.after_fit,
-            "delta": self.delta,
+            "metrics": self.metrics,
             "strict_pass": self.strict_pass,
             "failures": list(self.failures),
         }
@@ -569,7 +565,6 @@ def main() -> None:
     coords, engine, bounds = build_problem(args, device=runtime[0], dtype=runtime[1])
     guard = GuardedOptimizerStep(bounds, max_retries=args.guard_retries)
     recorder = OptimizationTrajectoryRecorder(max_snapshots=args.viz_frames)
-    recorder.capture(coords)
     initial_grid = engine(coords).detach()
     recorder.capture(initial_grid)
     optimizer_step = RecordingOptimizerStep(guard, recorder, capture_every=_trajectory_capture_every(args))
@@ -616,9 +611,8 @@ def main() -> None:
     target = engine.target_criterion
     if not isinstance(target, GradedResponseCriterion):
         raise TypeError("deformation-design example requires GradedResponseCriterion for response validation")
-    response = validate_response_change(
+    response = validate_response(
         coords,
-        initial_grid,
         final_grid,
         target=target,
         bounds=ResponseBounds(),
@@ -666,10 +660,7 @@ def main() -> None:
     print(f"guard_rejections: {guard.rejections}")
     print("effective_response:")
     for key in ("core_poisson", "rim_poisson", "poisson_contrast", "mean_axial_log_strain"):
-        print(
-            f"  {key}: {response.before_fit[key]:.6g} -> {response.after_fit[key]:.6g} "
-            f"(delta {response.delta[key]:+.6g})"
-        )
+        print(f"  {key}: {response.metrics[key]:.6g}")
 
 
 def build_problem(args, *, device, dtype: torch.dtype) -> tuple[torch.Tensor, ContinuumSolverEngine, DeformationBounds]:
@@ -681,7 +672,7 @@ def build_problem(args, *, device, dtype: torch.dtype) -> tuple[torch.Tensor, Co
         projective=True,
         path_steps=args.path_steps,
         control_shape=(args.control_size, args.control_size, args.control_size),
-        init_scale=4e-3,
+        init_scale=0.0,
     )
     profile = RadialElasticProfile()
     criterion = GradedResponseCriterion(profile=profile)
@@ -852,6 +843,7 @@ def write_visualizations(
         plt,
         np,
         imageio,
+        reference=reference_cpu,
         snapshots=snapshots or (reference_cpu, final_cpu),
         gif_path=trajectory_gif,
         frame_count=max(2, int(frame_count)),
@@ -927,9 +919,8 @@ def validate_deformation(
     return DeformationReport(strict_pass=not failures, metrics=metrics, failures=tuple(failures))
 
 
-def validate_response_change(
+def validate_response(
     reference: torch.Tensor,
-    initial: torch.Tensor,
     final: torch.Tensor,
     *,
     target: GradedResponseCriterion,
@@ -937,36 +928,32 @@ def validate_response_change(
 ) -> ResponseReport:
     """Measure and validate the optimized field's virtual-test response."""
 
-    before_fit = effective_response_metrics(reference, initial, target=target)
-    after_fit = effective_response_metrics(reference, final, target=target)
-    delta = {key: after_fit[key] - before_fit[key] for key in after_fit}
+    metrics = effective_response_metrics(reference, final, target=target)
     failures: list[str] = []
     _require(
-        after_fit["mean_axial_log_strain"] >= bounds.min_axial_log_strain,
+        metrics["mean_axial_log_strain"] >= bounds.min_axial_log_strain,
         "mean axial log strain below virtual-test bound",
         failures,
     )
     _require(
-        after_fit["mean_axial_log_strain"] <= bounds.max_axial_log_strain,
+        metrics["mean_axial_log_strain"] <= bounds.max_axial_log_strain,
         "mean axial log strain above virtual-test bound",
         failures,
     )
-    _require(after_fit["core_poisson"] <= bounds.max_core_poisson, "core response is not auxetic", failures)
-    _require(after_fit["rim_poisson"] >= bounds.min_rim_poisson, "rim response is not positive-Poisson", failures)
+    _require(metrics["core_poisson"] <= bounds.max_core_poisson, "core response is not auxetic", failures)
+    _require(metrics["rim_poisson"] >= bounds.min_rim_poisson, "rim response is not positive-Poisson", failures)
     _require(
-        after_fit["poisson_contrast"] >= bounds.min_poisson_contrast,
+        metrics["poisson_contrast"] >= bounds.min_poisson_contrast,
         "core-to-rim Poisson contrast below bound",
         failures,
     )
     _require(
-        after_fit["equilibrium_rmse"] <= bounds.max_equilibrium_rmse,
+        metrics["equilibrium_rmse"] <= bounds.max_equilibrium_rmse,
         "stress-equilibrium residual above bound",
         failures,
     )
     return ResponseReport(
-        before_fit=before_fit,
-        after_fit=after_fit,
-        delta=delta,
+        metrics=metrics,
         strict_pass=not failures,
         failures=tuple(failures),
     )
@@ -1142,19 +1129,20 @@ def _render_optimization_trajectory_gif(
     np_module,
     imageio,
     *,
+    reference: torch.Tensor,
     snapshots: Sequence[torch.Tensor],
     gif_path: Path,
     frame_count: int,
     final_hold: int,
     sample_stride: int,
 ) -> None:
-    frames = _interpolate_snapshot_frames(snapshots, frame_count=frame_count)
+    frames = _select_snapshot_frames(snapshots, frame_count=frame_count)
     if not frames:
         raise RuntimeError("no optimization snapshots were captured")
 
     final_frame = frames[-1]
     frames = [*frames, *([final_frame] * final_hold)]
-    reference = frames[0]
+    reference = reference.detach().cpu()
     bounds = _shared_projection_bounds(frames)
     images = []
     for index, frame in enumerate(frames):
@@ -1396,22 +1384,18 @@ def _save_figure(plt, figure, path: Path, *, top: float = 0.96) -> None:
     plt.close(figure)
 
 
-def _interpolate_snapshot_frames(snapshots: Sequence[torch.Tensor], *, frame_count: int) -> list[torch.Tensor]:
+def _select_snapshot_frames(snapshots: Sequence[torch.Tensor], *, frame_count: int) -> list[torch.Tensor]:
     snapshots = tuple(snapshot.detach().cpu() for snapshot in snapshots)
     if not snapshots:
         return []
-    if len(snapshots) == 1:
-        return [snapshots[0].clone() for _ in range(max(1, frame_count))]
-    frame_count = max(2, int(frame_count))
-    frames = []
+    frame_count = max(1, int(frame_count))
+    if len(snapshots) <= frame_count:
+        return list(snapshots)
     last = len(snapshots) - 1
-    for index in range(frame_count):
-        position = index * last / float(frame_count - 1)
-        low = int(position)
-        high = min(low + 1, last)
-        weight = position - low
-        frames.append(snapshots[low].lerp(snapshots[high], float(weight)))
-    return frames
+    if frame_count == 1:
+        return [snapshots[-1]]
+    indices = sorted({round(index * last / float(frame_count - 1)) for index in range(frame_count)})
+    return [snapshots[index] for index in indices]
 
 
 def _sample_indices(size: int, stride: int) -> list[int]:

@@ -27,7 +27,9 @@ class GradedLinearActionExecutor(nn.Module):
         self.input_dim = input_layout.dim
         self.output_dim = output_layout.dim
         self.n = input_layout.spec.n
-        self.register_buffer("scalar_flat_positions", _scalar_action_positions(input_layout, output_layout), persistent=False)
+        self.register_buffer(
+            "scalar_flat_positions", _scalar_action_positions(input_layout, output_layout), persistent=False
+        )
         self._grade_count = self.n + 1
         for grade in range(1, self._grade_count):
             flat_positions, row_indices, col_indices = _graded_action_plan_tensors(
@@ -77,7 +79,14 @@ class GradedLinearActionExecutor(nn.Module):
             scalar_values = matrices.new_ones(matrices.shape[0], scalar_positions.numel())
             flat = flat.index_copy(-1, scalar_positions, scalar_values)
 
-        for grade in range(1, self._grade_count):
+        grade_one_positions = self.flat_positions_1
+        if grade_one_positions.numel() > 0:
+            row_indices = self.row_indices_1[:, 0]
+            col_indices = self.col_indices_1[:, 0]
+            coefficients = matrices[:, row_indices, col_indices]
+            flat = flat.index_copy(-1, grade_one_positions, coefficients)
+
+        for grade in range(2, self._grade_count):
             positions = getattr(self, f"flat_positions_{grade}")
             if positions.numel() == 0:
                 continue
@@ -128,8 +137,12 @@ class BivectorVectorGeneratorExecutor(nn.Module):
                 lane_positions.append(bivector_position)
                 flat_positions.append(output_position * self.n + input_position)
                 coefficients.append(coefficient)
-        self.register_buffer("lane_positions", torch.tensor(lane_positions, dtype=torch.long, device=device), persistent=False)
-        self.register_buffer("flat_positions", torch.tensor(flat_positions, dtype=torch.long, device=device), persistent=False)
+        self.register_buffer(
+            "lane_positions", torch.tensor(lane_positions, dtype=torch.long, device=device), persistent=False
+        )
+        self.register_buffer(
+            "flat_positions", torch.tensor(flat_positions, dtype=torch.long, device=device), persistent=False
+        )
         self.register_buffer("coefficients", torch.tensor(coefficients, dtype=dtype, device=device), persistent=False)
 
     def forward(self, bivectors: torch.Tensor) -> torch.Tensor:
@@ -219,7 +232,9 @@ class FullSandwichActionExecutor(nn.Module):
     executor_family = "action_matrix"
     op = "sandwich_action"
 
-    def __init__(self, *, layout: GradeLayout, cayley_indices: torch.Tensor, left_sign_t: torch.Tensor, gp_sign_t: torch.Tensor):
+    def __init__(
+        self, *, layout: GradeLayout, cayley_indices: torch.Tensor, left_sign_t: torch.Tensor, gp_sign_t: torch.Tensor
+    ):
         super().__init__()
         if layout.grades != tuple(range(layout.spec.n + 1)):
             raise ValueError(f"full sandwich action requires full layout, got {layout.grades}")
@@ -240,7 +255,9 @@ class FullSandwichActionExecutor(nn.Module):
             row = []
             for output_index in range(dim):
                 right_index = left_index ^ output_index
-                row.append(operation_coefficient(left_index, right_index, layout.spec.p, layout.spec.q, layout.spec.r, "gp"))
+                row.append(
+                    operation_coefficient(left_index, right_index, layout.spec.p, layout.spec.q, layout.spec.r, "gp")
+                )
             sign_rows.append(row)
         gp_signs = torch.tensor(sign_rows, dtype=dtype, device=device)
         output_indices = torch.arange(dim, dtype=torch.long, device=device).unsqueeze(0).expand(dim, dim)
@@ -305,7 +322,9 @@ class FullSandwichActionExecutor(nn.Module):
         matrices = self.action_matrices_unchecked(left, right)
         return torch.einsum("...cj,kej->...cke", values, matrices)
 
-    def routed(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor, channel_to_pair: torch.Tensor) -> torch.Tensor:
+    def routed(
+        self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor, channel_to_pair: torch.Tensor
+    ) -> torch.Tensor:
         """Apply pair actions selected by channel index."""
         return self.routed_unchecked(left, values, right, channel_to_pair)
 
