@@ -59,7 +59,7 @@ nav:
       - Geometric Parameterization: explanations/clifra-methodology.md
       - Why Bivector Coordinate Fields Work: explanations/transformation-fields.md
       - Bivector Exponential Methods: explanations/bivector-exponential.md
-      - Optimizer Parameter Categories: explanations/optimizer-dispatch.md
+      - Optimization for Geometric Parameters: explanations/optimizer-dispatch.md
       - Signatures and Algebraic Behavior: explanations/signatures-and-learning.md
       - Using clifra with PyTorch: explanations/clifra-and-pytorch.md
   - API Reference: reference/index.md

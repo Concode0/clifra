@@ -1,12 +1,12 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tag-aware optimizers for geometric algebra neural networks.
+"""Optimization tools for geometric algebra neural networks.
 
-The optimizers dispatch post-update handling for parameter groups marked
-``spin``, ``sphere``, or ``euclidean``. Their ``from_model()`` constructors
-build those groups from parameter tags. The public class names are retained for
-API compatibility.
+The built-in coordinate optimizers dispatch post-update handling for parameter
+groups marked ``spin``, ``sphere``, or ``euclidean``. Tangent projection and
+exponential updates support custom methods that optimize rotor-valued
+parameters directly.
 """
 
 from .riemannian import (

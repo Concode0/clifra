@@ -1,99 +1,107 @@
-# Optimizer Parameter Categories
+# Optimization for Geometric Parameters
 
-Clifra's tag-aware optimizers recognize only three parameter tags:
-`spin`, `sphere`, and `euclidean`. These tags are update and retraction metadata.
-They describe optimizer behavior. Classification of every geometric object that
-a Clifford algebra can represent is a separate concern.
+Clifra separates optimization dynamics from geometric realization. A layout
+defines the parameter coordinates, a layer turns those coordinates into a
+geometric action, and an optimizer determines how the objective is explored.
+This separation makes the built-in optimizers useful defaults without making
+them the boundary of the optimization methods available to a Clifra model.
 
-The limited dispatch is deliberate. Most geometric structure belongs in a
-layer's parameterization and forward action. The optimizer only handles the
-constraint that remains after its ordinary Adam or SGD update.
+## Built-in parameter dispatch
 
-## The three update categories
+`RiemannianAdam` and `ExponentialSGD` use ordinary PyTorch parameter groups with
+one additional `manifold` field. Their `from_model()` constructors collect the
+tags already attached by Clifra layers and apply the corresponding post-update
+rule.
 
-| Tag | Typical parameter | Post-update behavior |
+| Tag | Typical parameter | Post-update rule |
 | --- | --- | --- |
-| `spin` | Grade-2 bivector coordinates | Clip the Euclidean coefficient norm to `max_bivector_norm`, if configured. |
-| `sphere` | Grade-1 reflection direction | Normalize by the signed signature magnitude when non-null; use a Euclidean fallback near null values. |
-| `euclidean` | Biases, mixing weights, and untagged parameters | No geometric retraction. |
+| `spin` | Compact grade-2 generator coordinates | Apply the configured coefficient-norm guard. |
+| `sphere` | Grade-1 reflection direction | Normalize by the signature magnitude, with a Euclidean fallback near null directions. |
+| `euclidean` | Biases, mixing weights, and untagged parameters | Keep the optimizer's update unchanged. |
 
-`group_parameters_by_manifold` puts every untagged parameter in the Euclidean
-group. `RiemannianAdam.from_model` and `ExponentialSGD.from_model` preserve the
-usual optimizer parameter-group model while dispatching the post-update step by
-tag.
-
-The layer constructs the rotor; the optimizer's `spin` branch only applies a
-numerical norm cap after Adam or SGD updates the bivector coefficients. During
-the forward pass, the layer maps those coefficients into a rotor through the
-planned bivector exponential.
-
-The `sphere` branch checks whether the parameter width matches the algebra's
-grade-1 layout. If it does, normalization uses the magnitude of the signed form.
-A near-null vector cannot be safely normalized by that form, so the branch uses
-its positive Euclidean coefficient norm. If the width is not a grade-1 layout,
-the same Euclidean fallback is used.
-
-## Bivector parameterization
-
-The spin group is parameterized in the Lie algebra: a layer stores a bivector
+The `spin` parameter is already expressed in the Lie algebra. For
 
 \[
-B = \sum_{i<j} b_{ij} e_i e_j
+B = \sum_{i<j} b_{ij} e_i e_j,
 \]
 
-and constructs
+a versor layer constructs
 
 \[
 R = \exp(-B/2)
 \]
 
-during the forward pass. The action on an input is then built from $R$, its
-reverse, and Clifford products.
+and applies the planned Clifford action during its forward pass. Adam or SGD
+therefore optimizes compact, meaningful generator coordinates; the layer
+realizes the group element. The optional norm guard keeps those coordinates in
+a useful numerical range and can be disabled with `max_bivector_norm=None`.
 
-The parameterization has the following properties:
+```python
+from clifra.optimizers import make_riemannian_optimizer
 
-- the parameter tensor has a fixed grade-2 layout;
-- updates and optimizer moments live in an unconstrained linear coordinate
-  space;
-- the forward map constructs a valid versor action rather than requiring an
-  arbitrary coefficient tensor to remain rotor-normalized;
-- learned coefficients describe plane generators, so the parameter itself has
-  geometric meaning.
+optimizer = make_riemannian_optimizer(
+    model,
+    algebra,
+    optimizer="adam",
+    lr=1e-3,
+)
+```
 
-The entire geometric object is learned through its coordinates. Because the
-exponential and action already encode rotor dimension and plane composition,
-the optimizer can use the same case for all of them.
+## Choose for the objective and parameter regime
 
-## When to add optimizer tags
+Clifford parameterizations can make a transformation model compact enough that
+methods designed for deterministic objectives or small parameter sets become
+practical. The appropriate optimizer is a property of the problem, not of the
+algebra alone.
 
-An optimizer tag should answer a narrow question: what correction is required
-immediately after updating this parameter? Many useful objects already fit the
-existing categories.
+| Regime | Practical starting point |
+| --- | --- |
+| Minibatches, noisy gradients, or many parameters | Adam-style coordinate optimization |
+| Smooth training with simple memory requirements | SGD with momentum |
+| Deterministic objectives with relatively few parameters | L-BFGS, nonlinear conjugate gradient, or another full-batch method |
+| Objectives that benefit from curvature information | Newton, trust-region, or Hessian-vector methods |
+| Parameters stored as rotors rather than generators | Tangent projection followed by an exponential update |
 
-A mixed-grade feature can be an ordinary Euclidean parameter even though its
-forward interpretation is geometric. A constrained field may need a loss or a
-domain-specific projection rather than a universal optimizer retraction. An
-invariant readout belongs to the layer composition and calls for no new kind of
-parameter update.
+PyTorch's `LBFGS` is immediately usable when the training loop provides a
+closure. Higher-order implementations can request a differentiable gradient
+evaluation with `create_graph=True`, then use Hessian-vector products or a
+problem-specific linear solve. These methods cost more per step, but that
+tradeoff can be attractive for small Clifford fields and full-batch inverse
+problems.
 
-Adding tags for these cases would move model semantics into optimizer dispatch
-and overstate the guarantees available from a local update. A new category is
-justified when a distinct parameter-level constraint has a well-defined,
-reusable retraction.
+## Connect another optimizer
 
-## Parameterization limits
+Clifra's tags are ordinary parameter-group metadata, so an optimizer adapter
+can follow the same structure as the built-ins:
 
-Exponential coordinates can be many-to-one: different bivectors may produce the
-same or equivalent group action, and large coordinates can create poorly
-conditioned optimization paths. The spin norm cap is a numerical guard rather
-than an exact Riemannian exponential update, and global coordinate ambiguity
-remains.
+1. Use `group_parameters_by_manifold(model)` to collect coordinate groups.
+2. Pass those tensors to the selected optimizer, preserving the `manifold`
+   value on each parameter group when the adapter uses it.
+3. Perform the optimizer's coordinate update.
+4. Apply the tag-specific post-update rule required by that parameterization.
 
-Likewise, a versor layer alone guarantees neither invariance nor isometry for an
-entire model. Euclidean channel mixing, nonlinearities, readouts, losses, and
-numerical approximations can change the complete model's behavior. Required
-invariants must be tested at the level where they are claimed.
+For a generator-only model, a standard PyTorch or third-party optimizer may be
+used directly: the layer's exponential still constructs the rotor, and the
+`spin` coefficient guard is optional. A model containing `sphere` parameters
+needs an adapter that restores their normalization after each update. This is
+the same division of responsibility implemented by `RiemannianAdam` and
+`ExponentialSGD`.
 
-The optimizer remains simple because it is the final part of a larger design:
-the layout chooses the coordinate space, the layer constructs the geometric
-action, and the optimizer applies only the minimal parameter-level correction.
+If a method stores full-lane unit rotors directly, the public
+`project_to_tangent_space` and `exponential_retraction` functions demonstrate
+the complementary manifold update:
+
+\[
+P_R(V) = R\left\langle \widetilde{R}V \right\rangle_2,
+\qquad
+\operatorname{Exp}_R(RB) = R\exp(B).
+\]
+
+These functions use canonical full-lane rotors at their boundary and compact
+grade-2 lanes internally. They are building blocks for an optimizer adapter;
+Clifra's bivector-parameterized layers do not need to store or renormalize a
+rotor parameter themselves.
+
+Optimizer tags should remain about parameter-level update rules. Invariance,
+field constraints, and application-specific structure belong in layouts,
+layers, actions, or objectives, where they can be stated and tested directly.

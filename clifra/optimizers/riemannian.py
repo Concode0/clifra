@@ -1,18 +1,19 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""SGD and Adam variants with post-update handling for tagged parameters.
+"""Coordinate optimizers and tangent maps for geometric parameters.
 
-The ``from_model()`` constructors recognize three simplified tags via
+The ``from_model()`` constructors recognize three parameter tags via
 ``p._manifold``:
     - ``'spin'``: bivector coordinates, optionally clipped by coefficient norm
     - ``'sphere'``: vectors normalized after each update
-    - ``'euclidean'`` (or untagged): Standard unconstrained parameters
+    - ``'euclidean'`` (or untagged): standard unconstrained parameters
 
-They convert those tags into optimizer parameter groups. Parameters without a
-tag are treated as Euclidean. Parameters passed directly to an optimizer are
-also Euclidean unless their parameter group declares ``manifold``. The labels
-select optimizer behavior while layers define geometric meaning.
+The tags become ordinary PyTorch parameter groups, keeping optimizer dynamics
+separate from the layer that realizes each geometric action. Parameters without
+a tag are treated as Euclidean. The tangent projection and exponential map at
+the bottom of this module provide building blocks for optimizers that store
+rotors directly instead of bivector coordinates.
 
 Background references:
     - Absil et al. "Optimization Algorithms on Matrix Manifolds" (2008)
@@ -61,7 +62,8 @@ def group_parameters_by_manifold(
         model: The model whose parameters to group.
 
     Returns:
-        Dict mapping manifold name to list of parameters.
+        A mapping from each supported parameter tag to its parameters. Empty
+        groups are retained so callers can build optimizer groups consistently.
     """
     groups: Dict[str, List[nn.Parameter]] = {
         MANIFOLD_SPIN: [],
@@ -93,7 +95,7 @@ def make_riemannian_optimizer(
     optimizer: str = "adam",
     **kwargs,
 ) -> Optimizer:
-    """Create a tag-aware optimizer from a model.
+    """Create a built-in tag-aware optimizer from a model.
 
     Args:
         model: Model whose parameters may be tagged with ``_manifold``.
@@ -182,7 +184,8 @@ class ExponentialSGD(Optimizer):
         momentum: Momentum factor (default: 0)
         algebra: Algebra context used for signature-aware sphere normalization.
         max_bivector_norm: Maximum Euclidean coefficient norm for ``spin``
-            parameter groups. ``None`` disables clipping. Defaults to ``10.0``.
+            coordinate groups. ``None`` disables this numerical guard.
+            Defaults to ``10.0``.
 
     Example:
         >>> algebra = AlgebraContext(p=3, q=0, device='cpu')
@@ -222,14 +225,14 @@ class ExponentialSGD(Optimizer):
 
         Inspects ``p._manifold`` tags on each parameter and creates separate
         groups for spin, sphere, and euclidean parameters so that each group
-        receives the correct retraction in :meth:`step`.
+        receives its configured post-update rule in :meth:`step`.
 
         Args:
             model: The model to optimize.
             lr: Learning rate.
             momentum: Momentum factor.
             algebra: Layout-first algebra context (required).
-            max_bivector_norm: Clip threshold for spin params.
+            max_bivector_norm: Coefficient-norm guard for spin coordinates.
 
         Returns:
             ExponentialSGD instance with per-manifold parameter groups.
@@ -304,7 +307,8 @@ class RiemannianAdam(Optimizer):
         eps: Term added for numerical stability (default: 1e-8)
         algebra: Algebra context used for signature-aware sphere normalization.
         max_bivector_norm: Maximum Euclidean coefficient norm for ``spin``
-            parameter groups. ``None`` disables clipping. Defaults to ``10.0``.
+            coordinate groups. ``None`` disables this numerical guard.
+            Defaults to ``10.0``.
     """
 
     def __init__(
@@ -348,7 +352,7 @@ class RiemannianAdam(Optimizer):
 
         Inspects ``p._manifold`` tags on each parameter and creates separate
         groups for spin, sphere, and euclidean parameters so that each group
-        receives the correct retraction in :meth:`step`.
+        receives its configured post-update rule in :meth:`step`.
 
         Args:
             model: The model to optimize.
@@ -356,7 +360,7 @@ class RiemannianAdam(Optimizer):
             betas: Coefficients for running averages.
             eps: Numerical stability term.
             algebra: Layout-first algebra context (required).
-            max_bivector_norm: Clip threshold for spin params.
+            max_bivector_norm: Coefficient-norm guard for spin coordinates.
 
         Returns:
             RiemannianAdam instance with per-manifold parameter groups.
@@ -366,14 +370,13 @@ class RiemannianAdam(Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None) -> Optional[torch.Tensor]:
-        """Performs a single optimization step.
+        """Perform one Adam step and dispatch post-update handling by tag.
 
-        Applies Adam momentum updates to all parameters, then dispatches
-        per-manifold retraction:
+        Adam moments and coordinate updates are followed by these rules:
 
-        - **spin**: bivector norm clipping
-        - **sphere**: L2 normalization to unit sphere
-        - **euclidean**: no retraction
+        - ``spin``: optional bivector coefficient-norm clipping
+        - ``sphere``: signature-aware normalization with a near-null fallback
+        - ``euclidean``: no post-update transformation
 
         Args:
             closure (Callable, optional): A closure that reevaluates the model and returns the loss.
@@ -434,55 +437,129 @@ class RiemannianAdam(Optimizer):
         return loss
 
 
-def project_to_tangent_space(point, vector, algebra):
-    """Project a vector to the tangent space at a point on Spin(n).
+def project_to_tangent_space(point: torch.Tensor, vector: torch.Tensor, algebra) -> torch.Tensor:
+    """Project a full-lane ambient vector onto a rotor's tangent space.
 
-    For rotors R in Spin(n), the tangent space at R is:
-        T_R Spin(n) = { R . B | B is a bivector }
-
-    Args:
-        point: Current point on manifold (rotor) [..., dim]
-        vector: Vector to project [..., dim]
-        algebra: Layout-first algebra context
-
-    Returns:
-        Projected vector in tangent space [..., dim]
-    """
-    # Compute ~R . vector
-    R_rev = algebra.reverse(point)
-    tangent = algebra.geometric_product(R_rev, vector)
-
-    # Project to bivector part (Lie algebra)
-    # This extracts only the grade-2 (bivector) components
-    bivector = algebra.grade_projection(tangent, grade=2)
-
-    # Map back to tangent space: R . bivector
-    return algebra.geometric_product(point, bivector)
-
-
-def exponential_retraction(point, tangent_vector, algebra):
-    """Exponential map: move from point along tangent vector on manifold.
-
-    For Spin(n), the exponential map is:
-        Exp_R(R.B) = R . exp(B)
-
-    where B is a bivector in the Lie algebra.
+    For a unit rotor ``R``, the left-trivialized tangent space is
+    ``T_R Spin(p, q) = {R B | B is a bivector}``. The projection computes
+    ``R <reverse(R) V>_2``. Inputs and outputs use canonical full-lane storage;
+    the intermediate bivector uses the algebra's compact grade-2 layout.
 
     Args:
-        point: Current point on manifold (rotor) [..., dim]
-        tangent_vector: Tangent vector (direction to move) [..., dim]
-        algebra: Layout-first algebra context
+        point: Unit rotor with shape ``[..., algebra.dim]``.
+        vector: Ambient vector with the same shape as ``point``.
+        algebra: Layout-first algebra context.
 
     Returns:
-        New point on manifold [..., dim]
+        A canonical full-lane tangent vector with the same shape as ``point``.
     """
-    # Extract bivector from tangent vector
-    R_rev = algebra.reverse(point)
-    bivector = algebra.geometric_product(R_rev, tangent_vector)
-    bivector = algebra.grade_projection(bivector, grade=2)
+    bivector, full_layout, bivector_layout = _left_trivialized_bivector(
+        point,
+        vector,
+        algebra,
+        second_name="vector",
+    )
+    return algebra.geometric_product(
+        point,
+        bivector,
+        left_layout=full_layout,
+        right_layout=bivector_layout,
+        output_layout=full_layout,
+        left_storage="canonical",
+        right_storage="compact",
+        output_storage="canonical",
+    )
 
-    # Exponential map
-    update = algebra.bivector_exp(bivector)
 
-    # Apply update: R_new = R_old . exp(B)
-    return algebra.geometric_product(point, update)
+def exponential_retraction(point: torch.Tensor, tangent_vector: torch.Tensor, algebra) -> torch.Tensor:
+    """Apply a left-trivialized exponential update to a unit rotor.
+
+    For ``T = R B`` with bivector ``B``, this computes
+    ``Exp_R(T) = R exp(B)``. Projecting ``reverse(R) T`` to grade 2 also makes
+    the function useful when a numerical optimizer supplies an ambient update.
+    Inputs and outputs use canonical full-lane storage.
+
+    Args:
+        point: Unit rotor with shape ``[..., algebra.dim]``.
+        tangent_vector: Tangent or ambient update with the same shape.
+        algebra: Layout-first algebra context.
+
+    Returns:
+        The updated rotor in canonical full-lane storage.
+    """
+    bivector, full_layout, bivector_layout = _left_trivialized_bivector(
+        point,
+        tangent_vector,
+        algebra,
+        second_name="tangent_vector",
+    )
+    update = algebra.bivector_exp(
+        bivector,
+        input_layout=bivector_layout,
+        output_layout=full_layout,
+        output_storage="canonical",
+    )
+    return algebra.geometric_product(
+        point,
+        update,
+        left_layout=full_layout,
+        right_layout=full_layout,
+        output_layout=full_layout,
+        left_storage="canonical",
+        right_storage="canonical",
+        output_storage="canonical",
+    )
+
+
+def _left_trivialized_bivector(
+    point: torch.Tensor,
+    other: torch.Tensor,
+    algebra,
+    *,
+    second_name: str,
+):
+    _validate_full_lane_pair(point, other, algebra, second_name=second_name)
+    full_layout = algebra.layout(range(algebra.n + 1))
+    bivector_layout = algebra.layout((2,))
+    point_reverse = algebra.reverse(
+        point,
+        input_layout=full_layout,
+        input_storage="canonical",
+        output_layout=full_layout,
+        output_storage="canonical",
+    )
+    left_trivialized = algebra.geometric_product(
+        point_reverse,
+        other,
+        left_layout=full_layout,
+        right_layout=full_layout,
+        output_layout=full_layout,
+        left_storage="canonical",
+        right_storage="canonical",
+        output_storage="canonical",
+    )
+    return (
+        algebra.grade_projection(
+            left_trivialized,
+            grade=2,
+            input_layout=full_layout,
+            input_storage="canonical",
+            output_layout=bivector_layout,
+            output_storage="compact",
+        ),
+        full_layout,
+        bivector_layout,
+    )
+
+
+def _validate_full_lane_pair(
+    point: torch.Tensor,
+    other: torch.Tensor,
+    algebra,
+    *,
+    second_name: str,
+) -> None:
+    if point.shape != other.shape:
+        raise ValueError(f"point and {second_name} must have the same shape, got {point.shape} and {other.shape}")
+    if point.ndim < 1 or point.shape[-1] != algebra.dim:
+        raise ValueError(f"point and {second_name} must use {algebra.dim} canonical lanes")

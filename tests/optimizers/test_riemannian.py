@@ -24,8 +24,10 @@ from clifra.optimizers.riemannian import (
     MANIFOLD_SPIN,
     ExponentialSGD,
     RiemannianAdam,
+    exponential_retraction,
     group_parameters_by_manifold,
     make_riemannian_optimizer,
+    project_to_tangent_space,
     tag_manifold,
 )
 
@@ -155,6 +157,39 @@ def test_riemannian_adam_momentum(algebra_3d, rotor_layer):
     # Check state updated
     assert state["step"] == 2
     assert not torch.allclose(state["exp_avg"], torch.zeros_like(state["exp_avg"]))
+
+
+def test_spin_tangent_projection_uses_full_lane_boundary(algebra_3d):
+    """Project full-lane ambient updates through compact bivector coordinates."""
+    generator = torch.zeros(2, algebra_3d.dim)
+    generator[:, 3:6] = 0.1 * torch.randn(2, 3)
+    rotor = algebra_3d.bivector_exp(generator)
+    ambient = torch.randn_like(rotor)
+
+    tangent = project_to_tangent_space(rotor, ambient, algebra_3d)
+
+    left_trivialized = algebra_3d.geometric_product(algebra_3d.reverse(rotor), tangent)
+    bivector_part = algebra_3d.grade_projection(left_trivialized, grade=2, output_storage="canonical")
+    assert tangent.shape == rotor.shape
+    assert torch.allclose(left_trivialized, bivector_part, atol=1e-6, rtol=1e-6)
+
+
+def test_spin_exponential_retraction_preserves_unit_rotor(algebra_3d):
+    """Apply a full-lane tangent update while preserving rotor normalization."""
+    generator = torch.zeros(2, algebra_3d.dim)
+    generator[:, 3:6] = 0.1 * torch.randn(2, 3)
+    rotor = algebra_3d.bivector_exp(generator)
+    direction = torch.zeros_like(generator)
+    direction[:, 3:6] = 0.05 * torch.randn(2, 3)
+    tangent = algebra_3d.geometric_product(rotor, direction)
+
+    updated = exponential_retraction(rotor, tangent, algebra_3d)
+
+    norm_product = algebra_3d.geometric_product(algebra_3d.reverse(updated), updated)
+    identity = torch.zeros_like(norm_product)
+    identity[..., 0] = 1.0
+    assert updated.shape == rotor.shape
+    assert torch.allclose(norm_product, identity, atol=1e-6, rtol=1e-6)
 
 
 # Unit Tests: Parameter Updates

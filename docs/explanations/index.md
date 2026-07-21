@@ -16,8 +16,9 @@ geometric parameterization, numerical execution, and PyTorch integration.
 5. [Bivector Exponential Methods](bivector-exponential.md) separates
    exact low-dimensional formulas, matrix exponentiation, and spectral-local
    approximation.
-6. [Optimizer Parameter Categories](optimizer-dispatch.md) explains the three
-   parameter tags and the role of bivector coordinates.
+6. [Optimization for Geometric Parameters](optimizer-dispatch.md) explains the
+   built-in parameter dispatch and how to connect quasi-Newton, higher-order,
+   or tangent-space methods.
 7. [Signatures and Algebraic Behavior](signatures-and-learning.md) distinguishes
    signed Clifford forms from positive coefficient-lane energy and relates both
    to differentiation.
