@@ -6,18 +6,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import reduce
-from operator import mul
+from math import prod
 from typing import Sequence
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.foundation.module import AlgebraLike, CliffordModule
 from clifra.core.foundation.numerics import signed_clamp_min
 
+from .inputs import CoordinateFieldInput, as_coordinate_field_input
+from .sampling import (
+    BroadcastGeneratorSampler,
+    GeneratorFieldSample,
+    GeneratorFieldSampler,
+    RegularGridGeneratorSampler,
+)
 from .types import ContinuumState
 
 
@@ -50,8 +55,7 @@ class CoordinateChart:
             raise ValueError(f"projective coordinates require at least one null basis vector, got r={algebra.r}")
         if d > non_null:
             raise ValueError(
-                f"projective coordinate_dim={d} requires at least {d} non-null basis vectors, "
-                f"got p+q={non_null}"
+                f"projective coordinate_dim={d} requires at least {d} non-null basis vectors, got p+q={non_null}"
             )
         layout = algebra.layout((1,))
         coordinate_positions = _basis_positions(layout, tuple(1 << bit for bit in range(d)))
@@ -109,16 +113,22 @@ class CoordinateChart:
 
 
 class InvertibleBivectorField(CliffordModule):
-    """Parameterized continuum deformation field built from invertible rotor paths.
+    """Parameterized coordinate transformation built from invertible rotor paths.
 
-    The field accepts coordinate tensors directly. A coordinate tensor with shape
-    ``[*batch, *grid, coordinate_dim]`` is embedded as grade-1 values, deformed
-    by a sequence of exponentiated bivectors, and extracted back to coordinates.
+    The field accepts tensors or :class:`CoordinateFieldInput` objects. Coordinate
+    values are embedded as grade-1 multivectors, transformed by a sequence of
+    exponentiated bivectors, and extracted back to coordinates. A pluggable
+    ``generator_sampler`` decides how stored bivectors are evaluated over the
+    input domain.
 
-    ``control_shape`` determines how local the deformation is:
+    The legacy ``control_shape`` convenience selects one of two samplers:
     - ``None``: one global bivector path is broadcast to every coordinate.
     - ``(m, n, ...)``: a control lattice of bivectors is interpolated to the
       incoming grid resolution, then broadcast across leading batch axes.
+
+    Passing ``generator_sampler`` enables other input organizations, such as
+    coordinate-driven RBF sampling for unordered points. ``control_shape`` and
+    ``generator_sampler`` are mutually exclusive.
     """
 
     def __init__(
@@ -130,82 +140,188 @@ class InvertibleBivectorField(CliffordModule):
         control_shape: Sequence[int] | None = None,
         projective: bool = False,
         init_scale: float = 1e-3,
+        generator_sampler: GeneratorFieldSampler | nn.Module | None = None,
+        chart: CoordinateChart | None = None,
+        action: nn.Module | None = None,
     ):
         super().__init__(algebra)
         if algebra.n < 2:
             raise ValueError("InvertibleBivectorField requires an algebra with at least two basis vectors")
         self.coordinate_dim = _positive_int(coordinate_dim, "coordinate_dim")
         self.path_steps = _positive_int(path_steps, "path_steps")
-        self.control_shape = None if control_shape is None else tuple(_positive_int(v, "control_shape") for v in control_shape)
-        self.projective = bool(projective)
-        self.chart = (
-            CoordinateChart.projective(algebra, self.coordinate_dim)
-            if self.projective
-            else CoordinateChart.direct(algebra, self.coordinate_dim)
-        )
+        if chart is not None:
+            if chart.algebra.spec != algebra.spec:
+                raise ValueError("chart and field algebra signatures must match")
+            if chart.coordinate_dim != self.coordinate_dim:
+                raise ValueError(
+                    f"chart coordinate_dim={chart.coordinate_dim} does not match field coordinate_dim={self.coordinate_dim}"
+                )
+            if projective and chart.homogeneous_position is None:
+                raise ValueError("projective=True requires a chart with a homogeneous coordinate")
+            self.chart = chart
+            self.projective = chart.homogeneous_position is not None
+        else:
+            self.projective = bool(projective)
+            self.chart = (
+                CoordinateChart.projective(algebra, self.coordinate_dim)
+                if self.projective
+                else CoordinateChart.direct(algebra, self.coordinate_dim)
+            )
         self.vector_layout = self.chart.layout
         self.bivector_layout = algebra.layout((2,))
         self.num_bivectors = self.bivector_layout.dim
-        self.action = algebra.plan_versor_action(
-            grade=2,
-            input_layout=self.vector_layout,
-            output_layout=self.vector_layout,
-            parameter_layout=self.bivector_layout,
-        )
+        if action is None:
+            action = algebra.plan_versor_action(
+                grade=2,
+                input_layout=self.vector_layout,
+                output_layout=self.vector_layout,
+                parameter_layout=self.bivector_layout,
+            )
+        if not isinstance(action, nn.Module):
+            raise TypeError("action must be a torch.nn.Module implementing action(values, generator_weights)")
+        self.action = action
 
-        parameter_shape = (self.path_steps, self.num_bivectors)
-        if self.control_shape is not None:
-            parameter_shape = (self.path_steps, *self.control_shape, self.num_bivectors)
+        if generator_sampler is not None and control_shape is not None:
+            raise ValueError("pass either control_shape or generator_sampler, not both")
+        if generator_sampler is None:
+            generator_sampler = (
+                BroadcastGeneratorSampler() if control_shape is None else RegularGridGeneratorSampler(control_shape)
+            )
+        if not isinstance(generator_sampler, nn.Module):
+            raise TypeError("generator_sampler must be a torch.nn.Module implementing the sampler contract")
+        if not callable(getattr(generator_sampler, "parameter_shape", None)) or not callable(
+            getattr(generator_sampler, "sample", None)
+        ):
+            raise TypeError("generator_sampler must define parameter_shape() and sample()")
+        self.generator_sampler = generator_sampler.to(device=algebra.device, dtype=algebra.dtype)
+        self.control_shape = (
+            self.generator_sampler.control_shape
+            if isinstance(self.generator_sampler, RegularGridGeneratorSampler)
+            else None
+        )
+        parameter_shape = self.generator_sampler.parameter_shape(self.path_steps, self.num_bivectors)
         self.bivectors = nn.Parameter(torch.empty(parameter_shape, device=algebra.device, dtype=algebra.dtype))
         tag_manifold(self.bivectors, MANIFOLD_SPIN)
         nn.init.normal_(self.bivectors, mean=0.0, std=float(init_scale))
 
-    def forward(self, coordinates: torch.Tensor, *, return_state: bool = False):
+    def forward(
+        self,
+        coordinates: torch.Tensor | CoordinateFieldInput,
+        *,
+        sample_coordinates: torch.Tensor | None = None,
+        spatial_shape: Sequence[int] | None = None,
+        return_state: bool = False,
+    ):
         """Deform coordinates and optionally return the full continuum state."""
-        state = self.state(coordinates)
+        state = self.state(
+            coordinates,
+            sample_coordinates=sample_coordinates,
+            spatial_shape=spatial_shape,
+        )
         return state if return_state else state.deformed_coordinates
 
-    def state(self, coordinates: torch.Tensor) -> ContinuumState:
+    def state(
+        self,
+        coordinates: torch.Tensor | CoordinateFieldInput,
+        *,
+        sample_coordinates: torch.Tensor | None = None,
+        spatial_shape: Sequence[int] | None = None,
+    ) -> ContinuumState:
         """Return a full deformation state for direct coordinate input."""
-        self._check_coordinates(coordinates)
-        reference_mv = self.chart.embed(coordinates)
-        deformed_mv, weights, spatial_shape, batch_shape = self._apply_path(reference_mv, inverse=False)
+        field_input = as_coordinate_field_input(
+            coordinates,
+            sample_coordinates=sample_coordinates,
+            spatial_shape=spatial_shape,
+        )
+        self._check_coordinates(field_input.coordinates)
+        reference_mv = self.chart.embed(field_input.coordinates)
+        deformed_mv, sampled = self._apply_path(reference_mv, field_input=field_input, inverse=False)
         return ContinuumState(
-            reference_coordinates=coordinates,
+            reference_coordinates=field_input.coordinates,
             deformed_coordinates=self.chart.extract(deformed_mv),
             reference_multivectors=reference_mv,
             deformed_multivectors=deformed_mv,
-            bivector_weights=weights,
-            spatial_shape=spatial_shape,
-            batch_shape=batch_shape,
+            bivector_weights=sampled.weights,
+            spatial_shape=sampled.spatial_shape,
+            batch_shape=sampled.batch_shape,
+            field_input=field_input.retain_sample_identity(),
         )
 
-    def inverse(self, coordinates: torch.Tensor) -> torch.Tensor:
-        """Apply the reverse rotor path to deformed coordinates."""
-        self._check_coordinates(coordinates)
-        values = self.chart.embed(coordinates)
-        reconstructed, _, _, _ = self._apply_path(values, inverse=True)
+    def inverse(
+        self,
+        coordinates: torch.Tensor | CoordinateFieldInput,
+        *,
+        sample_coordinates: torch.Tensor | None = None,
+        spatial_shape: Sequence[int] | None = None,
+    ) -> torch.Tensor:
+        """Apply the reverse rotor path using the supplied sample identity."""
+        field_input = as_coordinate_field_input(
+            coordinates,
+            sample_coordinates=sample_coordinates,
+            spatial_shape=spatial_shape,
+        )
+        self._check_coordinates(field_input.coordinates)
+        values = self.chart.embed(field_input.coordinates)
+        reconstructed, _ = self._apply_path(values, field_input=field_input, inverse=True)
         return self.chart.extract(reconstructed)
 
-    def inverse_state(self, coordinates: torch.Tensor) -> ContinuumState:
+    def inverse_state(
+        self,
+        coordinates: torch.Tensor | CoordinateFieldInput,
+        *,
+        sample_coordinates: torch.Tensor | None = None,
+        spatial_shape: Sequence[int] | None = None,
+    ) -> ContinuumState:
         """Return state metadata for the inverse path."""
-        self._check_coordinates(coordinates)
-        reference_mv = self.chart.embed(coordinates)
-        inverse_mv, weights, spatial_shape, batch_shape = self._apply_path(reference_mv, inverse=True)
+        field_input = as_coordinate_field_input(
+            coordinates,
+            sample_coordinates=sample_coordinates,
+            spatial_shape=spatial_shape,
+        )
+        self._check_coordinates(field_input.coordinates)
+        reference_mv = self.chart.embed(field_input.coordinates)
+        inverse_mv, sampled = self._apply_path(reference_mv, field_input=field_input, inverse=True)
         return ContinuumState(
-            reference_coordinates=coordinates,
+            reference_coordinates=field_input.coordinates,
             deformed_coordinates=self.chart.extract(inverse_mv),
             reference_multivectors=reference_mv,
             deformed_multivectors=inverse_mv,
-            bivector_weights=weights,
-            spatial_shape=spatial_shape,
-            batch_shape=batch_shape,
+            bivector_weights=sampled.weights,
+            spatial_shape=sampled.spatial_shape,
+            batch_shape=sampled.batch_shape,
+            field_input=field_input.retain_sample_identity(),
         )
 
+    def weights_for_input(
+        self,
+        coordinates: torch.Tensor | CoordinateFieldInput,
+        *,
+        sample_coordinates: torch.Tensor | None = None,
+        spatial_shape: Sequence[int] | None = None,
+        device=None,
+        dtype=None,
+    ) -> torch.Tensor:
+        """Evaluate bivector weights for an explicit input domain."""
+        field_input = as_coordinate_field_input(
+            coordinates,
+            sample_coordinates=sample_coordinates,
+            spatial_shape=spatial_shape,
+        )
+        self._check_coordinates(field_input.coordinates)
+        weights = self.generator_sampler.sample(self.bivectors, field_input).weights
+        return weights.to(device=device, dtype=dtype) if device is not None or dtype is not None else weights
+
     def weights_for_shape(self, prefix_shape: Sequence[int], *, device=None, dtype=None) -> torch.Tensor:
-        """Return bivector weights broadcast/interpolated to a coordinate prefix shape."""
+        """Return weights for shape-only samplers retained by the legacy API.
+
+        Coordinate-driven samplers must use :meth:`weights_for_input` because a
+        shape alone does not identify their sampling positions.
+        """
         prefix_shape = tuple(int(v) for v in prefix_shape)
-        weights, _, _ = self._weights_for_prefix(prefix_shape)
+        sample_shape = getattr(self.generator_sampler, "sample_shape", None)
+        if not callable(sample_shape):
+            raise ValueError("this generator sampler requires coordinates; use weights_for_input()")
+        weights = sample_shape(self.bivectors, prefix_shape).weights
         if device is not None or dtype is not None:
             weights = weights.to(device=device, dtype=dtype)
         return weights
@@ -218,67 +334,86 @@ class InvertibleBivectorField(CliffordModule):
         return self.bivectors.mean(dim=reduce_dims)
 
     def rotor_path(self, prefix_shape: Sequence[int] = ()) -> torch.Tensor:
-        """Return the explicit even-grade rotors for the current weights."""
+        """Return explicit rotors for a shape-only sampler."""
         weights = self.weights_for_shape(prefix_shape)
+        return self._rotors_from_weights(weights)
+
+    def rotors_for_input(
+        self,
+        coordinates: torch.Tensor | CoordinateFieldInput,
+        *,
+        sample_coordinates: torch.Tensor | None = None,
+        spatial_shape: Sequence[int] | None = None,
+    ) -> torch.Tensor:
+        """Return explicit even-grade rotors evaluated on an input domain."""
+        weights = self.weights_for_input(
+            coordinates,
+            sample_coordinates=sample_coordinates,
+            spatial_shape=spatial_shape,
+        )
+        return self._rotors_from_weights(weights)
+
+    def _rotors_from_weights(self, weights: torch.Tensor) -> torch.Tensor:
         return self.algebra.bivector_exp(
             -0.5 * weights,
             input_layout=self.bivector_layout,
             output_layout=self.algebra.layout(range(0, self.algebra.n + 1, 2)),
         )
 
-    def _apply_path(self, values: torch.Tensor, *, inverse: bool) -> tuple[torch.Tensor, torch.Tensor, tuple[int, ...], tuple[int, ...]]:
+    def _apply_path(
+        self,
+        values: torch.Tensor,
+        *,
+        field_input: CoordinateFieldInput,
+        inverse: bool,
+    ) -> tuple[torch.Tensor, GeneratorFieldSample]:
         prefix_shape = tuple(values.shape[:-1])
-        weights, spatial_shape, batch_shape = self._weights_for_prefix(prefix_shape)
+        sampled = self.generator_sampler.sample(self.bivectors, field_input)
+        weights = sampled.weights
+        expected_shape = (self.path_steps, *prefix_shape, self.num_bivectors)
+        if tuple(weights.shape) != expected_shape:
+            raise ValueError(f"sampled bivector weights must have shape {expected_shape}, got {tuple(weights.shape)}")
         if weights.device != values.device or weights.dtype != values.dtype:
             weights = weights.to(device=values.device, dtype=values.dtype)
+            sampled = GeneratorFieldSample(
+                weights=weights,
+                spatial_shape=sampled.spatial_shape,
+                batch_shape=sampled.batch_shape,
+            )
 
-        flat = values.reshape(1, _numel(prefix_shape), self.vector_layout.dim)
-        flat_weights = weights.reshape(self.path_steps, _numel(prefix_shape), self.num_bivectors)
+        flat, flat_weights = self._execution_view(values, weights, sampled)
         step_indices = range(self.path_steps - 1, -1, -1) if inverse else range(self.path_steps)
         for step in step_indices:
             step_weights = -flat_weights[step] if inverse else flat_weights[step]
             flat = self.action(flat, step_weights)
         output = flat.reshape(*prefix_shape, self.vector_layout.dim)
-        return output, weights, spatial_shape, batch_shape
+        return output, sampled
 
-    def _weights_for_prefix(self, prefix_shape: tuple[int, ...]) -> tuple[torch.Tensor, tuple[int, ...], tuple[int, ...]]:
-        if self.control_shape is None:
-            view_shape = (self.path_steps, *([1] * len(prefix_shape)), self.num_bivectors)
-            weights = self.bivectors.reshape(view_shape).expand(self.path_steps, *prefix_shape, self.num_bivectors)
-            return weights, prefix_shape, ()
+    def _execution_view(
+        self,
+        values: torch.Tensor,
+        weights: torch.Tensor,
+        sampled: GeneratorFieldSample,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Avoid exponentiating generators repeated only by broadcasting."""
+        if isinstance(self.generator_sampler, BroadcastGeneratorSampler):
+            prefix_rank = values.ndim - 1
+            shared_weights = weights[(slice(None), *((0,) * prefix_rank))].unsqueeze(1)
+            return values.reshape(-1, 1, self.vector_layout.dim), shared_weights
 
-        rank = len(self.control_shape)
-        if len(prefix_shape) < rank:
-            raise ValueError(
-                f"coordinate prefix shape {prefix_shape} has fewer grid axes than control_shape={self.control_shape}"
+        if isinstance(self.generator_sampler, RegularGridGeneratorSampler) and sampled.batch_shape:
+            batch_rank = len(sampled.batch_shape)
+            shared_weights = weights[(slice(None), *((0,) * batch_rank))]
+            return (
+                values.reshape(prod(sampled.batch_shape), prod(sampled.spatial_shape), self.vector_layout.dim),
+                shared_weights.reshape(self.path_steps, prod(sampled.spatial_shape), self.num_bivectors),
             )
-        batch_shape = prefix_shape[:-rank] if rank > 0 else prefix_shape
-        spatial_shape = prefix_shape[-rank:] if rank > 0 else ()
-        grid_weights = self._resized_control_weights(spatial_shape)
-        if batch_shape:
-            view_shape = (self.path_steps, *([1] * len(batch_shape)), *spatial_shape, self.num_bivectors)
-            grid_weights = grid_weights.reshape(view_shape).expand(
-                self.path_steps,
-                *batch_shape,
-                *spatial_shape,
-                self.num_bivectors,
-            )
-        return grid_weights, spatial_shape, batch_shape
 
-    def _resized_control_weights(self, spatial_shape: tuple[int, ...]) -> torch.Tensor:
-        if spatial_shape == self.control_shape:
-            return self.bivectors
-        rank = len(self.control_shape or ())
-        if rank == 0:
-            return self.bivectors
-        if rank > 3:
-            raise ValueError("control_shape interpolation supports 1D, 2D, or 3D grids; use a matching grid above 3D")
-        mode = {1: "linear", 2: "bilinear", 3: "trilinear"}[rank]
-        order = (0, rank + 1, *range(1, rank + 1))
-        source = self.bivectors.permute(order).reshape(1, self.path_steps * self.num_bivectors, *self.control_shape)
-        resized = F.interpolate(source, size=spatial_shape, mode=mode, align_corners=True)
-        resized = resized.reshape(self.path_steps, self.num_bivectors, *spatial_shape)
-        return resized.permute(0, *range(2, rank + 2), 1).contiguous()
+        sample_count = values[..., 0].numel()
+        return (
+            values.reshape(1, sample_count, self.vector_layout.dim),
+            weights.reshape(self.path_steps, sample_count, self.num_bivectors),
+        )
 
     def _check_coordinates(self, coordinates: torch.Tensor) -> None:
         if coordinates.ndim < 1 or coordinates.shape[-1] != self.coordinate_dim:
@@ -300,9 +435,3 @@ def _positive_int(value: int, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive, got {value}")
     return value
-
-
-def _numel(shape: Sequence[int]) -> int:
-    if not shape:
-        return 1
-    return int(reduce(mul, shape, 1))

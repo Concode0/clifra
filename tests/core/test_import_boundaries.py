@@ -3,8 +3,8 @@
 
 import pytest
 
-import clifra.core as core
 import clifra.analysis as analysis
+import clifra.core as core
 import clifra.core.foundation as foundation
 import clifra.core.runtime as runtime
 from clifra.analysis.geodesic import NeighborhoodBivectorFlow

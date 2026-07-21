@@ -48,7 +48,7 @@ class InvertiblePathConsistencyPolicy:
     name: str = "invertible_path_consistency"
 
     def __call__(self, engine, state: ContinuumState) -> PolicyResult:
-        reconstructed = engine.field.inverse(state.deformed_coordinates)
+        reconstructed = engine.field.inverse(state.inverse_input())
         residual = reconstructed - state.reference_coordinates
         mse = residual.square().mean()
         max_abs = residual.abs().amax()

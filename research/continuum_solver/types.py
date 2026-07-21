@@ -6,16 +6,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol
+from typing import TYPE_CHECKING, Iterator, Mapping, Protocol
 
 import torch
+
+if TYPE_CHECKING:
+    from .inputs import CoordinateFieldInput, CoordinateLike
 
 MetricValue = torch.Tensor | float | int | bool
 
 
 @dataclass(frozen=True)
 class ContinuumState:
-    """A deformation state produced from direct coordinate tensors."""
+    """A transformation state produced from a coordinate field input."""
 
     reference_coordinates: torch.Tensor
     deformed_coordinates: torch.Tensor
@@ -24,11 +27,23 @@ class ContinuumState:
     bivector_weights: torch.Tensor
     spatial_shape: tuple[int, ...]
     batch_shape: tuple[int, ...]
+    field_input: CoordinateFieldInput | None = None
 
     @property
     def coordinate_dim(self) -> int:
         """Return the Euclidean coordinate lane count."""
         return int(self.reference_coordinates.shape[-1])
+
+    @property
+    def generator_weights(self) -> torch.Tensor:
+        """Return sampled generators under a field-generic name."""
+        return self.bivector_weights
+
+    def inverse_input(self) -> CoordinateFieldInput | torch.Tensor:
+        """Return deformed values paired with the original sample identity."""
+        if self.field_input is None:
+            return self.deformed_coordinates
+        return self.field_input.with_coordinates(self.deformed_coordinates)
 
 
 @dataclass(frozen=True)
@@ -99,6 +114,28 @@ class TargetCriterion(Protocol):
 
     def __call__(self, engine, state: ContinuumState) -> CriterionResult:
         """Return a target loss for the current deformation state."""
+        ...
+
+
+class CoordinateTransformationField(Protocol):
+    """Minimal optimizer-facing contract for a coordinate transformation field."""
+
+    algebra: object
+
+    def __call__(self, coordinates: CoordinateLike) -> torch.Tensor:
+        """Transform coordinate values."""
+        ...
+
+    def state(self, coordinates: CoordinateLike) -> ContinuumState:
+        """Return transformed values and generator diagnostics."""
+        ...
+
+    def inverse(self, coordinates: CoordinateLike) -> torch.Tensor:
+        """Evaluate the field's declared inverse contract."""
+        ...
+
+    def parameters(self, recurse: bool = True) -> Iterator[torch.nn.Parameter]:
+        """Yield trainable field parameters."""
         ...
 
 

@@ -14,9 +14,16 @@ import torch.nn as nn
 from clifra.core.foundation.module import CliffordModule
 
 from .curriculum import ConstantCurriculum, LossWeightSchedule
-from .field import InvertibleBivectorField
+from .inputs import CoordinateLike
 from .logging import MetricLogger
-from .types import ContinuumState, GeometricPolicy, SolverEvaluation, TargetCriterion, zero_criterion
+from .types import (
+    ContinuumState,
+    CoordinateTransformationField,
+    GeometricPolicy,
+    SolverEvaluation,
+    TargetCriterion,
+    zero_criterion,
+)
 
 OptimizerLike = object
 OptimizerFactory = Callable[[object], OptimizerLike]
@@ -33,8 +40,8 @@ class OptimizationStepContext:
 
     engine: "ContinuumSolverEngine"
     optimizer: OptimizerLike
-    coordinates: torch.Tensor
-    loss_fn: Callable[[torch.Tensor], torch.Tensor]
+    coordinates: CoordinateLike
+    loss_fn: Callable[[CoordinateLike], torch.Tensor]
     step: int
     steps: int
     clip_grad_norm: float | None = None
@@ -85,7 +92,7 @@ class ContinuumSolverEngine(CliffordModule):
 
     def __init__(
         self,
-        field: InvertibleBivectorField,
+        field: CoordinateTransformationField,
         *,
         target_criterion: TargetCriterion | None = None,
         geometric_policies: Sequence[GeometricPolicy] = (),
@@ -99,17 +106,24 @@ class ContinuumSolverEngine(CliffordModule):
         self.fit_step = 0
         self.fit_steps = 1
         self.fit_progress = 1.0
-        progress_device = field.bivectors.device
-        progress_dtype = field.bivectors.dtype
-        self.register_buffer("_fit_step_tensor", torch.zeros((), device=progress_device, dtype=progress_dtype), persistent=False)
-        self.register_buffer("_fit_steps_tensor", torch.ones((), device=progress_device, dtype=progress_dtype), persistent=False)
-        self.register_buffer("_fit_progress_tensor", torch.ones((), device=progress_device, dtype=progress_dtype), persistent=False)
+        first_parameter = next(field.parameters(), None)
+        progress_device = field.algebra.device if first_parameter is None else first_parameter.device
+        progress_dtype = field.algebra.dtype if first_parameter is None else first_parameter.dtype
+        self.register_buffer(
+            "_fit_step_tensor", torch.zeros((), device=progress_device, dtype=progress_dtype), persistent=False
+        )
+        self.register_buffer(
+            "_fit_steps_tensor", torch.ones((), device=progress_device, dtype=progress_dtype), persistent=False
+        )
+        self.register_buffer(
+            "_fit_progress_tensor", torch.ones((), device=progress_device, dtype=progress_dtype), persistent=False
+        )
 
-    def forward(self, coordinates: torch.Tensor) -> torch.Tensor:
+    def forward(self, coordinates: CoordinateLike) -> torch.Tensor:
         """Return deformed coordinates."""
         return self.field(coordinates)
 
-    def evaluate(self, coordinates: torch.Tensor) -> SolverEvaluation:
+    def evaluate(self, coordinates: CoordinateLike) -> SolverEvaluation:
         """Evaluate total loss, target loss, geometric policies, and diagnostics."""
         state = self.field.state(coordinates)
         target = self.target_criterion(self, state) if self.target_criterion is not None else zero_criterion(state)
@@ -134,7 +148,7 @@ class ContinuumSolverEngine(CliffordModule):
 
     def fit(
         self,
-        coordinates: torch.Tensor,
+        coordinates: CoordinateLike,
         *,
         steps: int = 100,
         optimizer: OptimizerLike | None = None,
@@ -161,7 +175,11 @@ class ContinuumSolverEngine(CliffordModule):
         if optimizer is not None and optimizer_factory is not None:
             raise ValueError("pass either optimizer or optimizer_factory, not both")
         if optimizer is None:
-            optimizer = optimizer_factory(self.parameters()) if optimizer_factory is not None else torch.optim.Adam(self.parameters(), lr=lr)
+            optimizer = (
+                optimizer_factory(self.parameters())
+                if optimizer_factory is not None
+                else torch.optim.Adam(self.parameters(), lr=lr)
+            )
         stepper = _default_optimizer_step if optimizer_step is None else optimizer_step
 
         loss_fn = self._loss_for_fit
@@ -203,7 +221,7 @@ class ContinuumSolverEngine(CliffordModule):
             optimizer=optimizer,
         )
 
-    def _loss_for_fit(self, coordinates: torch.Tensor) -> torch.Tensor:
+    def _loss_for_fit(self, coordinates: CoordinateLike) -> torch.Tensor:
         state = self.field.state(coordinates)
         target = self.target_criterion(self, state) if self.target_criterion is not None else zero_criterion(state)
         target_weight = self._term_weight("target", target.name, state.reference_coordinates, 1.0)
@@ -214,7 +232,9 @@ class ContinuumSolverEngine(CliffordModule):
             total = total + result.loss * weight
         return total
 
-    def _term_weight(self, kind: str, name: str, reference: torch.Tensor, base_weight: float | torch.Tensor) -> torch.Tensor:
+    def _term_weight(
+        self, kind: str, name: str, reference: torch.Tensor, base_weight: float | torch.Tensor
+    ) -> torch.Tensor:
         aliases = (f"{kind}:{name}", name, kind, "*")
         return self.curriculum.weight(self, aliases, reference, base_weight=base_weight)
 
@@ -248,7 +268,7 @@ class ContinuumSolverEngine(CliffordModule):
             self._fit_progress_tensor.fill_(float(progress))
 
     def _diagnostics(self, state: ContinuumState, policies):
-        reconstructed = self.field.inverse(state.deformed_coordinates)
+        reconstructed = self.field.inverse(state.inverse_input())
         path_residual = reconstructed - state.reference_coordinates
         norms = torch.linalg.vector_norm(state.bivector_weights, dim=-1)
         max_violation = state.reference_coordinates.new_zeros(())
@@ -256,7 +276,9 @@ class ContinuumSolverEngine(CliffordModule):
         for policy in policies:
             policy_violation = _policy_max_violation(policy)
             max_violation = torch.maximum(max_violation, policy_violation)
-            tolerance = torch.as_tensor(policy.strict_tolerance, device=policy_violation.device, dtype=policy_violation.dtype)
+            tolerance = torch.as_tensor(
+                policy.strict_tolerance, device=policy_violation.device, dtype=policy_violation.dtype
+            )
             strict_observed = torch.logical_and(strict_observed, policy_violation <= tolerance)
         return {
             "invertible_path/mse": path_residual.square().mean(),
