@@ -3,9 +3,6 @@
 
 """Rotor-based channel transformation layer.
 
-The cited paper is background reference material for the RotorGadget design;
-it is not a normative specification for this implementation.
-
 Background reference:
     Pence, T., Yamada, D., & Singh, V. (2025). "Composing Linear Layers
     from Irreducibles." arXiv:2507.11688v1, Section 4.2, Equation 6

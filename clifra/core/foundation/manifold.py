@@ -3,9 +3,8 @@
 
 """Optimizer dispatch tags for framework parameters.
 
-The three accepted labels are deliberately small in scope. They select the
-retraction applied by clifra's optimizers; they are not a taxonomy of geometric
-objects supported by the algebra, planner, or layer systems.
+The three labels select the retraction applied by clifra's optimizers; layers
+and actions provide the geometric interpretation.
 """
 
 from __future__ import annotations

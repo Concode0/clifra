@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Experimental descriptive and geometric-representation diagnostics.
+"""Descriptive and geometric-representation diagnostics.
 
-Results report the implemented coefficient-space or operator calculation.
-Metric, manifold, causal, and symmetry conclusions require evidence beyond
-these heuristic outputs.
+The package measures coefficient-space and operator structure. Its
+rotor-probe signature result ranks candidate algebras as a learned heuristic.
 """
 
 from ._types import (

@@ -11,9 +11,8 @@ The ``from_model()`` constructors recognize three simplified tags via
 
 They convert those tags into optimizer parameter groups. Parameters without a
 tag are treated as Euclidean. Parameters passed directly to an optimizer are
-also Euclidean unless their parameter group declares ``manifold``. These labels
-are private optimizer metadata, not a general classification system for
-clifra's geometric objects.
+also Euclidean unless their parameter group declares ``manifold``. The labels
+select optimizer behavior while layers define geometric meaning.
 
 Background references:
     - Absil et al. "Optimization Algorithms on Matrix Manifolds" (2008)

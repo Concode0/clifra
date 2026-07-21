@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Sampling strategies for experimental geometric diagnostics.
+"""Sampling strategies for geometric diagnostics.
 
 The stratified strategy bins an operational neighborhood-connection alignment
-score. Its capped Euclidean algebra is an internal implementation choice rather
-than a metric-signature inference.
+score in a capped Euclidean algebra.
 """
 
 from typing import Dict, List, Tuple, Union
@@ -23,7 +22,7 @@ class StatisticalSampler:
     ``"passthrough"`` strategies.  All methods are deterministic when a
     seed is provided.
 
-    The experimental ``"stratified"`` strategy partitions per-point
+    The ``"stratified"`` strategy partitions per-point
     connection-alignment scores into quantile strata in a capped Euclidean
     algebra.
     """
@@ -86,7 +85,7 @@ class StatisticalSampler:
 
     @staticmethod
     def _stratified(data: torch.Tensor, config: SamplingConfig) -> Tuple[torch.Tensor, Dict]:
-        """Stratify by the experimental per-point connection-alignment score.
+        """Stratify by the per-point connection-alignment score.
 
         Embeds data as grade-1 in a default Euclidean algebra, computes
         per-point mean absolute connection alignment, partitions it into

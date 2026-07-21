@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Orchestrate descriptive and experimental diagnostics in one pipeline."""
+"""Orchestrate geometric diagnostics in one pipeline."""
 
 import concurrent.futures
 import time
@@ -24,7 +24,7 @@ from .symmetry import TransformationDiagnosticsAnalyzer
 
 
 class GeometricAnalyzer:
-    """Top-level orchestrator for the experimental analysis toolkit.
+    """Top-level orchestrator for the geometric analysis toolkit.
 
     Runs a configurable subset of analyzers in the correct dependency
     order and returns an :class:`AnalysisReport`.
@@ -106,7 +106,7 @@ class GeometricAnalyzer:
             dim_result = dimension_analyzer.analyze(sampled)
             report.dimension = dim_result
 
-        # Experimental signature estimation
+        # Signature estimation
         sig_result = None
         if cfg.run_signature_estimation:
             signature_analyzer = SignatureProbeAnalyzer(device=cfg.device, dtype=cfg.dtype)

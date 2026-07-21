@@ -17,7 +17,7 @@ from ._utils import full_grades
 
 
 class NeighborhoodBivectorFlow:
-    """Compute experimental bivector statistics over coefficient-space neighbors.
+    """Compute bivector statistics over coefficient-space neighbors.
 
     Data points are interpreted as grade-1 multivectors. Neighbors are selected
     by Euclidean distance in coefficient space, and each point-neighbor pair is
@@ -259,7 +259,7 @@ class NeighborhoodBivectorFlow:
         b: torch.Tensor,
         steps: int = CONSTANTS.bivector_interpolation_steps,
     ) -> torch.Tensor:
-        """Return an experimental first-order bivector-log interpolation.
+        """Return a first-order bivector-log interpolation.
 
         Uses the *Lie group exponential map* on the transition element:
 
@@ -267,9 +267,8 @@ class NeighborhoodBivectorFlow:
             log(T) ~= <T - 1>_2     (grade-2 approximation for small angles)
             gamma(t) = a . exp(t . log(T))
 
-        This provides a local approximation using the existing regularized blade
-        inverse and a grade-2 first-order logarithm. It is not a general geodesic
-        solution.
+        This local construction uses the regularized blade inverse and a grade-2
+        first-order logarithm.
 
         Args:
             a (torch.Tensor): Start multivector ``[dim]``.
@@ -341,7 +340,7 @@ class NeighborhoodBivectorFlow:
         return math.sqrt(2.0 / (math.pi * d))
 
     def alignment_threshold_report(self, data: torch.Tensor) -> Dict:
-        """Apply experimental thresholds to the two connection statistics.
+        """Apply configured thresholds to the two connection statistics.
 
         Alignment must exceed the midpoint between the random-vector baseline
         and 1.0; dissimilarity must remain below the configured maximum. The

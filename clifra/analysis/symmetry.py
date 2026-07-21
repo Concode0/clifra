@@ -28,12 +28,10 @@ from .policy import feasibility_record
 
 
 class TransformationDiagnosticsAnalyzer:
-    """Compute experimental coefficient and transformation diagnostics.
+    """Compute coefficient and transformation diagnostics.
 
     The methods report explicitly defined energy, distribution-distance, and
-    commutator statistics. These quantities characterize the implemented
-    transformations without establishing metric nullity or invariance under a
-    continuous symmetry group.
+    commutator statistics for the implemented transformations.
 
     Args:
         algebra: Layout-first algebra host.

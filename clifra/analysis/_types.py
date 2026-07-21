@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Public records for experimental, operationally defined diagnostics."""
+"""Public records for geometric diagnostics."""
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -28,7 +28,7 @@ class AnalysisConstants:
 
     Attributes:
         alignment_report_max_dissimilarity: Maximum neighborhood-connection
-            dissimilarity accepted by the experimental alignment report.
+            dissimilarity accepted by the alignment report.
             See :meth:`NeighborhoodBivectorFlow.alignment_threshold_report`
             and :meth:`CoordinateLiftAnalyzer.compare_lifts`.
         bv_sq_elliptic_bound: Bivector square value below which the
@@ -140,7 +140,7 @@ class AnalysisConfig:
         device: Torch device string.
         sampling: Sampling configuration.
         run_dimension: Enable covariance-dimension diagnostics.
-        run_signature_estimation: Enable experimental rotor-probe signature estimation.
+        run_signature_estimation: Enable rotor-probe signature estimation.
         run_spectral: Enable spectral analysis.
         run_transformation_diagnostics: Enable operational transformation diagnostics.
         run_commutator: Enable commutator analysis.
@@ -190,11 +190,11 @@ class DimensionResult:
 
 @dataclass
 class SignatureEstimate:
-    """Experimental output of :class:`SignatureProbeAnalyzer`.
+    """Output of :class:`SignatureProbeAnalyzer`.
 
     Attributes:
-        estimated_signature: Probe-selected ``(p, q, r)`` candidate. This is
-            a learned heuristic, not metric identification.
+        estimated_signature: Probe-selected ``(p, q, r)`` candidate from the
+            learned ranking heuristic.
         connection_alignment: Best probe's mean absolute connection alignment.
         connection_dissimilarity: Best probe's neighboring-connection
             dissimilarity.
@@ -283,7 +283,7 @@ class AnalysisReport:
 
     Attributes:
         dimension: Covariance-spectrum dimension diagnostics.
-        signature_estimate: Experimental rotor-probe signature estimate.
+        signature_estimate: Rotor-probe signature estimate.
         spectral: Spectral analysis results.
         transformation: Operational transformation diagnostics.
         commutator: Commutator analysis results.
@@ -313,7 +313,7 @@ class AnalysisReport:
         if self.signature_estimate is not None:
             s = self.signature_estimate
             p, q, r = s.estimated_signature
-            lines.append(f"\n[Experimental signature estimate]")
+            lines.append(f"\n[Signature estimate]")
             lines.append(f"  Candidate Cl({p},{q},{r})")
             lines.append(
                 f"  Connection alignment: {s.connection_alignment:.3f}  dissimilarity: {s.connection_dissimilarity:.3f}"

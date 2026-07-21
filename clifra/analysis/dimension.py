@@ -23,7 +23,7 @@ from ._utils import analysis_dtype, as_analysis_tensor
 
 
 class CovarianceDimensionAnalyzer:
-    """Compute experimental covariance-spectrum dimension diagnostics.
+    """Compute covariance-spectrum dimension diagnostics.
 
     The reported dimension is the number of normalized covariance
     eigenvalues above a broken-stick reference, clamped to at least one.
@@ -184,11 +184,10 @@ class CovarianceDimensionAnalyzer:
 
 
 class CoordinateLiftAnalyzer:
-    """Experimentally compare connection scores after coordinate lifting.
+    """Compare connection scores after coordinate lifting.
 
-    This heuristic measures how appending a fixed coordinate changes the
-    neighborhood-bivector alignment scores. Those changes alone are insufficient
-    to infer a latent geometric dimension in the source data.
+    The comparison measures how appending a fixed coordinate changes
+    neighborhood-bivector alignment scores.
 
     Lifting appends extra coordinates to the grade-1 embedding:
 
@@ -249,7 +248,7 @@ class CoordinateLiftAnalyzer:
         q: int,
         k: int = CONSTANTS.default_k_neighbors,
     ) -> Dict:
-        """Compare experimental neighborhood-connection scores across lifts.
+        """Compare neighborhood-connection scores across lifts.
 
         Tests three algebras:
 
@@ -309,7 +308,7 @@ class CoordinateLiftAnalyzer:
         return results
 
     def format_report(self, results: Dict) -> str:
-        """Render the experimental coordinate-lift comparison."""
+        """Render the coordinate-lift comparison."""
         lines = ["Coordinate Lift Comparison", "=" * 40]
         for key in ("original", "positive_coordinate_lift", "negative_square_coordinate_lift"):
             r = results[key]

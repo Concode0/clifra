@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Experimental rotor-probe metric-signature estimation.
+"""Rotor-probe metric-signature estimation.
 
 Provides :class:`RotorProbeSignatureEstimator` (a learned heuristic) and
 :class:`SignatureProbeAnalyzer` (higher-level wrapper with dimension
 reduction and bootstrap agreement estimates).
 
-These routines select a candidate signature from trained probe energy. The
-result characterizes the learned probes. Identifying the source data's metric
-signature requires separate evidence.
+These routines rank candidate signatures from trained probe energy and report
+the selected candidate with bootstrap agreement statistics.
 """
 
 import concurrent.futures
@@ -98,7 +97,7 @@ class _SignatureProbe(nn.Module):
 
     Architecture: channel mixer -> rotor -> channel mixer -> blade selector.
     Only one linear layer for channel expansion; the rotor bivector energy
-    is the signal used by the experimental signature heuristic.
+    is the signal used by the signature-ranking heuristic.
     """
 
     def __init__(self, algebra: AlgebraLike, channels: int = CONSTANTS.signature_probe_channels):
@@ -168,15 +167,14 @@ def _apply_biased_init(
 
 
 class RotorProbeSignatureEstimator:
-    """Experimentally select a ``(p, q, r)`` candidate from rotor probes.
+    """Select a ``(p, q, r)`` candidate from rotor probes.
 
     Trains small single-rotor probes on conformally-lifted data using
     connection_alignment + connection_dissimilarity as the loss. After training, reads the learned
     bivector energy distribution to select a signature estimate.
 
-    Multiple biased initializations reduce sensitivity to local minima. The
-    returned tuple is a model-dependent estimate; metric identification requires
-    separate evidence.
+    Multiple biased initializations reduce sensitivity to local minima and the
+    learned energy ranking selects the returned candidate.
     """
 
     def __init__(
@@ -481,7 +479,7 @@ class RotorProbeSignatureEstimator:
 
 
 class SignatureProbeAnalyzer:
-    """Experimental signature-candidate analysis with optional PCA reduction.
+    """Signature-candidate analysis with optional PCA reduction.
 
     Wraps :class:`RotorProbeSignatureEstimator` and adds:
 
