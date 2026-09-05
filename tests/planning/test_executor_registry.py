@@ -149,3 +149,25 @@ def test_unavailable_rotor_children_do_not_hide_vector_matrix():
     vector, bivector = algebra.layout((1,)), algebra.layout((2,))
     operation = algebra.plan_versor_action(grade=2, input=vector, output=vector, parameter=bivector)
     assert operation._kernel.metadata.route == "vector_matrix"
+
+
+def test_pairwise_lookup_requirement_rejected_before_sparse_buffer_build(monkeypatch):
+    # 8 x 8 interactions fit; the prebuilt 8 x 29 lookup table does not.
+    algebra = configured_algebra(8, resource_limits=ResourceLimits(max_pairs=100))
+    vector, output = algebra.layout((1,)), algebra.layout((0, 2))
+
+    def fail(*args, **kwargs):
+        raise AssertionError("rejected route must not allocate buffers")
+
+    monkeypatch.setattr(
+        "clifra.core._kernel.planning.product.build_grade_product_plan_from_tree",
+        fail,
+    )
+    with pytest.raises(ValueError, match="intermediate interactions 232"):
+        algebra.plan_product(left=vector, right=vector, output=output)
+
+
+@pytest.mark.parametrize("value", [-0.5, 1.5, True])
+def test_resource_limits_reject_noninteger_counts(value):
+    with pytest.raises(ValueError, match="non-negative integers"):
+        ResourceLimits(max_pairs=value)

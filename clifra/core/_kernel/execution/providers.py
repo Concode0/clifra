@@ -249,6 +249,8 @@ class BuiltinProvider:
     def _assess(self, request):
         family, route = self.identity
         if family == "product":
+            if request.output.spec.n > 63:
+                return Rejected("Current Torch-backed executors support bitmask tensorization up to n=63")
             from .product import assess_product_routes
 
             candidates = assess_product_routes(

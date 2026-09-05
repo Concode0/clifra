@@ -27,8 +27,8 @@ class ResourceLimits:
 
     def __post_init__(self) -> None:
         values = (self.warn_lanes, self.max_lanes, self.warn_pairs, self.max_pairs)
-        if any(int(value) < 0 for value in values):
-            raise ValueError("resource limits must be non-negative")
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
+            raise ValueError("resource limits must be non-negative integers")
 
 
 DEFAULT_RESOURCE_LIMITS = ResourceLimits()

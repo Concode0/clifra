@@ -285,7 +285,12 @@ def assess_product_routes(
                 peak_bytes=peak_bytes,
                 compile_work=tree.path_count,
                 extensions=extensions,
-                resources=ResourceRequirements(max(left_layout.dim, right_layout.dim, output_layout.dim), pair_count),
+                resources=ResourceRequirements(
+                    max(left_layout.dim, right_layout.dim, output_layout.dim),
+                    max(pair_count, min(left_layout.dim, right_layout.dim) * output_layout.dim)
+                    if route == "sparse"
+                    else pair_count,
+                ),
             ),
             unavailable_reason,
         )
