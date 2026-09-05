@@ -1274,7 +1274,7 @@ class BivectorExpExecutor(nn.Module):
         self.output_layout = plan.output_layout
         self.input_contract = plan.input_contract
         self.output_contract = plan.output_contract
-        self.executor_family = plan.executor_family
+        self.route = plan.route
         self.eps = plan.eps
         self.eps_sq = plan.eps_sq
         # Dtype-specific series cutoffs derived from the first omitted term.
@@ -1411,13 +1411,13 @@ class BivectorExpExecutor(nn.Module):
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         """Return ``exp(values)`` in ``output_layout`` lanes."""
         self.input_contract.validate(values, name="values")
-        if self.executor_family == "closed_simple":
+        if self.route == "closed_simple":
             return self._closed_simple(values)
-        if self.executor_family == "closed_biquadratic":
+        if self.route == "closed_biquadratic":
             return self._closed_biquadratic(values)
-        if self.executor_family == "spectral_local":
+        if self.route == "spectral_local":
             return self._spectral_local(values)
-        if self.executor_family == "cpu_matrix_exp":
+        if self.route == "cpu_matrix_exp":
             return self._cpu_matrix_exp(values)
         return self._left_matrix_exp(values)
 
@@ -1698,3 +1698,137 @@ class BivectorExpExecutor(nn.Module):
 
 
 __all__ = ["BivectorExpExecutor"]
+
+
+def assess_bivector_exp_routes(
+    spec,
+    device,
+    *,
+    dtype: torch.dtype,
+    output_layout,
+    preselection,
+):
+    """Declare exponential algorithm capabilities and costs."""
+    from clifra.core._kernel.planning.policy import PlanCandidate, PlanFacts, environment_extensions
+    from clifra.core._kernel.planning.resources import ResourceRequirements
+
+    device_type = torch.device(device).type
+    dtype_bytes = torch.finfo(dtype).bits // 8
+    even_lanes = 1 if spec.n == 0 else 1 << (spec.n - 1)
+    output_lanes = 1 if output_layout is None else output_layout.dim
+    retained_planes = preselection.max_planes
+    shared = {
+        **environment_extensions(spec, device_type, dtype_bytes),
+        "dtype.epsilon": torch.finfo(dtype).eps,
+        "layout.output_lanes": output_lanes,
+        "exp.even_lanes": even_lanes,
+        "exp.nondegenerate_dim": preselection.nondegenerate_dim,
+        "exp.ideal_dim": preselection.ideal_dim,
+        "exp.retained_planes": retained_planes,
+    }
+
+    def make(
+        route: str,
+        forward: float,
+        backward: float,
+        peak_bytes: int,
+        compile_work: float,
+        reason: str | None,
+        *,
+        requires_transfer: bool = False,
+        exact: bool = True,
+        truncated: bool = False,
+        value_dependent: bool = False,
+    ) -> PlanCandidate:
+        extensions = {
+            **shared,
+            "exp.requires_transfer": requires_transfer,
+            "exp.available_rank": preselection.nondegenerate_dim // 2,
+            "exp.retained_rank": min(retained_planes, preselection.nondegenerate_dim // 2),
+            "exp.rank_deficit": max(preselection.nondegenerate_dim // 2 - retained_planes, 0),
+        }
+        return PlanCandidate(
+            "bivector_exp",
+            route,
+            PlanFacts(
+                forward,
+                backward,
+                peak_bytes,
+                compile_work,
+                exact=exact,
+                truncated=truncated,
+                value_dependent=value_dependent,
+                extensions=extensions,
+                resources=ResourceRequirements(
+                    max(
+                        output_lanes,
+                        spec.n * (spec.n - 1) // 2,
+                        even_lanes if route in {"left_matrix_exp", "cpu_matrix_exp"} else 0,
+                    ),
+                    even_lanes**2
+                    if route in {"left_matrix_exp", "cpu_matrix_exp"}
+                    else max(output_lanes, preselection.nondegenerate_dim**2),
+                ),
+            ),
+            reason,
+        )
+
+    closed_simple_reason = None if spec.n <= 3 else "minimal_polynomial_not_simple"
+    closed_biquadratic_reason = None if 4 <= spec.n <= 5 else "biquadratic_domain_requires_n_4_or_5"
+    spectral_reason = None if preselection.eligible else preselection.reason
+    matrix_reason = "matrix_exp_unavailable_on_mps" if device_type == "mps" else None
+    cpu_matrix_reason = (
+        None
+        if device_type == "mps" and preselection.reason == "pseudo_euclidean_mps_cpu_matrix_exp"
+        else "cpu_transfer_route_not_required"
+    )
+    matrix_forward = float(even_lanes) ** 3
+    matrix_peak = even_lanes * even_lanes * dtype_bytes
+    spectral_forward = float(preselection.nondegenerate_dim**3 + max(retained_planes, 1) * output_lanes)
+    spectral_peak = int(
+        dtype_bytes * (preselection.nondegenerate_dim**2 + max(retained_planes, 1) * max(output_lanes, 1))
+    )
+    available_rank = preselection.nondegenerate_dim // 2
+    spectral_truncated = retained_planes < available_rank or (
+        preselection.ideal_dim > 0 and preselection.nondegenerate_dim % 2 != 0
+    )
+    candidates = (
+        make("closed_simple", 8.0, 16.0, dtype_bytes * max(output_lanes, 2), 4.0, closed_simple_reason),
+        make(
+            "closed_biquadratic",
+            32.0,
+            64.0,
+            dtype_bytes * max(output_lanes, 4),
+            12.0,
+            closed_biquadratic_reason,
+        ),
+        make(
+            "spectral_local",
+            spectral_forward,
+            spectral_forward * 2.0,
+            spectral_peak,
+            float(preselection.nondegenerate_dim**2 + retained_planes),
+            spectral_reason,
+            exact=False,
+            truncated=spectral_truncated,
+            value_dependent=True,
+        ),
+        make(
+            "left_matrix_exp",
+            matrix_forward,
+            matrix_forward * 2.0,
+            matrix_peak,
+            float(even_lanes**2),
+            matrix_reason,
+        ),
+        make(
+            "cpu_matrix_exp",
+            matrix_forward,
+            matrix_forward * 2.0,
+            matrix_peak + output_lanes * dtype_bytes,
+            float(even_lanes**2),
+            cpu_matrix_reason,
+            requires_transfer=True,
+        ),
+    )
+    return candidates

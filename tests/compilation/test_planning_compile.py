@@ -245,7 +245,7 @@ def test_planned_public_per_channel_sandwich_compiles_fullgraph_after_cache_warm
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float32, generator=generator)
 
     def sandwich(left_arg, values_arg, right_arg):
-        return specialized.per_channel_sandwich(algebra, left_arg, values_arg, right_arg)
+        return action_helpers.per_channel_sandwich(algebra, left_arg, values_arg, right_arg)
 
     expected = sandwich(left, values, right)
     compiled = torch.compile(sandwich, backend="aot_eager", fullgraph=True)
@@ -259,7 +259,7 @@ def test_plan_sandwich_action_handle_compiles_fullgraph_without_cache_mutation()
     algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
     layout = algebra.layout()
     bivector_layout = algebra.layout((2,))
-    handle = specialized.plan_sandwich_action(algebra, layout=layout, dtype=torch.float32, device=DEVICE)
+    handle = action_helpers.plan_sandwich_action(algebra, layout=layout, dtype=torch.float32, device=DEVICE)
     generator = torch.Generator(device=DEVICE).manual_seed(311)
     bivectors = torch.randn(4, bivector_layout.dim, dtype=torch.float32, generator=generator) * 0.1
     left = algebra.bivector_exp(-0.5 * bivectors, input=bivector_layout, output=layout)
@@ -312,7 +312,7 @@ def test_plan_multi_versor_action_handle_compiles_fullgraph_without_cache_mutati
     algebra = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float32)
     input_layout = algebra.layout((1,))
     parameter_layout = algebra.layout((2,))
-    handle = specialized.plan_multi_versor_action(
+    handle = action_helpers.plan_multi_versor_action(
         algebra, grade=2, input_layout=input_layout, output_layout=input_layout, parameter_layout=parameter_layout
     )
     generator = torch.Generator(device=DEVICE).manual_seed(317)
@@ -375,7 +375,7 @@ def test_plan_paired_bivector_action_handle_compiles_fullgraph_without_cache_mut
     algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
     vector_layout = algebra.layout((1,))
     parameter_layout = algebra.layout((2,))
-    handle = specialized.plan_paired_bivector_action(
+    handle = action_helpers.plan_paired_bivector_action(
         algebra, input_layout=vector_layout, output_layout=vector_layout, parameter_layout=parameter_layout
     )
     generator = torch.Generator(device=DEVICE).manual_seed(323)
@@ -514,4 +514,4 @@ def test_contraction_executor_compiles_fullgraph_with_aot_eager(op, left_grades,
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
 
-from clifra.core._kernel import specialized
+from tests.helpers import action as action_helpers

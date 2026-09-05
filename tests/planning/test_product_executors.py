@@ -6,12 +6,10 @@ from clifra.core.tensors import TensorContract
 from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
-    FormulaPolicy,
     FullTableProductExecutor,
     GradeProductExecutor,
-    Polynomial,
+    PreferRoute,
     ResourceLimits,
-    RouteRule,
     SmallCliffordOracle,
     _grade_only_input,
     _oracle_for,
@@ -324,7 +322,7 @@ def test_planner_full_table_executor_matches_small_oracle_full_layout_product(op
     expected = oracle.product(left, right, op=op)
 
     assert isinstance(executor, FullTableProductExecutor)
-    assert executor.executor_family == "full_table"
+    assert executor.route == "full_table"
     assert actual.shape[-1] == context.dim
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
@@ -362,12 +360,7 @@ def test_product_executor_policy_selects_sparse_for_pruned_full_layout_wedge():
 
 
 def test_product_executor_policy_override_can_force_full_table_full_layout_wedge():
-    policy = FormulaPolicy(
-        rules=(
-            RouteRule("product", "full_table"),
-            RouteRule("product", "sparse", score=Polynomial(constant=1.0)),
-        )
-    )
+    policy = PreferRoute("product", "full_table")
     context = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=policy)
     full_layout = context.layout()
 

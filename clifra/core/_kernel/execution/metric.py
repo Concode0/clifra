@@ -14,7 +14,7 @@ from clifra.core._kernel.planning.metric import SignatureNormSquaredPlan
 class SignatureNormSquaredExecutor(nn.Module):
     """Compile-friendly diagonal executor for signed signature norm squared."""
 
-    executor_family = "metric_diagonal"
+    route = "diagonal"
     op = "signature_norm_squared"
 
     def __init__(self, plan: SignatureNormSquaredPlan):

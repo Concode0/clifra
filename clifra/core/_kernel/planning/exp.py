@@ -15,12 +15,8 @@ from clifra.core._kernel.basis import basis_index_tuple_for_grades
 from clifra.core._kernel.contracts import _check_contract_spec
 from clifra.core._kernel.planning.policy import (
     DEFAULT_PLANNING_POLICY,
-    PlanCandidate,
-    PlanFacts,
     PlanningPolicy,
     RouteDecision,
-    environment_extensions,
-    select_policy_route,
 )
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import TensorContract
@@ -68,7 +64,7 @@ class BivectorExpPlan:
     grade4_layout: GradeLayout | None
     operator_layout: GradeLayout
     output_layout: GradeLayout
-    executor_family: str
+    route: str
     metric_signs: torch.Tensor
     bivector_squared_signs: torch.Tensor
     nondegenerate_bivector_positions: torch.Tensor
@@ -214,6 +210,8 @@ def build_bivector_exp_plan(
     spectral_allow_degenerate: bool = True,
     spectral_allow_truncated_degenerate: bool = True,
     planning_policy: PlanningPolicy = DEFAULT_PLANNING_POLICY,
+    route_decision: RouteDecision | None = None,
+    preselection: SpectralExpPreselection | None = None,
 ) -> BivectorExpPlan:
     """Build a static plan for the bivector exponential ``exp(B)`` where ``B`` is grade-2."""
     input_contract = TensorContract.compact(input_layout)
@@ -225,7 +223,7 @@ def build_bivector_exp_plan(
 
     resolved_device = torch.device(device)
     finfo = torch.finfo(dtype)
-    preselection = spectral_exp_preselection(
+    preselection = preselection or spectral_exp_preselection(
         spec,
         resolved_device,
         dtype=dtype,
@@ -236,7 +234,7 @@ def build_bivector_exp_plan(
         allow_degenerate=spectral_allow_degenerate,
         allow_truncated_degenerate=spectral_allow_truncated_degenerate,
     )
-    route_decision = select_bivector_exp_route(
+    route_decision = route_decision or select_bivector_exp_route(
         spec,
         resolved_device,
         dtype=dtype,
@@ -244,14 +242,14 @@ def build_bivector_exp_plan(
         preselection=preselection,
         policy=planning_policy,
     )
-    executor_family = route_decision.route
-    buffer_device = torch.device("cpu") if executor_family == "cpu_matrix_exp" else resolved_device
-    grade4_layout = spec.layout((4,)) if executor_family == "closed_biquadratic" else None
-    operator_layout = spec.layout((0,)) if executor_family == "spectral_local" else spec.layout(range(0, spec.n + 1, 2))
+    route = route_decision.route
+    buffer_device = torch.device("cpu") if route == "cpu_matrix_exp" else resolved_device
+    grade4_layout = spec.layout((4,)) if route == "closed_biquadratic" else None
+    operator_layout = spec.layout((0,)) if route == "spectral_local" else spec.layout(range(0, spec.n + 1, 2))
     operator_position_by_index = {index: position for position, index in enumerate(operator_layout.basis_indices)}
     metric_signs = _metric_signs(spec, dtype=dtype, device=buffer_device)
     partition = _bivector_axis_partition(input_layout, spec, device=buffer_device)
-    if executor_family == "spectral_local":
+    if route == "spectral_local":
         local_buffers = _spectral_local_buffers(
             spec,
             input_layout,
@@ -315,7 +313,7 @@ def build_bivector_exp_plan(
         grade4_layout=grade4_layout,
         operator_layout=operator_layout,
         output_layout=output_layout,
-        executor_family=executor_family,
+        route=route,
         metric_signs=metric_signs,
         bivector_squared_signs=torch.tensor(signs, dtype=dtype, device=buffer_device),
         nondegenerate_bivector_positions=partition[0],
@@ -422,125 +420,26 @@ def _empty_spectral_local_buffers(
 
 
 def select_bivector_exp_route(
-    spec: AlgebraSpec,
+    spec,
     device,
     *,
-    dtype: torch.dtype,
-    output_layout: GradeLayout | None,
-    preselection: SpectralExpPreselection,
-    policy: PlanningPolicy,
+    dtype,
+    output_layout,
+    preselection,
+    policy,
+    registry=None,
+    limits=None,
 ) -> RouteDecision:
-    """Enumerate bivector-exp implementations and apply the injected policy."""
-    device_type = torch.device(device).type
-    dtype_bytes = torch.finfo(dtype).bits // 8
-    even_lanes = 1 if spec.n == 0 else 1 << (spec.n - 1)
-    output_lanes = 1 if output_layout is None else output_layout.dim
-    retained_planes = preselection.max_planes
-    shared = {
-        **environment_extensions(spec, device_type, dtype_bytes),
-        "dtype.epsilon": torch.finfo(dtype).eps,
-        "layout.output_lanes": output_lanes,
-        "exp.even_lanes": even_lanes,
-        "exp.nondegenerate_dim": preselection.nondegenerate_dim,
-        "exp.ideal_dim": preselection.ideal_dim,
-        "exp.retained_planes": retained_planes,
-    }
+    from clifra.core._kernel.execution.providers import exp_execution_request
+    from clifra.core._kernel.execution.registry import default_registry
+    from clifra.core._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS
 
-    def make(
-        route: str,
-        forward: float,
-        backward: float,
-        peak_bytes: int,
-        compile_work: float,
-        reason: str | None,
-        *,
-        requires_transfer: bool = False,
-        exact: bool = True,
-        truncated: bool = False,
-        value_dependent: bool = False,
-    ) -> PlanCandidate:
-        extensions = {
-            **shared,
-            "exp.requires_transfer": requires_transfer,
-            "exp.available_rank": preselection.nondegenerate_dim // 2,
-            "exp.retained_rank": min(retained_planes, preselection.nondegenerate_dim // 2),
-            "exp.rank_deficit": max(preselection.nondegenerate_dim // 2 - retained_planes, 0),
-        }
-        return PlanCandidate(
-            "bivector_exp",
-            route,
-            PlanFacts(
-                forward,
-                backward,
-                peak_bytes,
-                compile_work,
-                exact=exact,
-                truncated=truncated,
-                value_dependent=value_dependent,
-                extensions=extensions,
-            ),
-            reason,
-        )
-
-    closed_simple_reason = None if spec.n <= 3 else "minimal_polynomial_not_simple"
-    closed_biquadratic_reason = None if 4 <= spec.n <= 5 else "biquadratic_domain_requires_n_4_or_5"
-    spectral_reason = None if preselection.eligible else preselection.reason
-    matrix_reason = "matrix_exp_unavailable_on_mps" if device_type == "mps" else None
-    cpu_matrix_reason = (
-        None
-        if device_type == "mps" and preselection.reason == "pseudo_euclidean_mps_cpu_matrix_exp"
-        else "cpu_transfer_route_not_required"
+    request = exp_execution_request(spec, device, dtype, output_layout, preselection)
+    return (default_registry() if registry is None else registry).select(
+        request,
+        policy,
+        DEFAULT_RESOURCE_LIMITS if limits is None else limits,
     )
-    matrix_forward = float(even_lanes) ** 3
-    matrix_peak = even_lanes * even_lanes * dtype_bytes
-    spectral_forward = float(preselection.nondegenerate_dim**3 + max(retained_planes, 1) * output_lanes)
-    spectral_peak = int(
-        dtype_bytes * (preselection.nondegenerate_dim**2 + max(retained_planes, 1) * max(output_lanes, 1))
-    )
-    available_rank = preselection.nondegenerate_dim // 2
-    spectral_truncated = retained_planes < available_rank or (
-        preselection.ideal_dim > 0 and preselection.nondegenerate_dim % 2 != 0
-    )
-    candidates = (
-        make("closed_simple", 8.0, 16.0, dtype_bytes * max(output_lanes, 2), 4.0, closed_simple_reason),
-        make(
-            "closed_biquadratic",
-            32.0,
-            64.0,
-            dtype_bytes * max(output_lanes, 4),
-            12.0,
-            closed_biquadratic_reason,
-        ),
-        make(
-            "spectral_local",
-            spectral_forward,
-            spectral_forward * 2.0,
-            spectral_peak,
-            float(preselection.nondegenerate_dim**2 + retained_planes),
-            spectral_reason,
-            exact=False,
-            truncated=spectral_truncated,
-            value_dependent=True,
-        ),
-        make(
-            "left_matrix_exp",
-            matrix_forward,
-            matrix_forward * 2.0,
-            matrix_peak,
-            float(even_lanes**2),
-            matrix_reason,
-        ),
-        make(
-            "cpu_matrix_exp",
-            matrix_forward,
-            matrix_forward * 2.0,
-            matrix_peak + output_lanes * dtype_bytes,
-            float(even_lanes**2),
-            cpu_matrix_reason,
-            requires_transfer=True,
-        ),
-    )
-    return select_policy_route(policy, candidates)
 
 
 def _spectral_local_buffers(

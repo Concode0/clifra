@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 
-from clifra.core._kernel.basis import expand_output_grades, operation_coefficient
+from clifra.core._kernel.basis import operation_coefficient
 from clifra.core._kernel.contracts import _check_contract_spec, canonical_values, resolve_contract
 from clifra.core._kernel.numerics import eps_like, signed_clamp_min
 from clifra.core.layout import GradeLayout
@@ -232,7 +234,7 @@ class VersorVectorMatrixExecutor(nn.Module):
 class FullSandwichActionExecutor(nn.Module):
     """Apply full-layout sandwich action matrices from static Cayley buffers."""
 
-    executor_family = "action_matrix"
+    route = "full_action_matrix"
     op = "sandwich_action"
 
     def __init__(
@@ -361,6 +363,18 @@ class FullSandwichActionExecutor(nn.Module):
         self.contract.validate(right, name="right")
 
 
+@dataclass(frozen=True)
+class ActionComponents:
+    rotor_layout: object
+    middle_layout: object
+    exponential: object
+    reverse: object
+    left_product: object
+    right_product: object
+    norm: object
+    involution: object
+
+
 class _VersorActionExecutor(nn.Module):
     """Shared execution setup for single and mixed versor actions."""
 
@@ -374,7 +388,8 @@ class _VersorActionExecutor(nn.Module):
         input_layout: GradeLayout,
         output_layout: GradeLayout,
         parameter_layout: GradeLayout,
-        execution_path: str,
+        route: str,
+        components: ActionComponents,
     ):
         super().__init__()
         self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
@@ -387,11 +402,11 @@ class _VersorActionExecutor(nn.Module):
         if self.grade not in {1, 2}:
             raise ValueError(f"planned {self.action_name} execution currently supports grade=1 and grade=2")
 
-        self.execution_path = str(execution_path)
-        if self.execution_path not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
-            raise ValueError(f"unsupported {self.action_name} action execution path {self.execution_path!r}")
-        self.use_full_action = self.execution_path == "full_action_matrix"
-        self.use_rotor_product_action = self.execution_path == "rotor_product"
+        self.route = str(route)
+        if self.route not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
+            raise ValueError(f"unsupported {self.action_name} action execution path {self.route!r}")
+        self.use_full_action = self.route == "full_action_matrix"
+        self.use_rotor_product_action = self.route == "rotor_product"
         self.action = None
         self.vector_matrix = None
         self.left_product = None
@@ -418,63 +433,31 @@ class _VersorActionExecutor(nn.Module):
                 dtype=getattr(algebra, "dtype", torch.float32),
                 device=getattr(algebra, "device", None),
             )
-        self._configure_versor_factor_plans(algebra)
-        if self.use_rotor_product_action:
-            self._configure_rotor_product_action(algebra)
+        self._configure_components(algebra, components)
 
-    def _configure_versor_factor_plans(self, algebra) -> None:
+    def _configure_components(self, algebra, components):
         self.full_dim = int(algebra.dim)
         self.eps_sq = float(algebra.eps_sq)
-        self.rotor_layout = (
-            self.parameter_layout.spec.layout(range(0, self.parameter_layout.spec.n + 1, 2))
-            if self.grade == 2 and (self.use_full_action or self.use_rotor_product_action)
-            else None
-        )
-        device = getattr(algebra, "device", None)
-        getattr(algebra, "dtype", torch.float32)
-
-        self.bivector_exp = None
-        self.rotor_reverse = None
-        self.parameter_signature_norm_squared = None
-        self.parameter_involution = None
-        self.parameter_reverse = None
-        self.register_buffer("rotor_full_indices", torch.empty(0, dtype=torch.long, device=device), persistent=False)
+        self.rotor_layout = components.rotor_layout
+        self.middle_layout = components.middle_layout
+        self.bivector_exp = components.exponential
+        self.rotor_reverse = components.reverse if self.grade == 2 else None
+        self.parameter_reverse = components.reverse if self.grade == 1 else None
+        self.parameter_signature_norm_squared = components.norm
+        self.parameter_involution = components.involution
+        self.left_product = components.left_product
+        self.right_product = components.right_product
         self.register_buffer(
-            "parameter_full_indices", torch.empty(0, dtype=torch.long, device=device), persistent=False
+            "rotor_full_indices",
+            _layout_indices(self.rotor_layout, device=algebra.device)
+            if self.rotor_layout is not None
+            else torch.empty(0, dtype=torch.long, device=algebra.device),
+            persistent=False,
         )
-
-        if not self.use_full_action and not self.use_rotor_product_action:
-            return
-        if self.grade == 2:
-            if self.rotor_layout is None:
-                raise RuntimeError("grade-2 rotor product actions require a rotor layout")
-            self.bivector_exp = algebra.plan_bivector_exp(input=self.parameter_layout, output=self.rotor_layout)
-            self.rotor_reverse = algebra.plan_unary(op="reverse", input=self.rotor_layout, output=self.rotor_layout)
-            if self.use_full_action:
-                self.rotor_full_indices = _layout_indices(self.rotor_layout, device=device)
-            return
-
-        self.parameter_signature_norm_squared = algebra.plan_signature_norm_squared(input=self.parameter_layout)
-        self.parameter_involution = algebra.plan_unary(
-            op="grade_involution", input=self.parameter_layout, output=self.parameter_layout
-        )
-        self.parameter_reverse = algebra.plan_unary(
-            op="reverse", input=self.parameter_layout, output=self.parameter_layout
-        )
-        self.parameter_full_indices = _layout_indices(self.parameter_layout, device=device)
-
-    def _configure_rotor_product_action(self, algebra) -> None:
-        getattr(algebra, "device", None)
-        getattr(algebra, "dtype", torch.float32)
-        middle_grades = expand_output_grades(
-            self.rotor_layout.grades, self.input_layout.grades, algebra.n, op="geometric_product"
-        )
-        self.middle_layout = algebra.layout(middle_grades)
-        self.left_product = algebra.plan_product(
-            op="geometric_product", left=self.rotor_layout, right=self.input_layout, output=self.middle_layout
-        )
-        self.right_product = algebra.plan_product(
-            op="geometric_product", left=self.middle_layout, right=self.rotor_layout, output=self.output_layout
+        self.register_buffer(
+            "parameter_full_indices",
+            _layout_indices(self.parameter_layout, device=algebra.device),
+            persistent=False,
         )
 
     def _planned_full_versor_factors(self, weights: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -569,7 +552,8 @@ class PairedBivectorActionExecutor(nn.Module):
         parameter_layout: GradeLayout,
         rotor_layout: GradeLayout,
         middle_layout: GradeLayout,
-        execution_path: str,
+        route: str,
+        components: ActionComponents,
     ):
         super().__init__()
         self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
@@ -589,10 +573,10 @@ class PairedBivectorActionExecutor(nn.Module):
         self.parameter_layout = parameter_layout
         self.rotor_layout = rotor_layout
         self.middle_layout = middle_layout
-        self.execution_path = str(execution_path)
-        if self.execution_path not in {"full_action_matrix", "paired_rotor_product"}:
-            raise ValueError(f"unsupported paired action execution path {self.execution_path!r}")
-        self.use_full_action = self.execution_path == "full_action_matrix"
+        self.route = str(route)
+        if self.route not in {"full_action_matrix", "paired_rotor_product"}:
+            raise ValueError(f"unsupported paired action execution path {self.route!r}")
+        self.use_full_action = self.route == "full_action_matrix"
         self.full_dim = int(algebra.dim)
         self.full_action = (
             FullSandwichActionExecutor.from_layout(
@@ -605,18 +589,11 @@ class PairedBivectorActionExecutor(nn.Module):
         )
         device = getattr(algebra, "device", None)
         getattr(algebra, "dtype", torch.float32)
-        self.bivector_exp = algebra.plan_bivector_exp(input=parameter_layout, output=rotor_layout)
-        self.rotor_reverse = algebra.plan_unary(op="reverse", input=rotor_layout, output=rotor_layout)
+        self.bivector_exp = components.exponential
+        self.rotor_reverse = components.reverse
         self.register_buffer("rotor_full_indices", _layout_indices(rotor_layout, device=device), persistent=False)
-        self.left_product = None
-        self.right_product = None
-        if not self.use_full_action:
-            self.left_product = algebra.plan_product(
-                op="geometric_product", left=rotor_layout, right=input_layout, output=middle_layout
-            )
-            self.right_product = algebra.plan_product(
-                op="geometric_product", left=middle_layout, right=rotor_layout, output=output_layout
-            )
+        self.left_product = components.left_product
+        self.right_product = components.right_product
 
     def forward(
         self,
@@ -792,3 +769,20 @@ def _validate_channels(contract, values, *, channels, name):
     if values.shape[-2] != channels:
         raise ValueError(f"{name}: expected {channels} channels, got {values.shape[-2]} (shape {tuple(values.shape)})")
     contract.validate(values, name=name)
+
+
+from clifra.core._kernel.planning.policy import environment_extensions
+
+
+def _action_extensions(algebra, *, input_layout, output_layout, parameter_layout, intermediate_lanes: int = 0):
+    device_type = getattr(getattr(algebra, "device", None), "type", str(getattr(algebra, "device", "cpu")))
+    dtype = getattr(algebra, "dtype", None)
+    dtype_bytes = 4 if dtype is None else torch.finfo(dtype).bits // 8
+    return {
+        **environment_extensions(algebra, device_type, dtype_bytes),
+        "layout.input_lanes": input_layout.dim,
+        "layout.output_lanes": output_layout.dim,
+        "action.parameter_lanes": parameter_layout.dim,
+        "action.intermediate_lanes": intermediate_lanes,
+        "action.full_lanes": algebra.dim,
+    }

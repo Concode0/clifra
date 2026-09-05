@@ -5,20 +5,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-
-import torch
+from dataclasses import dataclass, field
 
 from clifra.core._kernel.basis import expand_output_grades
 from clifra.core._kernel.contracts import _check_contract_spec
-from clifra.core._kernel.planning.policy import (
-    PlanCandidate,
-    PlanFacts,
-    compose_plan_facts,
-    environment_extensions,
-    select_policy_route,
-)
-from clifra.core._kernel.planning.product import select_product_route
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import TensorContract
 
@@ -64,7 +54,7 @@ class VersorActionPlan:
     input_layout: GradeLayout
     output_layout: GradeLayout
     parameter_layout: GradeLayout
-    execution_path: str
+    route: str
     input_contract: TensorContract = field(init=False, repr=False)
     output_contract: TensorContract = field(init=False, repr=False)
     parameter_contract: TensorContract = field(init=False, repr=False)
@@ -87,7 +77,7 @@ class PairedBivectorActionPlan:
     parameter_layout: GradeLayout
     rotor_layout: GradeLayout
     middle_layout: GradeLayout
-    execution_path: str
+    route: str
     input_contract: TensorContract = field(init=False, repr=False)
     output_contract: TensorContract = field(init=False, repr=False)
     parameter_contract: TensorContract = field(init=False, repr=False)
@@ -152,7 +142,7 @@ def build_versor_action_plan(
         input_layout=input_layout,
         output_layout=output_layout,
         parameter_layout=parameter_layout,
-        execution_path=decision.route,
+        route=decision.route,
     )
 
 
@@ -199,205 +189,20 @@ def build_paired_bivector_action_plan(
         parameter_layout=parameter_layout,
         rotor_layout=rotor_layout,
         middle_layout=middle_layout,
-        execution_path=decision.route,
+        route=decision.route,
     )
 
 
-def _action_extensions(algebra, *, input_layout, output_layout, parameter_layout, intermediate_lanes: int = 0):
-    device_type = getattr(getattr(algebra, "device", None), "type", str(getattr(algebra, "device", "cpu")))
-    dtype = getattr(algebra, "dtype", None)
-    dtype_bytes = 4 if dtype is None else torch.finfo(dtype).bits // 8
-    return {
-        **environment_extensions(algebra, device_type, dtype_bytes),
-        "layout.input_lanes": input_layout.dim,
-        "layout.output_lanes": output_layout.dim,
-        "action.parameter_lanes": parameter_layout.dim,
-        "action.intermediate_lanes": intermediate_lanes,
-        "action.full_lanes": algebra.dim,
-    }
+def _select_versor_action_route(algebra, **parameters):
+    return _select_action_route(algebra, "versor", parameters)
 
 
-def _select_versor_action_route(algebra, *, grade, input_layout, output_layout, parameter_layout):
-    full = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
-    vector_to_vector = input_layout.grades == (1,) and output_layout.grades == (1,)
-    dtype_bytes = torch.finfo(algebra.dtype).bits // 8
-    matrix_work = float(algebra.n**3 + input_layout.dim * output_layout.dim)
-    rotor_facts = PlanFacts()
-    exp_facts = PlanFacts()
-    rotor_intermediate_lanes = max(input_layout.dim, output_layout.dim)
-    if grade == 2:
-        spec = AlgebraSpec.from_algebra(algebra)
-        rotor_layout = spec.layout(range(0, algebra.n + 1, 2))
-        middle_layout = spec.layout(
-            expand_output_grades(rotor_layout.grades, input_layout.grades, algebra.n, op="geometric_product")
-        )
-        exp_facts = _bivector_exp_facts(algebra, rotor_layout)
-        left_facts = _product_facts(algebra, rotor_layout, input_layout, middle_layout)
-        right_facts = _product_facts(algebra, middle_layout, rotor_layout, output_layout)
-        rotor_facts = compose_plan_facts(
-            exp_facts,
-            left_facts,
-            right_facts,
-            peak_bytes=(rotor_layout.dim + middle_layout.dim + output_layout.dim) * dtype_bytes,
-        )
-        rotor_intermediate_lanes = middle_layout.dim
-    full_action_facts = _full_action_facts(algebra, exp_facts, 1, dtype_bytes)
-    candidates = (
-        _action_candidate(
-            algebra,
-            "vector_matrix",
-            PlanFacts(matrix_work, matrix_work * 2, algebra.n**2 * dtype_bytes, algebra.n**2),
-            input_layout,
-            output_layout,
-            parameter_layout,
-            algebra.n * algebra.n,
-            None if grade == 1 or vector_to_vector else "vector_matrix_domain",
-        ),
-        _action_candidate(
-            algebra,
-            "rotor_product",
-            rotor_facts,
-            input_layout,
-            output_layout,
-            parameter_layout,
-            rotor_intermediate_lanes,
-            None if grade == 2 else "rotor_product_requires_bivector_parameter",
-        ),
-        _action_candidate(
-            algebra,
-            "full_action_matrix",
-            full_action_facts,
-            input_layout,
-            output_layout,
-            parameter_layout,
-            algebra.dim * algebra.dim,
-            None if full else "requires_full_input_and_output",
-        ),
-    )
-    return select_policy_route(algebra._planning_policy, candidates)
+def _select_paired_action_route(algebra, **parameters):
+    return _select_action_route(algebra, "paired", parameters)
 
 
-def _select_paired_action_route(
-    algebra,
-    *,
-    input_layout,
-    output_layout,
-    parameter_layout,
-    rotor_layout,
-    middle_layout,
-):
-    full = input_layout.dim == algebra.dim and output_layout.dim == algebra.dim
-    dtype_bytes = torch.finfo(algebra.dtype).bits // 8
-    exp_facts = _bivector_exp_facts(algebra, rotor_layout)
-    left_facts = _product_facts(algebra, rotor_layout, input_layout, middle_layout)
-    right_facts = _product_facts(algebra, middle_layout, rotor_layout, output_layout)
-    paired_facts = compose_plan_facts(
-        exp_facts,
-        exp_facts,
-        left_facts,
-        right_facts,
-        peak_bytes=(2 * rotor_layout.dim + middle_layout.dim + output_layout.dim) * dtype_bytes,
-    )
-    full_action_facts = _full_action_facts(algebra, exp_facts, 2, dtype_bytes)
-    candidates = (
-        _action_candidate(
-            algebra,
-            "full_action_matrix",
-            full_action_facts,
-            input_layout,
-            output_layout,
-            parameter_layout,
-            algebra.dim * algebra.dim,
-            None if full else "requires_full_input_and_output",
-        ),
-        _action_candidate(
-            algebra,
-            "paired_rotor_product",
-            paired_facts,
-            input_layout,
-            output_layout,
-            parameter_layout,
-            middle_layout.dim,
-            None,
-        ),
-    )
-    return select_policy_route(algebra._planning_policy, candidates)
+def _select_action_route(algebra, operation, parameters):
+    from clifra.core._kernel.execution.providers import action_execution_request
 
-
-def _full_action_facts(algebra, exp_facts: PlanFacts, exp_count: int, dtype_bytes: int) -> PlanFacts:
-    matrix_elements = algebra.dim**2
-    matrix = PlanFacts(
-        float(matrix_elements), float(2 * matrix_elements), matrix_elements * dtype_bytes, matrix_elements
-    )
-    return compose_plan_facts(
-        *((exp_facts,) * exp_count),
-        matrix,
-        peak_bytes=(matrix_elements + 2 * exp_count * algebra.dim) * dtype_bytes,
-    )
-
-
-def _product_facts(algebra, left_layout, right_layout, output_layout) -> PlanFacts:
-    decision = select_product_route(
-        algebra,
-        op="geometric_product",
-        left_layout=left_layout,
-        right_layout=right_layout,
-        output_layout=output_layout,
-        dtype=algebra.dtype,
-        device=algebra.device,
-    )
-    return decision.facts
-
-
-def _bivector_exp_facts(algebra, output_layout) -> PlanFacts:
-    from clifra.core._kernel.planning.exp import select_bivector_exp_route, spectral_exp_preselection
-
-    options = algebra._bivector_exp_options
-    preselection = spectral_exp_preselection(
-        AlgebraSpec.from_algebra(algebra),
-        algebra.device,
-        dtype=algebra.dtype,
-        max_planes=options.spectral_max_planes,
-        tol_abs=options.spectral_tol_abs,
-        tol_rel=options.spectral_tol_rel,
-        dominant_rel=options.spectral_dominant_rel,
-        allow_degenerate=options.spectral_allow_degenerate,
-        allow_truncated_degenerate=options.spectral_allow_truncated_degenerate,
-    )
-    decision = select_bivector_exp_route(
-        AlgebraSpec.from_algebra(algebra),
-        algebra.device,
-        dtype=algebra.dtype,
-        output_layout=output_layout,
-        preselection=preselection,
-        policy=algebra._planning_policy,
-    )
-    return decision.facts
-
-
-def _action_candidate(
-    algebra,
-    route: str,
-    facts: PlanFacts,
-    input_layout,
-    output_layout,
-    parameter_layout,
-    intermediate_lanes: int,
-    unavailable_reason: str | None,
-) -> PlanCandidate:
-    extensions = {
-        **dict(facts.extensions),
-        **_action_extensions(
-            algebra,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            parameter_layout=parameter_layout,
-            intermediate_lanes=intermediate_lanes,
-        ),
-    }
-    return PlanCandidate(
-        "action",
-        route,
-        replace(facts, extensions=extensions),
-        unavailable_reason,
-    )
+    request = action_execution_request(algebra, operation, **parameters)
+    return algebra._planner.registry.select(request, algebra._planner.policy, algebra._planner.limits)

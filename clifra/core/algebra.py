@@ -275,23 +275,18 @@ class AlgebraContext:
 
     def plan_versor_action(self, *, grade, input=None, parameter=None, output=None):
         """Plan reflection (grade 1) or exp(-B/2) rotor action (grade 2)."""
-        from ._kernel.execution.action import VersorActionExecutor
 
         input = self._contract(input)
         parameter = self._contract(parameter)
         if parameter.grades != (grade,):
             raise ValueError("versor parameter must explicitly declare its parameter grade")
         output = self._contract(output, default=input.layout)
-        plan = self._planner.versor_action_plan(
-            grade=grade, input_layout=input.layout, parameter_layout=parameter.layout, output_layout=output.layout
-        )
-        kernel = VersorActionExecutor(
-            self,
+        kernel = self._planner.action_executor(
+            "versor",
             grade=grade,
             input_layout=input.layout,
             parameter_layout=parameter.layout,
             output_layout=output.layout,
-            execution_path=plan.execution_path,
         )
         return PlannedOperation(kernel, (input, parameter), output)
 
@@ -359,12 +354,15 @@ class AlgebraContext:
 
     def plan_linear_action(self, *, input=None, output=None):
         """Plan induced action of [channels, n, n] matrices on [..., channels, lanes]."""
-        from ._kernel.execution.action import GradedLinearActionExecutor
 
         input = self._contract(input)
         output = self._contract(output, default=input.layout)
         self._planner.linear_action_plan(input_layout=input.layout, output_layout=output.layout)
-        kernel = GradedLinearActionExecutor(input_layout=input.layout, output_layout=output.layout)
+        kernel = self._planner.action_executor(
+            "linear",
+            input_layout=input.layout,
+            output_layout=output.layout,
+        )
         return PlannedOperation(kernel, (input, None), output)
 
     def linear_action(self, values, matrix, *, input=None, output=None):

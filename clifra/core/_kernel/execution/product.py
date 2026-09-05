@@ -21,7 +21,7 @@ class GradeProductExecutor(nn.Module):
 
     def __init__(self, plan: GradeProductPlan):
         super().__init__()
-        self.executor_family = "sparse"
+        self.route = "sparse"
         self.p = plan.p
         self.q = plan.q
         self.r = plan.r
@@ -175,7 +175,7 @@ class FullTableProductExecutor(nn.Module):
 
     def __init__(self, plan: FullTableProductPlan):
         super().__init__()
-        self.executor_family = "full_table"
+        self.route = "full_table"
         self.p = plan.p
         self.q = plan.q
         self.r = plan.r
@@ -234,3 +234,75 @@ class FullTableProductExecutor(nn.Module):
 
 
 __all__ = ["FullTableProductExecutor", "GradeProductExecutor"]
+
+
+def assess_product_routes(
+    algebra,
+    *,
+    op: str,
+    left_layout,
+    right_layout,
+    output_layout,
+    dtype: torch.dtype,
+    device,
+):
+    """Declare product capabilities and conservative costs without execution buffers."""
+    from clifra.core._kernel.planning.policy import PlanCandidate, PlanFacts, environment_extensions
+    from clifra.core._kernel.planning.resources import ResourceRequirements
+    from clifra.core._kernel.planning.tree import build_grade_plan_tree
+
+    tree = build_grade_plan_tree(
+        left_layout.spec,
+        op=op,
+        left_grades=left_layout.grades,
+        right_grades=right_layout.grades,
+        output_grades=output_layout.grades,
+    )
+    backend = _device_backend(device)
+    dtype_bytes = torch.finfo(dtype).bits // 8
+    full_table_pairs = left_layout.dim * right_layout.dim
+    sparse_pairs = tree.estimated_pairs
+    full_table_bytes = full_table_pairs * (8 + dtype_bytes)
+    sparse_bytes = sparse_pairs * (24 + dtype_bytes)
+    full_grades = tuple(range(left_layout.spec.n + 1))
+    full_table_supported = (
+        left_layout.grades == full_grades and right_layout.grades == full_grades and output_layout.grades == full_grades
+    )
+
+    def candidate(route: str, pair_count: int, peak_bytes: int, unavailable_reason=None) -> PlanCandidate:
+        extensions = {
+            **environment_extensions(left_layout.spec, backend, dtype_bytes),
+            "layout.left_lanes": left_layout.dim,
+            "layout.right_lanes": right_layout.dim,
+            "layout.output_lanes": output_layout.dim,
+        }
+        return PlanCandidate(
+            "product",
+            route,
+            PlanFacts(
+                forward_work=pair_count,
+                backward_work=pair_count * 2,
+                peak_bytes=peak_bytes,
+                compile_work=tree.path_count,
+                extensions=extensions,
+                resources=ResourceRequirements(max(left_layout.dim, right_layout.dim, output_layout.dim), pair_count),
+            ),
+            unavailable_reason,
+        )
+
+    return (
+        candidate(
+            "full_table",
+            full_table_pairs,
+            full_table_bytes,
+            None if full_table_supported else "requires_canonical_full_layouts",
+        ),
+        candidate("sparse", sparse_pairs, sparse_bytes),
+    )
+
+
+def _device_backend(device) -> str:
+    if device is None:
+        return "cpu"
+    device_type = torch.device(device).type
+    return device_type if device_type in {"cpu", "mps"} else "other"

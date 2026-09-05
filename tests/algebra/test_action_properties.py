@@ -3,14 +3,11 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
 import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY, FormulaPolicy, Polynomial
 from clifra.core.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
     CORE_NUMERIC_SETTINGS,
@@ -18,18 +15,14 @@ from tests.helpers.hypothesis_cases import (
     signature_strategy,
     tensor_with_shape,
 )
+from tests.helpers.policy import PreferRoute
 from tests.helpers.small_oracle import SmallCliffordOracle
 
 pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 
-def _force_action_route(route: str) -> FormulaPolicy:
-    return FormulaPolicy(
-        tuple(
-            replace(rule, score=Polynomial(constant=-100.0)) if (rule.family, rule.route) == ("action", route) else rule
-            for rule in DEFAULT_PLANNING_POLICY.rules
-        )
-    )
+def _force_action_route(route: str):
+    return PreferRoute("action", route)
 
 
 def _rotor_action_reference(algebra, oracle, values, weights, layout):
@@ -60,10 +53,13 @@ def test_full_sandwich_execution_modes_match_independent_products(signature, dat
     expected_channels = oracle.product(oracle.product(channel_left, values), channel_right)
 
     assert torch.allclose(
-        specialized.sandwich_product(algebra, batch_left, values, batch_right), expected_batch, atol=1e-10, rtol=1e-10
+        action_helpers.sandwich_product(algebra, batch_left, values, batch_right),
+        expected_batch,
+        atol=1e-10,
+        rtol=1e-10,
     )
     assert torch.allclose(
-        specialized.per_channel_sandwich(algebra, channel_left, values, channel_right),
+        action_helpers.per_channel_sandwich(algebra, channel_left, values, channel_right),
         expected_channels,
         atol=1e-10,
         rtol=1e-10,
@@ -84,7 +80,7 @@ def test_forced_compact_versor_action_routes_match_independent_products(route, s
     weights = 0.1 * data.draw(tensor_with_shape((channels, algebra.layout((2,)).dim)))
     action = algebra.plan_versor_action(grade=2, input=layout, output=layout, parameter=algebra.layout((2,)))
 
-    assert action._kernel.execution_path == route
+    assert action._kernel.route == route
     assert torch.allclose(
         action(values, weights), _rotor_action_reference(algebra, oracle, values, weights, layout), atol=1e-9, rtol=1e-9
     )
@@ -104,7 +100,7 @@ def test_forced_full_versor_action_routes_match_independent_products(route, sign
     weights = 0.1 * data.draw(tensor_with_shape((channels, algebra.layout((2,)).dim)))
     action = algebra.plan_versor_action(grade=2, input=layout, output=layout, parameter=algebra.layout((2,)))
 
-    assert action._kernel.execution_path == route
+    assert action._kernel.route == route
     assert torch.allclose(
         action(values, weights), _rotor_action_reference(algebra, oracle, values, weights, layout), atol=1e-9, rtol=1e-9
     )
@@ -127,7 +123,7 @@ def test_forced_paired_action_routes_match_independent_products(route, signature
     left_weights = 0.1 * data.draw(tensor_with_shape((pairs, parameter_layout.dim)))
     right_weights = 0.1 * data.draw(tensor_with_shape((pairs, parameter_layout.dim)))
     channel_to_pair = torch.tensor([index % pairs for index in range(channels)], dtype=torch.long)
-    action = specialized.plan_paired_bivector_action(
+    action = action_helpers.plan_paired_bivector_action(
         algebra, input_layout=layout, output_layout=layout, parameter_layout=parameter_layout
     )
     left = rotor_layout.full(algebra.bivector_exp(-0.5 * left_weights, input=parameter_layout, output=rotor_layout))
@@ -142,9 +138,9 @@ def test_forced_paired_action_routes_match_independent_products(route, signature
         dim=1,
     )
 
-    assert action.execution_path == route
+    assert action.route == route
     assert torch.allclose(action(values, left_weights, right_weights, channel_to_pair), expected, atol=1e-9, rtol=1e-9)
 
 
-from clifra.core._kernel import specialized
 from clifra.core._kernel.configuration import configured_algebra
+from tests.helpers import action as action_helpers

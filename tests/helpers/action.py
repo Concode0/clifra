@@ -1,8 +1,6 @@
-"""Private model-shaped kernels retained for numerical regression and benchmarks."""
+"""Test-only compositions for historical action regression cases."""
 
 from clifra.core._kernel.contracts import resolve_contract
-
-from .execution.action import MultiVersorActionExecutor, PairedBivectorActionExecutor
 
 
 def plan_versor_action(algebra, *, grade, input_layout=None, output_layout=None, parameter_layout=None):
@@ -34,16 +32,12 @@ def plan_multi_versor_action(
     parameter = resolve_contract(
         algebra, layout=parameter_layout or algebra.layout((grade,)), name="parameter_layout"
     ).layout
-    plan = algebra._planner.versor_action_plan(
-        grade=grade, input_layout=inputs, output_layout=output, parameter_layout=parameter
-    )
-    return MultiVersorActionExecutor(
-        algebra,
+    return algebra._planner.action_executor(
+        "multi",
         grade=grade,
         input_layout=inputs,
         output_layout=output,
         parameter_layout=parameter,
-        execution_path=plan.execution_path,
     )
 
 
@@ -63,14 +57,13 @@ def plan_paired_bivector_action(
     plan = algebra._planner.paired_bivector_action_plan(
         input_layout=inputs, output_layout=output, parameter_layout=parameter
     )
-    return PairedBivectorActionExecutor(
-        algebra,
+    return algebra._planner.action_executor(
+        "paired",
         input_layout=plan.input_layout,
         output_layout=plan.output_layout,
         parameter_layout=plan.parameter_layout,
         rotor_layout=plan.rotor_layout,
         middle_layout=plan.middle_layout,
-        execution_path=plan.execution_path,
     )
 
 

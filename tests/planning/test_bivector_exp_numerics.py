@@ -12,22 +12,14 @@ from clifra.core._kernel.execution.exp import (
     _spectral_local_sinc_impl,
     _symmetric_eigh_diagonal_perturbation,
 )
-from clifra.core._kernel.planning.policy import FormulaPolicy, Polynomial, RouteRule
 from clifra.core.algebra import AlgebraContext
 from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
+from tests.helpers.policy import PreferRoute
 
 pytestmark = pytest.mark.unit
 
 DEVICE = "cpu"
-FORCE_SPECTRAL_POLICY = FormulaPolicy(
-    rules=(
-        RouteRule("bivector_exp", "closed_simple"),
-        RouteRule("bivector_exp", "closed_biquadratic"),
-        RouteRule("bivector_exp", "spectral_local", score=Polynomial(constant=-1.0)),
-        RouteRule("bivector_exp", "left_matrix_exp"),
-        RouteRule("bivector_exp", "cpu_matrix_exp", score=Polynomial(constant=1.0)),
-    )
-)
+FORCE_SPECTRAL_POLICY = PreferRoute("bivector_exp", "spectral_local")
 
 
 def _mps_available() -> bool:
@@ -86,7 +78,7 @@ def test_bivector_exp_closed_biquadratic_matches_cpu_reference(signature):
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "closed_biquadratic"
+    assert executor.route == "closed_biquadratic"
     assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
 
 
@@ -450,7 +442,7 @@ def test_bivector_exp_spectral_local_matches_cpu_reference_with_low_transition(s
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.spectral_max_planes == (algebra.p + algebra.q) // 2
     assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
 
@@ -477,7 +469,7 @@ def test_bivector_exp_meso_cpu_defaults_to_matrix_exp_reference():
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "left_matrix_exp"
+    assert executor.route == "left_matrix_exp"
     assert torch.allclose(executor(values), expected, atol=1e-10, rtol=1e-10)
 
 
@@ -507,7 +499,7 @@ def test_bivector_exp_spectral_local_degenerate_block_matches_cpu_reference(sign
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.ideal_dim == algebra.r
     assert executor.spectral_local_axis_count == algebra.n
     assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
@@ -531,7 +523,7 @@ def test_bivector_exp_spectral_local_degenerate_block_handles_pure_mixed_kernel(
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert torch.allclose(executor(values), expected, atol=1e-12, rtol=1e-12)
 
 
@@ -552,7 +544,7 @@ def test_bivector_exp_spectral_local_degenerate_block_keeps_r4_ideal_square_term
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert torch.allclose(executor(values), expected, atol=1e-12, rtol=1e-12)
 
 
@@ -585,7 +577,7 @@ def test_bivector_exp_spectral_local_truncates_odd_degenerate_kernel():
         output_layout=output_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.spectral_max_planes == 2
     assert executor.spectral_local_axis_count == 5
     assert torch.allclose(executor(values), expected, atol=1e-12, rtol=1e-12)
@@ -627,7 +619,7 @@ def test_bivector_exp_spectral_local_truncates_uncovered_degenerate_rank():
         output_layout=output_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.spectral_max_planes == 4
     assert executor.spectral_local_axis_count == 9
     assert torch.allclose(executor(values), expected, atol=1e-12, rtol=1e-12)
@@ -653,7 +645,7 @@ def test_bivector_exp_spectral_local_uses_cl8_kernel_for_four_planes():
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.spectral_max_planes == 4
     assert executor.spectral_local_product_table.shape == (128, 128, 128)
     assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
@@ -681,7 +673,7 @@ def test_bivector_exp_spectral_local_explicit_cap_matches_when_tail_is_zero():
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert torch.allclose(executor(values), expected, atol=1e-10, rtol=1e-10)
 
 
@@ -759,7 +751,7 @@ def test_bivector_exp_spectral_local_handles_repeated_rotated_angles():
         output_layout=even_layout,
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
 
 
@@ -794,7 +786,7 @@ def test_bivector_exp_spectral_local_repeated_angle_gradient_is_filtered_finite(
     )
     (actual * weights).sum().backward()
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.left_product is None
     assert torch.allclose(actual.detach(), expected, atol=1e-10, rtol=1e-10)
     assert torch.isfinite(values.grad).all()
@@ -954,7 +946,7 @@ def test_bivector_exp_spectral_local_compiles_fullgraph_with_aot_eager():
     )
     actual = compiled(values)
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
@@ -984,7 +976,7 @@ def test_bivector_exp_spectral_local_degenerate_compiles_fullgraph_with_aot_eage
     )
     actual = compiled(values)
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.ideal_dim == 1
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
@@ -1016,7 +1008,7 @@ def test_mps_closed_biquadratic_bivector_exp_executor_compiles_fullgraph():
     )
     actual = compiled(values)
 
-    assert executor.executor_family == "closed_biquadratic"
+    assert executor.route == "closed_biquadratic"
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 

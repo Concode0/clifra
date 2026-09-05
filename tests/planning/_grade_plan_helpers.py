@@ -20,11 +20,6 @@ from clifra.core._kernel.execution.permutation import PseudoscalarProductExecuto
 from clifra.core._kernel.execution.product import FullTableProductExecutor, GradeProductExecutor
 from clifra.core._kernel.planning.layouts import build_product_request
 from clifra.core._kernel.planning.planner import GradePlanner
-from clifra.core._kernel.planning.policy import (
-    FormulaPolicy,
-    Polynomial,
-    RouteRule,
-)
 from clifra.core._kernel.planning.product import build_grade_product_plan, select_product_route
 from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core._kernel.planning.tree import build_grade_plan_tree
@@ -34,6 +29,7 @@ from clifra.core.config import make_algebra
 from clifra.core.layout import AlgebraSpec
 from clifra.core.operation import PlannedOperation
 from clifra.core.tensors import LaneStorage
+from tests.helpers.policy import PreferRoute
 from tests.helpers.small_oracle import SmallCliffordOracle
 
 DEVICE = "cpu"

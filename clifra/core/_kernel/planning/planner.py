@@ -24,13 +24,9 @@ from clifra.core._kernel.planning.action import (
     build_paired_bivector_action_plan,
     build_versor_action_plan,
 )
-from clifra.core._kernel.planning.exp import DEFAULT_BIVECTOR_EXP_OPTIONS, build_bivector_exp_plan
+from clifra.core._kernel.planning.exp import DEFAULT_BIVECTOR_EXP_OPTIONS
 from clifra.core._kernel.planning.layouts import ProductRequest, build_product_request
-from clifra.core._kernel.planning.metric import build_signature_norm_squared_plan
-from clifra.core._kernel.planning.permutation import build_pseudoscalar_product_plan
 from clifra.core._kernel.planning.product import (
-    build_full_table_product_plan_from_request,
-    build_grade_product_plan_from_request,
     select_product_route,
 )
 from clifra.core._kernel.planning.resources import (
@@ -42,7 +38,6 @@ from clifra.core._kernel.planning.resources import (
 from clifra.core._kernel.planning.tree import build_grade_plan_tree
 from clifra.core._kernel.planning.unary import (
     UnaryRequest,
-    build_unary_plan_from_request,
     build_unary_request,
 )
 from clifra.core.layout import AlgebraSpec, GradeLayout
@@ -59,6 +54,11 @@ class GradePlanner:
     def __init__(self, algebra):
         self.algebra = algebra
         self.spec = AlgebraSpec.from_algebra(algebra)
+        from clifra.core._kernel.execution.registry import default_registry
+
+        self.registry = default_registry()
+        self.policy = algebra._planning_policy
+        self.limits = algebra._resource_limits
         self._product_executors = {}
         self._unary_executors = {}
         self._signature_norm_squared_executors = {}
@@ -132,14 +132,14 @@ class GradePlanner:
         executor = self._product_executors.get(key) if cache else None
         if executor is not None:
             return executor
-        family = self._product_executor_family(request)
         if executor is None:
-            if family == "full_table":
-                plan = build_full_table_product_plan_from_request(request)
-                executor = FullTableProductExecutor(plan)
-            else:
-                plan = build_grade_product_plan_from_request(request)
-                executor = GradeProductExecutor(plan)
+            from clifra.core._kernel.execution.providers import product_execution_request
+
+            executor = self.registry.execute_plan(
+                product_execution_request(self.algebra, request),
+                self.policy,
+                self.limits,
+            )
             if cache:
                 self._product_executors[key] = executor
         return executor
@@ -247,8 +247,15 @@ class GradePlanner:
         key = request.cache_key
         executor = self._unary_executors.get(key) if cache else None
         if executor is None:
-            plan = build_unary_plan_from_request(request)
-            executor = GradeUnaryExecutor(plan)
+            executor = self._single_executor(
+                "unary",
+                request.op,
+                request.input_layout,
+                request.output_layout,
+                request.dtype,
+                request.device,
+                declaration=request,
+            )
             if cache:
                 self._unary_executors[key] = executor
         return executor
@@ -273,13 +280,14 @@ class GradePlanner:
         )
         executor = self._signature_norm_squared_executors.get(key) if cache else None
         if executor is None:
-            plan = build_signature_norm_squared_plan(
-                self.spec,
-                input_layout=input_layout,
-                dtype=dtype,
-                device=resolved_device,
+            executor = self._single_executor(
+                "metric",
+                "signature_norm_squared",
+                input_layout,
+                self.spec.layout((0,)),
+                dtype,
+                resolved_device,
             )
-            executor = SignatureNormSquaredExecutor(plan)
             if cache:
                 self._signature_norm_squared_executors[key] = executor
         return executor
@@ -309,14 +317,14 @@ class GradePlanner:
         )
         executor = self._pseudoscalar_product_executors.get(key) if cache else None
         if executor is None:
-            plan = build_pseudoscalar_product_plan(
-                self.spec,
-                input_layout=input_layout,
-                output_layout=output_layout,
-                dtype=dtype,
-                device=resolved_device,
+            executor = self._single_executor(
+                "permutation",
+                "pseudoscalar_product",
+                input_layout,
+                output_layout,
+                dtype,
+                resolved_device,
             )
-            executor = PseudoscalarProductExecutor(plan)
             if cache:
                 self._pseudoscalar_product_executors[key] = executor
         return executor
@@ -394,103 +402,41 @@ class GradePlanner:
         executor = self._bivector_exp_executors.get(key) if cache else None
         if executor is not None:
             return executor
-        plan = build_bivector_exp_plan(
-            self.spec,
-            input_layout=input_layout,
-            output_layout=output_layout,
-            dtype=dtype,
-            device=resolved_device,
+        from clifra.core._kernel.execution.providers import exp_execution_request
+        from clifra.core._kernel.planning.exp import BivectorExpOptions, spectral_exp_preselection
+
+        options = BivectorExpOptions(
             spectral_max_planes=None if full_rank_planes == 0 else resolved_spectral_max_planes,
             spectral_tol_abs=resolved_spectral_tol_abs,
             spectral_tol_rel=resolved_spectral_tol_rel,
             spectral_dominant_rel=resolved_spectral_dominant_rel,
             spectral_allow_degenerate=resolved_spectral_allow_degenerate,
             spectral_allow_truncated_degenerate=resolved_spectral_allow_truncated_degenerate,
-            planning_policy=self.algebra._planning_policy,
         )
-        key = (
+        preselection = spectral_exp_preselection(
             self.spec,
-            str(resolved_device),
-            str(dtype),
-            "bivector_exp",
-            plan.spectral_max_planes,
-            plan.spectral_tol_abs,
-            plan.spectral_tol_rel,
-            plan.spectral_dominant_rel,
-            plan.spectral_allow_degenerate,
-            plan.spectral_allow_truncated_degenerate,
-            input_layout.grades,
-            output_layout.grades,
+            resolved_device,
+            dtype=dtype,
+            max_planes=options.spectral_max_planes,
+            tol_abs=options.spectral_tol_abs,
+            tol_rel=options.spectral_tol_rel,
+            dominant_rel=options.spectral_dominant_rel,
+            allow_degenerate=options.spectral_allow_degenerate,
+            allow_truncated_degenerate=options.spectral_allow_truncated_degenerate,
         )
-        executor = self._bivector_exp_executors.get(key) if cache else None
-        if executor is None:
-            left_product = None
-            bivector_wedge = None
-            grade4_square = None
-            bivector_grade4_product = None
-            if plan.executor_family in {"left_matrix_exp", "cpu_matrix_exp"}:
-                product_device = torch.device("cpu") if plan.executor_family == "cpu_matrix_exp" else resolved_device
-                left_product = self.product_executor(
-                    ProductRequest.compact(
-                        self.spec,
-                        op="geometric_product",
-                        left_layout=plan.input_layout,
-                        right_layout=plan.operator_layout,
-                        output_layout=plan.operator_layout,
-                        dtype=dtype,
-                        device=product_device,
-                    ),
-                    cache=cache,
-                )
-            elif plan.executor_family == "closed_biquadratic":
-                if plan.grade4_layout is None:
-                    raise RuntimeError("closed_biquadratic bivector exp requires a grade-4 layout")
-                scalar_layout = self.spec.layout((0,))
-                bivector_wedge = self.product_executor(
-                    ProductRequest.compact(
-                        self.spec,
-                        op="wedge",
-                        left_layout=plan.input_layout,
-                        right_layout=plan.input_layout,
-                        output_layout=plan.grade4_layout,
-                        dtype=dtype,
-                        device=resolved_device,
-                    ),
-                    cache=cache,
-                )
-                grade4_square = self.product_executor(
-                    ProductRequest.compact(
-                        self.spec,
-                        op="geometric_product",
-                        left_layout=plan.grade4_layout,
-                        right_layout=plan.grade4_layout,
-                        output_layout=scalar_layout,
-                        dtype=dtype,
-                        device=resolved_device,
-                    ),
-                    cache=cache,
-                )
-                bivector_grade4_product = self.product_executor(
-                    ProductRequest.compact(
-                        self.spec,
-                        op="geometric_product",
-                        left_layout=plan.input_layout,
-                        right_layout=plan.grade4_layout,
-                        output_layout=plan.output_layout,
-                        dtype=dtype,
-                        device=resolved_device,
-                    ),
-                    cache=cache,
-                )
-            executor = BivectorExpExecutor(
-                plan,
-                left_product,
-                bivector_wedge=bivector_wedge,
-                grade4_square=grade4_square,
-                bivector_grade4_product=bivector_grade4_product,
-            )
-            if cache:
-                self._bivector_exp_executors[key] = executor
+        request = exp_execution_request(
+            self.spec,
+            resolved_device,
+            dtype,
+            output_layout,
+            preselection,
+            planner=self,
+            options=options,
+            cache=cache,
+        )
+        executor = self.registry.execute_plan(request, self.policy, self.limits)
+        if cache:
+            self._bivector_exp_executors[key] = executor
         return executor
 
     def full_sandwich_action_executor(
@@ -516,7 +462,13 @@ class GradePlanner:
         )
         executor = self._full_sandwich_action_executors.get(key) if cache else None
         if executor is None:
-            executor = FullSandwichActionExecutor.from_layout(layout, device=resolved_device, dtype=dtype)
+            from dataclasses import replace
+
+            from clifra.core._kernel.execution.providers import action_execution_request
+
+            request = action_execution_request(self.algebra, "sandwich", input_layout=layout)
+            request = replace(request, dtype=dtype, device=resolved_device)
+            executor = self.registry.execute_plan(request, self.policy, self.limits)
             if cache:
                 self._full_sandwich_action_executors[key] = executor
         return executor
@@ -596,6 +548,27 @@ class GradePlanner:
             )
             self._paired_bivector_action_plans[key] = plan
         return plan
+
+    def _single_executor(self, family, operation, inputs, output, dtype, device, declaration=None):
+        from clifra.core._kernel.execution.interface import ExecutorRequest
+        from clifra.core._kernel.execution.providers import UnaryExecutionRequest
+
+        arguments = (
+            family,
+            operation,
+            (TensorContract.compact(inputs),),
+            TensorContract.compact(output),
+            dtype,
+            device,
+        )
+        request = UnaryExecutionRequest(*arguments, declaration) if family == "unary" else ExecutorRequest(*arguments)
+        return self.registry.execute_plan(request, self.policy, self.limits)
+
+    def action_executor(self, operation, **parameters):
+        from clifra.core._kernel.execution.providers import action_execution_request
+
+        request = action_execution_request(self.algebra, operation, **parameters)
+        return self.registry.execute_plan(request, self.policy, self.limits)
 
     def _product_request_cache_key(self, request: ProductRequest) -> tuple[object, ...]:
         return (

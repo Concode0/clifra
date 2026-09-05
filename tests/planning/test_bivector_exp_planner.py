@@ -135,7 +135,7 @@ def test_planner_bivector_exp_executor_outputs_match_cpu_oracle_for_layouts():
 
     assert isinstance(compact_executor, BivectorExpExecutor)
     assert isinstance(full_executor, BivectorExpExecutor)
-    assert compact_executor.executor_family == "closed_biquadratic"
+    assert compact_executor.route == "closed_biquadratic"
     assert full_executor.output_layout == full_layout
     assert torch.allclose(actual_compact, expected_compact, atol=1e-10, rtol=1e-10)
     assert torch.allclose(actual_full, expected_full, atol=1e-10, rtol=1e-10)
@@ -299,8 +299,8 @@ def test_bivector_exp_policy_knobs_connect_through_algebra_context():
         output_layout=output_layout,
     )
 
-    assert conservative.executor_family == "left_matrix_exp"
-    assert override.executor_family == "spectral_local"
+    assert conservative.route == "left_matrix_exp"
+    assert override.route == "spectral_local"
     assert override.spectral_max_planes == 4
     assert override.spectral_dominant_rel == 0.05
 
@@ -334,7 +334,7 @@ def test_bivector_exp_spectral_local_plans_high_dimension_without_full_even_oper
         spectral_max_planes=4, input_layout=bivector_layout, output_layout=output_layout
     )
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.operator_layout.grades == (0,)
     assert executor.operator_eye.shape == (1, 1)
     assert executor.spectral_local_axis_count == 8
@@ -347,7 +347,7 @@ def test_mps_high_dim_bivector_exp_plans_spectral_local_family():
     output_layout = algebra.layout((0, 2, 4, 6))
     executor = algebra._planner.bivector_exp_executor(input_layout=input_layout, output_layout=output_layout)
 
-    assert executor.executor_family == "spectral_local"
+    assert executor.route == "spectral_local"
     assert executor.left_product is None
 
 
@@ -358,7 +358,7 @@ def test_mps_mixed_bivector_exp_plans_cpu_matrix_exp_family():
     output_layout = algebra.layout((0, 2, 4, 6))
     executor = algebra._planner.bivector_exp_executor(input_layout=input_layout, output_layout=output_layout)
 
-    assert executor.executor_family == "cpu_matrix_exp"
+    assert executor.route == "cpu_matrix_exp"
     assert executor.left_product is not None
     assert executor.operator_eye.device.type == "cpu"
     assert executor.left_product.output_positions.device.type == "cpu"
@@ -396,7 +396,7 @@ def test_bivector_exp_executor_compiles_fullgraph_with_aot_eager():
     actual = compiled(values)
 
     assert isinstance(executor, BivectorExpExecutor)
-    assert executor.executor_family == "closed_biquadratic"
+    assert executor.route == "closed_biquadratic"
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
 

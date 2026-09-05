@@ -214,7 +214,7 @@ def test_cached_nonproduct_plans_reject_foreign_contracts_before_lookup(route, c
             return algebra.plan_pseudoscalar_product(input=source.layout((1,)), output=source.layout((2,)))
         if route == "bivector_exp":
             return algebra.plan_bivector_exp(input=source.layout((2,)), output=source.layout((0, 2)))
-        return specialized.plan_sandwich_action(algebra, layout=source.layout())
+        return action_helpers.plan_sandwich_action(algebra, layout=source.layout())
 
     if warm_cache:
         plan(algebra)
@@ -411,7 +411,7 @@ def test_planned_signature_norm_squared_matches_small_oracle_for_full_and_compac
     )
 
     assert isinstance(full_executor, SignatureNormSquaredExecutor)
-    assert full_executor.executor_family == "metric_diagonal"
+    assert full_executor.route == "diagonal"
     assert compact_executor.input_layout == bivector_layout
     assert torch.allclose(
         context.signature_norm_squared(full), oracle.signature_norm_squared(full), atol=1e-12, rtol=1e-12
@@ -453,7 +453,7 @@ def test_planned_pseudoscalar_product_matches_small_oracle_for_full_and_compact_
     )
 
     assert isinstance(full_executor, PseudoscalarProductExecutor)
-    assert full_executor.executor_family == "unary_permutation"
+    assert full_executor.route == "pseudoscalar"
     assert compact_executor.output_layout == trivector_layout
     assert torch.allclose(context.pseudoscalar_product(full), oracle.pseudoscalar_product(full), atol=1e-12, rtol=1e-12)
     assert compact_layout == trivector_layout
@@ -819,5 +819,5 @@ def test_low_dim_context_can_use_declared_full_layout():
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
-from clifra.core._kernel import specialized
 from clifra.core.tensors import TensorContract
+from tests.helpers import action as action_helpers

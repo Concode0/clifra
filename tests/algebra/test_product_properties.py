@@ -8,7 +8,6 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core._kernel.planning.policy import FormulaPolicy, Polynomial, RouteRule
 from clifra.core.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
     CORE_NUMERIC_SETTINGS,
@@ -18,6 +17,7 @@ from tests.helpers.hypothesis_cases import (
     signature_strategy,
     tensor_with_shape,
 )
+from tests.helpers.policy import PreferRoute
 from tests.helpers.small_oracle import SmallCliffordOracle
 
 pytestmark = [pytest.mark.unit, pytest.mark.property]
@@ -148,17 +148,12 @@ def test_full_product_routes_match_the_independent_oracle(case):
     oracle = SmallCliffordOracle(*signature)
     expected = oracle.product(left, right, op=op)
     for selected, other in (("full_table", "sparse"), ("sparse", "full_table")):
-        policy = FormulaPolicy(
-            (
-                RouteRule("product", selected),
-                RouteRule("product", other, score=Polynomial(constant=1.0)),
-            )
-        )
+        policy = PreferRoute("product", selected)
         algebra = configured_algebra(*signature, device="cpu", dtype=torch.float64, planning_policy=policy)
         layout = algebra.spec.full_layout()
         product = algebra.plan_product(op=op, left=layout, right=layout, output=layout)
 
-        assert product._kernel.executor_family == selected
+        assert product._kernel.route == selected
         assert torch.allclose(product(left, right), expected, atol=1e-10, rtol=1e-10)
 
 

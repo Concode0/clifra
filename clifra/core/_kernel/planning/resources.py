@@ -12,6 +12,10 @@ from clifra.core._kernel.basis import basis_count_for_grades, expand_output_grad
 from clifra.core.layout import AlgebraSpec
 
 
+class ResourceLimitError(ValueError):
+    """A conservative static request exceeds its resource budget."""
+
+
 @dataclass(frozen=True)
 class ResourceLimits:
     """User-configurable static allocation boundaries."""
@@ -28,6 +32,26 @@ class ResourceLimits:
 
 
 DEFAULT_RESOURCE_LIMITS = ResourceLimits()
+
+
+@dataclass(frozen=True)
+class ResourceRequirements:
+    """Conservative peak coefficient width and interaction/table-entry proxies."""
+
+    lanes: int = 0
+    pairs: int = 0
+
+    def __post_init__(self):
+        for value in (self.lanes, self.pairs):
+            if isinstance(value, bool) or int(value) != value or value < 0:
+                raise ValueError("resource requirements must be non-negative integers")
+
+    def rejection_reason(self, limits: ResourceLimits) -> str | None:
+        if self.lanes > limits.max_lanes:
+            return f"intermediate lanes {self.lanes} exceed max_lanes={limits.max_lanes}"
+        if self.pairs > limits.max_pairs:
+            return f"intermediate interactions {self.pairs} exceed max_pairs={limits.max_pairs}"
+        return None
 
 
 @dataclass(frozen=True)
@@ -148,7 +172,7 @@ def validate_plan_cost(algebra, cost: _PlanCost, *, limits: ResourceLimits | Non
         errors.append(f"basis interactions {cost.pair_count} exceed max_pairs={limits.max_pairs}")
     if errors:
         detail = "; ".join(errors)
-        raise ValueError(f"Static {cost.kind} plan for {cost.op} is too large: {detail}. Declare fewer grades.")
+        raise ResourceLimitError(f"Static {cost.kind} plan for {cost.op} is too large: {detail}. Declare fewer grades.")
 
     warnings_to_emit = []
     if cost.max_lanes >= limits.warn_lanes:

@@ -59,7 +59,7 @@ def test_high_dimensional_action_route_selection_uses_only_static_layout_facts(m
         parameter_layout=bivector_layout,
     )
 
-    assert plan.execution_path == "vector_matrix"
+    assert plan.route == "vector_matrix"
 
 
 @pytest.mark.parametrize("route", ["plan_versor_action", "plan_multi_versor_action", "plan_paired_bivector_action"])
@@ -81,9 +81,9 @@ def test_action_plans_reject_foreign_contracts_before_executor_construction(rout
 
     with pytest.raises(ValueError, match=rf"{foreign_side}_layout signature .* does not match algebra signature"):
         if route == "plan_paired_bivector_action":
-            specialized.plan_paired_bivector_action(algebra, **layouts)
+            action_helpers.plan_paired_bivector_action(algebra, **layouts)
         else:
-            getattr(specialized, route)(algebra, grade=2, **layouts)
+            getattr(action_helpers, route)(algebra, grade=2, **layouts)
 
     assert (
         len(algebra._planner._product_executors),
@@ -147,7 +147,7 @@ def test_full_sandwich_action_executor_matches_small_oracle_action_matrices():
     expected_matrices = _oracle_sandwich_action_matrices(oracle, left, right)
     expected_values = torch.einsum("...cj,ckj->...ck", values, expected_matrices)
 
-    assert executor.executor_family == "action_matrix"
+    assert executor.route == "full_action_matrix"
     assert torch.allclose(executor.action_matrices(left, right), expected_matrices, atol=1e-12, rtol=1e-12)
     assert torch.allclose(executor.per_channel(left, values, right), expected_values, atol=1e-12, rtol=1e-12)
 
@@ -162,7 +162,7 @@ def test_context_sandwich_helpers_use_planner_full_action_executor():
     right = algebra.reverse(left, input=full_layout, output=full_layout)
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float64, generator=generator)
 
-    actual = specialized.per_channel_sandwich(algebra, left, values, right)
+    actual = action_helpers.per_channel_sandwich(algebra, left, values, right)
     expected = algebra.geometric_product(
         algebra.geometric_product(left, values, left=full_layout, right=full_layout, output=full_layout),
         right,
@@ -190,7 +190,7 @@ def test_context_sandwich_product_and_multi_rotor_sandwich_match_sequential_prod
     rotor_right = algebra.reverse(rotor_left, input=full_layout, output=full_layout)
     values = torch.randn(3, 4, algebra.dim, dtype=torch.float64, generator=generator)
 
-    batched_actual = specialized.sandwich_product(algebra, batch_left, values, batch_right)
+    batched_actual = action_helpers.sandwich_product(algebra, batch_left, values, batch_right)
     batched_expected = algebra.geometric_product(
         algebra.geometric_product(
             batch_left.unsqueeze(-2), values, left=full_layout, right=full_layout, output=full_layout
@@ -200,7 +200,7 @@ def test_context_sandwich_product_and_multi_rotor_sandwich_match_sequential_prod
         right=full_layout,
         output=full_layout,
     )
-    multi_actual = specialized.multi_rotor_sandwich(algebra, rotor_left, values, rotor_right)
+    multi_actual = action_helpers.multi_rotor_sandwich(algebra, rotor_left, values, rotor_right)
     multi_expected = torch.stack(
         [
             algebra.geometric_product(
@@ -234,7 +234,7 @@ def test_plan_sandwich_action_handle_covers_public_full_action_helpers():
     batch_right = algebra.reverse(batch_left, input=full_layout, output=full_layout)
     values = torch.randn(3, 4, algebra.dim, dtype=torch.float64, generator=generator)
 
-    handle = specialized.plan_sandwich_action(algebra, layout=full_layout, dtype=torch.float64, device=DEVICE)
+    handle = action_helpers.plan_sandwich_action(algebra, layout=full_layout, dtype=torch.float64, device=DEVICE)
 
     assert isinstance(handle, FullSandwichActionExecutor)
     assert handle is algebra._planner.full_sandwich_action_executor(
@@ -243,17 +243,17 @@ def test_plan_sandwich_action_handle_covers_public_full_action_helpers():
         device=DEVICE,
     )
     assert torch.allclose(
-        handle.action_matrices(left, right), specialized.sandwich_action_matrices(algebra, left, right)
+        handle.action_matrices(left, right), action_helpers.sandwich_action_matrices(algebra, left, right)
     )
     assert torch.allclose(
         handle.batched(batch_left, values, batch_right),
-        specialized.sandwich_product(algebra, batch_left, values, batch_right),
+        action_helpers.sandwich_product(algebra, batch_left, values, batch_right),
     )
     assert torch.allclose(
-        handle.per_channel(left, values, right), specialized.per_channel_sandwich(algebra, left, values, right)
+        handle.per_channel(left, values, right), action_helpers.per_channel_sandwich(algebra, left, values, right)
     )
     assert torch.allclose(
-        handle.multi(left, values, right), specialized.multi_rotor_sandwich(algebra, left, values, right)
+        handle.multi(left, values, right), action_helpers.multi_rotor_sandwich(algebra, left, values, right)
     )
 
 
@@ -291,10 +291,10 @@ def test_action_plan_handles_match_public_versor_helpers():
     channel_to_pair = torch.tensor([0, 1, 2, 0], dtype=torch.long)
 
     versor = context.plan_versor_action(grade=2, input=full_layout, output=full_layout, parameter=parameter_layout)
-    multi = specialized.plan_multi_versor_action(
+    multi = action_helpers.plan_multi_versor_action(
         context, grade=2, input_layout=full_layout, output_layout=full_layout, parameter_layout=parameter_layout
     )
-    paired = specialized.plan_paired_bivector_action(
+    paired = action_helpers.plan_paired_bivector_action(
         context, input_layout=full_layout, output_layout=full_layout, parameter_layout=parameter_layout
     )
 
@@ -317,7 +317,7 @@ def test_action_plan_handles_match_public_versor_helpers():
     )
     assert torch.allclose(
         multi(values, multi_weights, mix),
-        specialized.multi_versor_action(
+        action_helpers.multi_versor_action(
             context,
             values,
             multi_weights,
@@ -332,7 +332,7 @@ def test_action_plan_handles_match_public_versor_helpers():
     )
     assert torch.allclose(
         paired(values, left_weights, right_weights, channel_to_pair),
-        specialized.paired_bivector_action(
+        action_helpers.paired_bivector_action(
             context,
             values,
             left_weights,
@@ -351,7 +351,7 @@ def test_compact_paired_bivector_action_handle_preplans_factor_products():
     context = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float64)
     vector_layout = context.layout((1,))
     parameter_layout = context.layout((2,))
-    handle = specialized.plan_paired_bivector_action(
+    handle = action_helpers.plan_paired_bivector_action(
         context, input_layout=vector_layout, output_layout=vector_layout, parameter_layout=parameter_layout
     )
 
@@ -360,9 +360,11 @@ def test_compact_paired_bivector_action_handle_preplans_factor_products():
     assert handle.rotor_reverse is not None
     assert handle.left_product is not None
     assert handle.right_product is not None
-    cached_products = set(context._planner._product_executors.values())
-    assert handle.left_product._kernel in cached_products
-    assert handle.right_product._kernel in cached_products
+    assert handle.left_product._kernel.metadata.family == "product"
+    assert handle.right_product._kernel.metadata.family == "product"
+    # Children are built from retained selections, not looked up/reselected via
+    # the algebra's independent top-level operation cache.
+    assert not context._planner._product_executors
 
 
 def test_compact_versor_action_routes_vector_actions_without_full_rotor_layouts():
@@ -374,7 +376,7 @@ def test_compact_versor_action_routes_vector_actions_without_full_rotor_layouts(
     vector_rotor = context.plan_versor_action(
         grade=2, input=vector_layout, output=vector_layout, parameter=bivector_layout
     )
-    vector_multi = specialized.plan_multi_versor_action(
+    vector_multi = action_helpers.plan_multi_versor_action(
         context, grade=2, input_layout=vector_layout, output_layout=vector_layout, parameter_layout=bivector_layout
     )
     mixed_rotor = context.plan_versor_action(
@@ -489,4 +491,4 @@ def test_action_plan_handle_validates_inputs_through_executor_forward():
         handle(values, weights[:3])
 
 
-from clifra.core._kernel import specialized
+from tests.helpers import action as action_helpers

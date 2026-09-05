@@ -14,7 +14,7 @@ from clifra.core._kernel.planning.permutation import PseudoscalarProductPlan
 class PseudoscalarProductExecutor(nn.Module):
     """Compile-friendly right-pseudoscalar product permutation executor."""
 
-    executor_family = "unary_permutation"
+    route = "pseudoscalar"
     op = "pseudoscalar_product"
 
     def __init__(self, plan: PseudoscalarProductPlan):

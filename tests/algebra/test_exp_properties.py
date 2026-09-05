@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from itertools import combinations
 
 import pytest
@@ -11,7 +10,6 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY, FormulaPolicy, Polynomial
 from clifra.core.algebra import AlgebraContext
 from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
 from tests.helpers.hypothesis_cases import (
@@ -20,20 +18,14 @@ from tests.helpers.hypothesis_cases import (
     signature_strategy,
     tensor_with_shape,
 )
+from tests.helpers.policy import PreferRoute
 from tests.helpers.small_oracle import SmallCliffordOracle
 
 pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 
-def _force_exp_route(route: str) -> FormulaPolicy:
-    return FormulaPolicy(
-        tuple(
-            replace(rule, score=Polynomial(constant=-100.0))
-            if (rule.family, rule.route) == ("bivector_exp", route)
-            else rule
-            for rule in DEFAULT_PLANNING_POLICY.rules
-        )
-    )
+def _force_exp_route(route: str):
+    return PreferRoute("bivector_exp", route)
 
 
 @st.composite
@@ -222,7 +214,7 @@ def test_forced_bivector_exp_routes_match_dense_reference_and_vjp(route, data):
     actual_vjp = torch.autograd.grad(actual, values, cotangent)[0]
     expected_vjp = torch.autograd.grad(expected, reference_values, cotangent)[0]
 
-    assert executor.executor_family == route
+    assert executor.route == route
     assert torch.allclose(actual, expected, atol=1e-8, rtol=1e-8)
     assert torch.allclose(actual_vjp, expected_vjp, atol=1e-7, rtol=1e-7)
 

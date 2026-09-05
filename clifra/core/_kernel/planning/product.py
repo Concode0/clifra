@@ -25,12 +25,7 @@ from clifra.core._kernel.basis import (
 )
 from clifra.core._kernel.planning.layouts import ProductRequest
 from clifra.core._kernel.planning.policy import (
-    PlanCandidate,
-    PlanFacts,
-    PlanningPolicy,
     RouteDecision,
-    environment_extensions,
-    select_policy_route,
 )
 from clifra.core._kernel.planning.tree import GradePlanTree, build_grade_plan_tree
 from clifra.core.layout import AlgebraSpec
@@ -40,73 +35,40 @@ from clifra.core.tensors import TensorContract
 def select_product_route(
     algebra,
     *,
-    op: str,
+    op,
     left_layout,
     right_layout,
     output_layout,
-    dtype: torch.dtype,
+    dtype,
     device,
-    policy: PlanningPolicy | None = None,
+    policy=None,
 ) -> RouteDecision:
-    """Enumerate product routes and select one using common plan facts."""
-    policy = algebra._planning_policy if policy is None else policy
-    tree = build_grade_plan_tree(
+    """Select an executor-owned route through the private registry."""
+    from clifra.core._kernel.execution.providers import product_execution_request
+    from clifra.core._kernel.planning.resources import validate_product_grades_cost
+
+    validate_product_grades_cost(
+        algebra,
         left_layout.spec,
         op=op,
         left_grades=left_layout.grades,
         right_grades=right_layout.grades,
         output_grades=output_layout.grades,
     )
-    backend = _device_backend(device)
-    dtype_bytes = torch.finfo(dtype).bits // 8
-    full_table_pairs = left_layout.dim * right_layout.dim
-    sparse_pairs = tree.estimated_pairs
-    full_table_bytes = full_table_pairs * (8 + dtype_bytes)
-    sparse_bytes = sparse_pairs * (24 + dtype_bytes)
-    full_grades = tuple(range(left_layout.spec.n + 1))
-    full_table_supported = (
-        left_layout.grades == full_grades and right_layout.grades == full_grades and output_layout.grades == full_grades
+    request = ProductRequest.compact(
+        left_layout.spec,
+        op=op,
+        left_layout=left_layout,
+        right_layout=right_layout,
+        output_layout=output_layout,
+        dtype=dtype,
+        device=device,
     )
-
-    def candidate(route: str, pair_count: int, peak_bytes: int, unavailable_reason=None) -> PlanCandidate:
-        extensions = {
-            **environment_extensions(left_layout.spec, backend, dtype_bytes),
-            "layout.left_lanes": left_layout.dim,
-            "layout.right_lanes": right_layout.dim,
-            "layout.output_lanes": output_layout.dim,
-        }
-        return PlanCandidate(
-            "product",
-            route,
-            PlanFacts(
-                forward_work=pair_count,
-                backward_work=pair_count * 2,
-                peak_bytes=peak_bytes,
-                compile_work=tree.path_count,
-                extensions=extensions,
-            ),
-            unavailable_reason,
-        )
-
-    return select_policy_route(
-        policy,
-        (
-            candidate(
-                "full_table",
-                full_table_pairs,
-                full_table_bytes,
-                None if full_table_supported else "requires_canonical_full_layouts",
-            ),
-            candidate("sparse", sparse_pairs, sparse_bytes),
-        ),
+    return algebra._planner.registry.select(
+        product_execution_request(algebra, request),
+        algebra._planner.policy if policy is None else policy,
+        algebra._planner.limits,
     )
-
-
-def _device_backend(device) -> str:
-    if device is None:
-        return "cpu"
-    device_type = torch.device(device).type
-    return device_type if device_type in {"cpu", "mps"} else "other"
 
 
 class GradeProductPlan:

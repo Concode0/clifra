@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Protocol
 
+from .resources import ResourceRequirements
+
 _COMMON_FACT_NAMES = frozenset(
     {
         "forward_work",
@@ -65,8 +67,13 @@ class PlanFacts(Mapping[str, float]):
     truncated: bool = False
     value_dependent: bool = False
     extensions: Mapping[str, float] | Iterable[tuple[str, float]] = ()
+    resources: ResourceRequirements | None = None
 
     def __post_init__(self) -> None:
+        if self.resources is None:
+            object.__setattr__(self, "resources", ResourceRequirements())
+        elif not isinstance(self.resources, ResourceRequirements):
+            raise TypeError("route resources must use ResourceRequirements")
         for name in ("forward_work", "backward_work", "compile_work"):
             value = _finite(getattr(self, name), name)
             if value < 0.0:
@@ -138,6 +145,10 @@ def compose_plan_facts(
         truncated=any(part.truncated for part in parts),
         value_dependent=any(part.value_dependent for part in parts),
         extensions=extensions,
+        resources=ResourceRequirements(
+            max((part.resources.lanes for part in parts), default=0),
+            max((part.resources.pairs for part in parts), default=0),
+        ),
     )
 
 
@@ -179,211 +190,50 @@ class PlanningPolicy(Protocol):
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation: ...
 
 
-class ScalarFormula(Protocol):
-    """Structural contract for a deterministic scalar formula."""
-
-    @property
-    def feature_names(self) -> frozenset[str]: ...
-
-    def evaluate(self, facts: Mapping[str, float]) -> float: ...
-
-
 @dataclass(frozen=True)
-class PolynomialTerm:
-    """One sparse monomial ``coefficient * product(fact ** exponent)``."""
-
-    coefficient: float
-    powers: tuple[tuple[str, int], ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "coefficient", _finite(self.coefficient, "coefficient"))
-        normalized: list[tuple[str, int]] = []
-        seen: set[str] = set()
-        for raw_name, raw_exponent in self.powers:
-            name = str(raw_name)
-            if name not in _COMMON_FACT_NAMES:
-                _qualified(name)
-            exponent = int(raw_exponent)
-            if exponent != raw_exponent or exponent < 0:
-                raise ValueError("polynomial exponents must be non-negative integers")
-            if name in seen:
-                raise ValueError(f"duplicate polynomial fact {name!r} in one term")
-            seen.add(name)
-            if exponent:
-                normalized.append((name, exponent))
-        object.__setattr__(self, "powers", tuple(sorted(normalized)))
-
-    def evaluate(self, facts: Mapping[str, float]) -> float:
-        value = self.coefficient
-        for name, exponent in self.powers:
-            try:
-                fact = _finite(facts[name], name)
-            except KeyError as error:
-                raise ValueError(f"formula references unavailable fact {name!r}") from error
-            value *= fact**exponent
-        return value
-
-
-@dataclass(frozen=True)
-class Polynomial:
-    """Immutable sparse multivariate polynomial."""
-
-    constant: float = 0.0
-    terms: tuple[PolynomialTerm, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "constant", _finite(self.constant, "constant"))
-        object.__setattr__(self, "terms", tuple(self.terms))
-
-    @classmethod
-    def feature(cls, name: str, coefficient: float = 1.0, *, constant: float = 0.0) -> "Polynomial":
-        return cls(constant, (PolynomialTerm(coefficient, ((name, 1),)),))
-
-    @property
-    def feature_names(self) -> frozenset[str]:
-        return frozenset(name for term in self.terms for name, _ in term.powers)
-
-    def evaluate(self, facts: Mapping[str, float]) -> float:
-        value = self.constant + sum(term.evaluate(facts) for term in self.terms)
-        if not math.isfinite(value):
-            raise ValueError(f"polynomial evaluation must be finite, got {value}")
-        return value
-
-
-@dataclass(frozen=True)
-class FormulaConstraint:
-    """Inclusive boundary in normalized form ``formula(facts) <= 0``."""
-
-    formula: ScalarFormula
-    reason: str = "outside_region"
-
-    def evaluate(self, facts: Mapping[str, float]) -> tuple[bool, float]:
-        value = _finite(self.formula.evaluate(facts), "constraint")
-        return value <= 0.0, value
-
-
-@dataclass(frozen=True)
-class BoundaryRegion:
-    """Intersection of formula constraints; an empty region is unbounded."""
-
-    constraints: tuple[FormulaConstraint, ...] = ()
-    name: str = "default"
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "constraints", tuple(self.constraints))
-
-
-@dataclass(frozen=True)
-class RouteRule:
-    """Formula regions and score for one operation-owned route."""
-
-    family: str
-    route: str
-    regions: tuple[BoundaryRegion, ...] = (BoundaryRegion(),)
-    score: ScalarFormula = Polynomial()
-
-    def __post_init__(self) -> None:
-        if not self.family or not self.route:
-            raise ValueError("rule family and route must be non-empty")
-        if not self.regions:
-            raise ValueError(f"route {self.route!r} must declare at least one boundary region")
-        object.__setattr__(self, "regions", tuple(self.regions))
-
-
-@dataclass(frozen=True)
-class FormulaPolicy:
-    """Declarative formula implementation of :class:`PlanningPolicy`."""
-
-    rules: tuple[RouteRule, ...]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "rules", tuple(self.rules))
-        keys = [(rule.family, rule.route) for rule in self.rules]
-        if len(keys) != len(set(keys)):
-            raise ValueError("formula policy may declare only one rule per family and route")
-        for rule in self.rules:
-            formulas = [rule.score]
-            formulas.extend(constraint.formula for region in rule.regions for constraint in region.constraints)
-            for formula in formulas:
-                for name in formula.feature_names:
-                    if name not in _COMMON_FACT_NAMES:
-                        _qualified(name)
+class DefaultPolicy:
+    """Lightweight regime selector; constants preserve the established routing."""
 
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation:
-        rule = next(
-            (rule for rule in self.rules if rule.family == candidate.family and rule.route == candidate.route),
-            None,
-        )
-        if rule is None:
-            return PolicyEvaluation(None, "no_policy_rule")
-
-        region_failures: list[Mapping[str, object]] = []
-        for region in rule.regions:
-            failures = []
-            for constraint in region.constraints:
-                accepted, value = constraint.evaluate(candidate.facts)
-                if not accepted:
-                    failures.append({"reason": constraint.reason, "value": value})
-            if not failures:
-                return PolicyEvaluation(rule.score.evaluate(candidate.facts), "eligible")
-            region_failures.append({"region": region.name, "failures": tuple(failures)})
-        return PolicyEvaluation(
-            None,
-            "outside_region",
-            details={"regions": tuple(region_failures)},
-        )
-
-
-def _term(coefficient: float, **powers: int) -> PolynomialTerm:
-    return PolynomialTerm(coefficient, tuple(powers.items()))
-
-
-def _default_rules() -> tuple[RouteRule, ...]:
-    full_table_score = Polynomial(
-        terms=(
-            _term(1.0, **{"backend.cpu": 1, "forward_work": 1}),
-            _term(0.05, **{"backend.cpu": 1, "layout.output_lanes": 1}),
-            _term(1.2, **{"backend.mps": 1, "forward_work": 1}),
-            _term(0.03, **{"backend.mps": 1, "layout.output_lanes": 1}),
-            _term(1.0, **{"backend.other": 1, "forward_work": 1}),
-            _term(0.05, **{"backend.other": 1, "layout.output_lanes": 1}),
-            _term(1.0 / 4096.0, peak_bytes=1),
-        )
-    )
-    sparse_score = Polynomial(
-        terms=(
-            _term(1.5, **{"backend.cpu": 1, "forward_work": 1}),
-            _term(5.0, **{"backend.cpu": 1, "compile_work": 1}),
-            _term(0.05, **{"backend.cpu": 1, "layout.output_lanes": 1}),
-            _term(0.9, **{"backend.mps": 1, "forward_work": 1}),
-            _term(1.0, **{"backend.mps": 1, "compile_work": 1}),
-            _term(0.03, **{"backend.mps": 1, "layout.output_lanes": 1}),
-            _term(1.25, **{"backend.other": 1, "forward_work": 1}),
-            _term(3.0, **{"backend.other": 1, "compile_work": 1}),
-            _term(0.05, **{"backend.other": 1, "layout.output_lanes": 1}),
-            _term(1.0 / 4096.0, peak_bytes=1),
-        )
-    )
-    return (
-        RouteRule("product", "full_table", score=full_table_score),
-        RouteRule("product", "sparse", score=sparse_score),
-        RouteRule("bivector_exp", "closed_simple"),
-        RouteRule("bivector_exp", "closed_biquadratic"),
-        RouteRule(
-            "bivector_exp",
-            "spectral_local",
-            score=Polynomial.feature("algebra.n", coefficient=-1.0, constant=10.0),
-        ),
-        RouteRule("bivector_exp", "left_matrix_exp"),
-        RouteRule("bivector_exp", "cpu_matrix_exp", score=Polynomial(constant=1.0)),
-        RouteRule("action", "vector_matrix", score=Polynomial(constant=-1.0)),
-        RouteRule("action", "rotor_product"),
-        RouteRule("action", "full_action_matrix", score=Polynomial(constant=-2.0)),
-        RouteRule("action", "paired_rotor_product"),
-    )
+        family, route, facts = candidate.family, candidate.route, candidate.facts
+        if family == "product" and route in {"full_table", "sparse"}:
+            backend = "mps" if facts["backend.mps"] else ("cpu" if facts["backend.cpu"] else "other")
+            if route == "full_table":
+                work, compile_weight, lanes = (1.2, 0.0, 0.03) if backend == "mps" else (1.0, 0.0, 0.05)
+            else:
+                work, compile_weight, lanes = {
+                    "cpu": (1.5, 5.0, 0.05),
+                    "mps": (0.9, 1.0, 0.03),
+                    "other": (1.25, 3.0, 0.05),
+                }[backend]
+            score = (
+                work * facts.forward_work
+                + compile_weight * facts.compile_work
+                + lanes * facts["layout.output_lanes"]
+                + facts.peak_bytes / 4096.0
+            )
+            return PolicyEvaluation(score, "eligible")
+        scores = {
+            ("bivector_exp", "closed_simple"): 0.0,
+            ("bivector_exp", "closed_biquadratic"): 0.0,
+            ("bivector_exp", "left_matrix_exp"): 0.0,
+            ("bivector_exp", "cpu_matrix_exp"): 1.0,
+            ("action", "vector_matrix"): -1.0,
+            ("action", "rotor_product"): 0.0,
+            ("action", "full_action_matrix"): -2.0,
+            ("action", "paired_rotor_product"): 0.0,
+            ("action", "graded_linear"): 0.0,
+            ("unary", "grade_map"): 0.0,
+            ("metric", "diagonal"): 0.0,
+            ("permutation", "pseudoscalar"): 0.0,
+        }
+        if family == "bivector_exp" and route == "spectral_local":
+            return PolicyEvaluation(10.0 - facts["algebra.n"], "eligible")
+        score = scores.get((family, route))
+        return PolicyEvaluation(score, "eligible" if score is not None else "no_policy_rule")
 
 
-DEFAULT_PLANNING_POLICY = FormulaPolicy(_default_rules())
+DEFAULT_PLANNING_POLICY = DefaultPolicy()
 
 
 @dataclass(frozen=True)
@@ -392,6 +242,11 @@ class RouteDecision:
 
     route: str
     facts: PlanFacts
+    family: str = ""
+
+
+class NoAvailableRouteError(ValueError):
+    """No registered implementation satisfies capability/resource constraints."""
 
 
 class PolicyCoverageError(ValueError):
@@ -430,11 +285,11 @@ def select_policy_route(
             )
         reasons = {candidate.route: candidate.unavailable_reason for candidate in candidates}
         family = candidates[0].family if candidates else "operation"
-        raise ValueError(f"No implemented {family} route is available: {reasons!r}")
+        raise NoAvailableRouteError(f"No implemented {family} route is available: {reasons!r}")
 
     best = matches[0]
     for item in matches[1:]:
         if item[:2] < best[:2]:
             best = item
     _, _, candidate = best
-    return RouteDecision(candidate.route, candidate.facts)
+    return RouteDecision(candidate.route, candidate.facts, candidate.family)

@@ -74,7 +74,7 @@ def test_preplanned_calls_do_not_resolve_or_plan(monkeypatch):
     monkeypatch.setattr(algebra, "layout", forbidden)
     monkeypatch.setattr(algebra._planner, "product_executor", forbidden)
     assert torch.equal(operation(a, b), expected)
-    assert not hasattr(operation, "executor_family")
+    assert not hasattr(operation, "route")
     assert not hasattr(operation, "executor")
     with pytest.raises(AttributeError):
         operation.output = TensorContract(vector)
