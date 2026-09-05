@@ -8,9 +8,9 @@ from typing import Dict
 
 import torch
 
-from clifra.core.foundation.module import AlgebraLike
-from clifra.core.foundation.numerics import eps_like
-from clifra.core.runtime.tensors import LaneStorage
+from clifra.core._kernel.numerics import eps_like
+from clifra.core.algebra import AlgebraContext
+from clifra.core.tensors import TensorContract
 
 from ._types import CONSTANTS
 from ._utils import full_grades
@@ -39,7 +39,7 @@ class NeighborhoodBivectorFlow:
     scores measure.
     """
 
-    def __init__(self, algebra: AlgebraLike, k: int = CONSTANTS.default_k_neighbors):
+    def __init__(self, algebra: AlgebraContext, k: int = CONSTANTS.default_k_neighbors):
         """Initialize the neighborhood-bivector diagnostic.
 
         Args:
@@ -68,7 +68,7 @@ class NeighborhoodBivectorFlow:
         if d < n:
             pad = torch.zeros(N, n - d, device=data.device, dtype=data.dtype)
             data = torch.cat([data, pad], dim=-1)
-        return self.algebra.embed_vector(data)
+        return self.algebra.layout((1,)).full(data)
 
     def _knn(self, mv: torch.Tensor) -> torch.Tensor:
         """Returns k-nearest neighbor indices in multivector coefficient space.
@@ -117,14 +117,8 @@ class NeighborhoodBivectorFlow:
         xj_rev = neighbors.reshape(N * k, D)
 
         # For grade-1 inputs, <xi * ~xj>_2 = wedge(xi, xj_rev) -- single pass
-        bv_raw = self.algebra.wedge(
-            xi,
-            xj_rev,
-            left_grades=(1,),
-            right_grades=(1,),
-            output_grades=(2,),
-            output_storage=LaneStorage.COMPACT,
-        )  # [N*k, dim]
+        vectors = TensorContract.canonical(self.algebra.layout((1,)))
+        bv_raw = self.algebra.wedge(xi, xj_rev, left=vectors, right=vectors, output=layout)
         bv_norm = bv_raw.norm(dim=-1, keepdim=True).clamp_min(eps_like(bv_raw))
         compact = (bv_raw / bv_norm).reshape(N, k, layout.dim)
         if compact_output:
@@ -286,43 +280,26 @@ class NeighborhoodBivectorFlow:
         a = a.unsqueeze(0)  # [1, dim]
         b = b.unsqueeze(0)  # [1, dim]
 
-        a_inv = self.algebra.blade_inverse(a, input_layout=full_layout)  # [1, dim]
+        a_inv = self.algebra.blade_inverse(a, input=full_layout)  # [1, dim]
 
         # Transition element T = a_inv . b
         T = self.algebra.geometric_product(
-            a_inv,
-            b,
-            left_layout=full_layout,
-            right_layout=full_layout,
-            output_layout=full_layout,
+            a_inv, b, left=full_layout, right=full_layout, output=full_layout
         )  # [1, dim]
 
         # Log approximation: grade-2 part of (T - 1)
         T_shift = T.clone()
         T_shift[..., 0] -= 1.0
-        log_T = self.algebra.grade_projection(
-            T_shift,
-            2,
-            input_layout=full_layout,
-            output_layout=bivector_layout,
-        )  # [1, grade2_dim]
+        log_T = self.algebra.grade_projection(T_shift, input=full_layout, output=bivector_layout)  # [1, grade2_dim]
 
         # Sample t in [0, 1]
         ts = torch.linspace(0.0, 1.0, steps, device=a.device, dtype=a.dtype)
 
-        # Batched: scale log_T by all t values, exp, then GP
+        # Batched: scale log_T by all t values, exp, then geometric product
         scaled = ts.unsqueeze(-1) * log_T  # [steps, grade2_dim]
-        exp_all = self.algebra.bivector_exp(
-            scaled,
-            input_layout=bivector_layout,
-            output_layout=full_layout,
-        )  # [steps, dim]
+        exp_all = self.algebra.bivector_exp(scaled, input=bivector_layout, output=full_layout)  # [steps, dim]
         return self.algebra.geometric_product(
-            a,
-            exp_all,
-            left_layout=full_layout,
-            right_layout=full_layout,
-            output_layout=full_layout,
+            a, exp_all, left=full_layout, right=full_layout, output=full_layout
         )  # [steps, dim]
 
     def _random_connection_alignment_baseline(self) -> float:

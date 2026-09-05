@@ -12,10 +12,10 @@ from typing import Sequence
 import torch
 import torch.nn as nn
 
-from clifra.core.foundation.manifold import MANIFOLD_SPIN, tag_manifold
-from clifra.core.foundation.module import AlgebraLike, CliffordModule
-from clifra.core.foundation.numerics import signed_clamp_min
-from clifra.layers.adapters import ConformalEmbedding
+from clifra.core.manifold import MANIFOLD_SPIN, tag_manifold
+from clifra.core.module import CliffordModule
+from clifra.core.algebra import AlgebraContext
+from clifra.core._kernel.numerics import signed_clamp_min
 
 from .inputs import CoordinateFieldInput, as_coordinate_field_input
 from .sampling import (
@@ -31,29 +31,29 @@ from .types import TransformationRollout, TransformationState
 class CoordinateChart:
     """Embed and extract coordinate tensors through a grade-1 clifra layout."""
 
-    algebra: AlgebraLike
+    algebra: AlgebraContext
     coordinate_dim: int
     layout: object
     coordinate_positions: tuple[int, ...]
     homogeneous_position: int | None = None
 
     @classmethod
-    def direct(cls, algebra: AlgebraLike, coordinate_dim: int) -> "CoordinateChart":
+    def direct(cls, algebra: AlgebraContext, coordinate_dim: int) -> "CoordinateChart":
         """Use the first ``coordinate_dim`` grade-1 basis vectors as coordinates."""
         d = _positive_int(coordinate_dim, "coordinate_dim")
         if d > algebra.n:
             raise ValueError(f"coordinate_dim={d} exceeds algebra basis dimension n={algebra.n}")
         layout = algebra.layout((1,))
-        positions = _basis_positions(layout, tuple(1 << bit for bit in range(d)))
+        positions = tuple(layout.positions_for_basis(1 << bit for bit in range(d)).tolist())
         return cls(algebra=algebra, coordinate_dim=d, layout=layout, coordinate_positions=positions)
 
     @classmethod
-    def conformal(cls, algebra: AlgebraLike, coordinate_dim: int) -> "ConformalChart":
-        """Use clifra's conformal embedding as a Euclidean coordinate chart."""
+    def conformal(cls, algebra: AlgebraContext, coordinate_dim: int) -> "ConformalChart":
+        """Use a conformal null embedding as a Euclidean coordinate chart."""
         return ConformalChart(algebra, coordinate_dim)
 
     @classmethod
-    def projective(cls, algebra: AlgebraLike, coordinate_dim: int) -> "CoordinateChart":
+    def projective(cls, algebra: AlgebraContext, coordinate_dim: int) -> "CoordinateChart":
         """Use a PGA-style homogeneous grade-1 chart with the first null basis vector as e0."""
         d = _positive_int(coordinate_dim, "coordinate_dim")
         non_null = int(algebra.p) + int(algebra.q)
@@ -64,8 +64,8 @@ class CoordinateChart:
                 f"projective coordinate_dim={d} requires at least {d} non-null basis vectors, got p+q={non_null}"
             )
         layout = algebra.layout((1,))
-        coordinate_positions = _basis_positions(layout, tuple(1 << bit for bit in range(d)))
-        homogeneous_position = _basis_positions(layout, (1 << non_null,))[0]
+        coordinate_positions = tuple(layout.positions_for_basis(1 << bit for bit in range(d)).tolist())
+        homogeneous_position = layout.positions_for_basis((1 << non_null,)).item()
         return cls(
             algebra=algebra,
             coordinate_dim=d,
@@ -119,7 +119,7 @@ class CoordinateChart:
 
 
 class ConformalChart(CliffordModule):
-    """Euclidean chart backed by :class:`clifra.layers.ConformalEmbedding`.
+    """Euclidean chart using a compact grade-1 conformal embedding.
 
     Coordinates in ``R^d`` are lifted to null grade-1 points in
     ``Cl(d + 1, 1)``. Rotor paths can therefore represent conformal motions,
@@ -129,23 +129,45 @@ class ConformalChart(CliffordModule):
 
     homogeneous_position = None
 
-    def __init__(self, algebra: AlgebraLike, coordinate_dim: int):
+    def __init__(self, algebra: AlgebraContext, coordinate_dim: int):
         super().__init__(algebra)
         self.coordinate_dim = _positive_int(coordinate_dim, "coordinate_dim")
         self.layout = algebra.layout((1,))
-        self.embedding = ConformalEmbedding(
-            algebra,
-            euclidean_dim=self.coordinate_dim,
-            layout=self.layout,
-        ).to(device=algebra.device, dtype=algebra.dtype)
+        d = self.coordinate_dim
+        if algebra.p < d + 1 or algebra.q < 1:
+            raise ValueError(
+                f"Conformal embedding needs Cl(>={d + 1}, >=1), got Cl({algebra.p},{algebra.q},{algebra.r})"
+            )
+        positions = tuple(self.layout.positions_for_basis(1 << bit for bit in range(d)).tolist())
+        self.register_buffer("_coordinate_positions", torch.tensor(positions, device=algebra.device))
+        ep, em = self.layout.positions_for_basis((1 << d, 1 << algebra.p)).tolist()
+        e_inf = torch.zeros(self.layout.dim, device=algebra.device, dtype=algebra.dtype)
+        e_inf[ep] = e_inf[em] = 1.0
+        e_o = torch.zeros_like(e_inf)
+        e_o[ep], e_o[em] = -0.5, 0.5
+        self.register_buffer("_e_inf", e_inf)
+        self.register_buffer("_e_o", e_o)
+        self.scalar_layout = algebra.layout((0,))
 
     def embed(self, coordinates: torch.Tensor) -> torch.Tensor:
         """Lift Euclidean coordinates to conformal null points."""
-        return self.embedding.embed(coordinates)
+        if coordinates.ndim < 1 or coordinates.shape[-1] != self.coordinate_dim:
+            raise ValueError(
+                f"coordinates last dimension must be {self.coordinate_dim}, got shape {tuple(coordinates.shape)}"
+            )
+        values = coordinates.new_zeros(*coordinates.shape[:-1], self.layout.dim)
+        values.scatter_(-1, self._coordinate_positions.expand_as(coordinates), coordinates)
+        return values + 0.5 * coordinates.square().sum(dim=-1, keepdim=True) * self._e_inf + self._e_o
 
     def extract(self, values: torch.Tensor) -> torch.Tensor:
         """Normalize conformal points and expose Euclidean coordinates."""
-        return self.embedding.extract(values)
+        if values.ndim < 1 or values.shape[-1] != self.layout.dim:
+            raise ValueError(f"values last dimension must be {self.layout.dim}, got shape {tuple(values.shape)}")
+        inner = self.algebra.geometric_product(
+            values, self._e_inf.expand_as(values), left=self.layout, right=self.layout, output=self.scalar_layout
+        )
+        normalized = values / signed_clamp_min(-inner, self.algebra.eps)
+        return normalized.index_select(-1, self._coordinate_positions)
 
     def metric_signs(self, *, device=None, dtype=None) -> torch.Tensor:
         """Return the positive Euclidean metric of the exposed coordinates."""
@@ -198,9 +220,11 @@ class GeneratorSubspace(nn.Module):
         return cls(mapping)
 
     @classmethod
-    def from_basis_indices(cls, layout, basis_indices: Sequence[int], *, device=None, dtype=None) -> "GeneratorSubspace":
+    def from_basis_indices(
+        cls, layout, basis_indices: Sequence[int], *, device=None, dtype=None
+    ) -> "GeneratorSubspace":
         """Select generators by canonical bivector basis-blade indices."""
-        positions = _basis_positions(layout, tuple(int(index) for index in basis_indices))
+        positions = tuple(layout.positions_for_basis(int(index) for index in basis_indices).tolist())
         return cls.from_lanes(layout.dim, positions, device=device, dtype=dtype)
 
     @property
@@ -252,7 +276,7 @@ class InvertibleBivectorField(CliffordModule):
 
     def __init__(
         self,
-        algebra: AlgebraLike,
+        algebra: AlgebraContext,
         coordinate_dim: int,
         *,
         path_steps: int = 1,
@@ -300,15 +324,10 @@ class InvertibleBivectorField(CliffordModule):
         self.bivector_layout = algebra.layout((2,))
         self.num_bivectors = self.bivector_layout.dim
         self.generator_subspace = self._resolve_generator_subspace(generator_subspace)
-        self.latent_dim = (
-            self.num_bivectors if self.generator_subspace is None else self.generator_subspace.latent_dim
-        )
+        self.latent_dim = self.num_bivectors if self.generator_subspace is None else self.generator_subspace.latent_dim
         if action is None:
             action = algebra.plan_versor_action(
-                grade=2,
-                input_layout=self.vector_layout,
-                output_layout=self.vector_layout,
-                parameter_layout=self.bivector_layout,
+                grade=2, input=self.vector_layout, output=self.vector_layout, parameter=self.bivector_layout
             )
         if not isinstance(action, nn.Module):
             raise TypeError("action must be a torch.nn.Module implementing action(values, generator_weights)")
@@ -603,9 +622,7 @@ class InvertibleBivectorField(CliffordModule):
 
     def _rotors_from_weights(self, weights: torch.Tensor) -> torch.Tensor:
         return self.algebra.bivector_exp(
-            -0.5 * weights,
-            input_layout=self.bivector_layout,
-            output_layout=self.algebra.layout(range(0, self.algebra.n + 1, 2)),
+            -0.5 * weights, input=self.bivector_layout, output=self.algebra.layout(range(0, self.algebra.n + 1, 2))
         )
 
     def _apply_path(
@@ -733,14 +750,6 @@ class InvertibleBivectorField(CliffordModule):
             raise ValueError(
                 f"coordinates must have shape [..., {self.coordinate_dim}], got {tuple(coordinates.shape)}"
             )
-
-
-def _basis_positions(layout, basis_indices: tuple[int, ...]) -> tuple[int, ...]:
-    position_by_index = {index: position for position, index in enumerate(layout.basis_indices)}
-    missing = [index for index in basis_indices if index not in position_by_index]
-    if missing:
-        raise ValueError(f"layout {layout.grades} does not contain basis indices {missing}")
-    return tuple(position_by_index[index] for index in basis_indices)
 
 
 def _positive_int(value: int, name: str) -> int:

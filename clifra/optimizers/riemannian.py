@@ -26,7 +26,8 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
-from clifra.core.foundation.manifold import (
+from clifra.core._kernel.numerics import eps_like
+from clifra.core.manifold import (
     MANIFOLD_EUCLIDEAN,
     MANIFOLD_ORDER,
     MANIFOLD_SPHERE,
@@ -34,7 +35,6 @@ from clifra.core.foundation.manifold import (
     tag_manifold,
     validate_manifold,
 )
-from clifra.core.foundation.numerics import eps_like
 
 __all__ = [
     "ExponentialSGD",
@@ -127,7 +127,7 @@ def _metric_signature_norm_squared_or_none(algebra, values: torch.Tensor, grade:
     layout = _layout_for_parameter(algebra, values, grade)
     if layout is None:
         return None
-    return algebra.signature_norm_squared(values, input_layout=layout)
+    return algebra.signature_norm_squared(values, input=layout)
 
 
 def _euclidean_norm(values: torch.Tensor) -> torch.Tensor:
@@ -462,12 +462,9 @@ def project_to_tangent_space(point: torch.Tensor, vector: torch.Tensor, algebra)
     return algebra.geometric_product(
         point,
         bivector,
-        left_layout=full_layout,
-        right_layout=bivector_layout,
-        output_layout=full_layout,
-        left_storage="canonical",
-        right_storage="compact",
-        output_storage="canonical",
+        left=TensorContract(full_layout, storage="canonical"),
+        right=bivector_layout,
+        output=TensorContract(full_layout, storage="canonical"),
     )
 
 
@@ -494,20 +491,14 @@ def exponential_retraction(point: torch.Tensor, tangent_vector: torch.Tensor, al
         second_name="tangent_vector",
     )
     update = algebra.bivector_exp(
-        bivector,
-        input_layout=bivector_layout,
-        output_layout=full_layout,
-        output_storage="canonical",
+        bivector, input=bivector_layout, output=TensorContract(full_layout, storage="canonical")
     )
     return algebra.geometric_product(
         point,
         update,
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-        left_storage="canonical",
-        right_storage="canonical",
-        output_storage="canonical",
+        left=TensorContract(full_layout, storage="canonical"),
+        right=TensorContract(full_layout, storage="canonical"),
+        output=TensorContract(full_layout, storage="canonical"),
     )
 
 
@@ -523,29 +514,19 @@ def _left_trivialized_bivector(
     bivector_layout = algebra.layout((2,))
     point_reverse = algebra.reverse(
         point,
-        input_layout=full_layout,
-        input_storage="canonical",
-        output_layout=full_layout,
-        output_storage="canonical",
+        input=TensorContract(full_layout, storage="canonical"),
+        output=TensorContract(full_layout, storage="canonical"),
     )
     left_trivialized = algebra.geometric_product(
         point_reverse,
         other,
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-        left_storage="canonical",
-        right_storage="canonical",
-        output_storage="canonical",
+        left=TensorContract(full_layout, storage="canonical"),
+        right=TensorContract(full_layout, storage="canonical"),
+        output=TensorContract(full_layout, storage="canonical"),
     )
     return (
         algebra.grade_projection(
-            left_trivialized,
-            grade=2,
-            input_layout=full_layout,
-            input_storage="canonical",
-            output_layout=bivector_layout,
-            output_storage="compact",
+            left_trivialized, input=TensorContract(full_layout, storage="canonical"), output=bivector_layout
         ),
         full_layout,
         bivector_layout,
@@ -563,3 +544,6 @@ def _validate_full_lane_pair(
         raise ValueError(f"point and {second_name} must have the same shape, got {point.shape} and {other.shape}")
     if point.ndim < 1 or point.shape[-1] != algebra.dim:
         raise ValueError(f"point and {second_name} must use {algebra.dim} canonical lanes")
+
+
+from clifra.core.tensors import TensorContract

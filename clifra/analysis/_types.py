@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from clifra.core.planning.resources import ResourceLimits
+from clifra.core._kernel.planning.resources import ResourceLimits
 
 
 def _limits(max_lanes: int, max_pairs: int) -> ResourceLimits:
@@ -21,7 +21,7 @@ def _limits(max_lanes: int, max_pairs: int) -> ResourceLimits:
     )
 
 
-GP_SPECTRUM_LIMITS = _limits(1 << 10, 1 << 20)
+GEOMETRIC_PRODUCT_SPECTRUM_LIMITS = _limits(1 << 10, 1 << 20)
 ADJOINT_LIMITS = _limits(1 << 8, 1 << 16)
 ANALYSIS_PRODUCT_LIMITS = _limits(1 << 12, 1 << 16)
 SIGNATURE_PROBE_LIMITS = _limits(1 << 12, 1 << 24)
@@ -34,7 +34,7 @@ class AnalysisConstants:
 
     Fixed thresholds and budgets that affect analytical decisions are grouped
     here so they can be adjusted in one place. Numerical guards belong in
-    :mod:`clifra.core.foundation.numerics`.
+    :mod:`clifra.core._kernel.numerics`.
 
     Attributes:
         alignment_report_max_dissimilarity: Maximum neighborhood-connection
@@ -51,13 +51,13 @@ class AnalysisConstants:
             which a mode is counted as near-commuting.
         basis_reflection_score_threshold: Maximum basis-reflection
             distribution score counted in the report summary.
-        gp_spectrum_limits: Resource limits for the full geometric-product
+        geometric_product_spectrum_limits: Resource limits for the full geometric-product
             operator spectrum.
         adjoint_limits: Resource limits for the adjoint-operator eigensolver.
         analysis_product_limits: Resource limits for optional full-layout
             analysis products.
-        gp_spectrum_n_samples: Number of data samples used when building
-            the GP left-multiplication matrix.
+        geometric_product_spectrum_n_samples: Number of data samples used when building
+            the geometric product left-multiplication matrix.
     """
 
     alignment_report_max_dissimilarity: float = 0.5
@@ -65,13 +65,13 @@ class AnalysisConstants:
     bv_sq_hyperbolic_bound: float = 0.5
     near_commuting_mode_threshold: float = 0.05
     basis_reflection_score_threshold: float = 0.1
-    gp_spectrum_limits: ResourceLimits = GP_SPECTRUM_LIMITS
+    geometric_product_spectrum_limits: ResourceLimits = GEOMETRIC_PRODUCT_SPECTRUM_LIMITS
     adjoint_limits: ResourceLimits = ADJOINT_LIMITS
     analysis_product_limits: ResourceLimits = ANALYSIS_PRODUCT_LIMITS
     reflection_limits: ResourceLimits = ANALYSIS_PRODUCT_LIMITS
     near_commuting_mode_limits: ResourceLimits = ANALYSIS_PRODUCT_LIMITS
     signature_probe_limits: ResourceLimits = SIGNATURE_PROBE_LIMITS
-    gp_spectrum_n_samples: int = 50
+    geometric_product_spectrum_n_samples: int = 50
     default_k_neighbors: int = 8
     default_energy_threshold: float = 0.05
     default_dtype: torch.dtype = torch.float32
@@ -226,7 +226,7 @@ class SpectralResult:
         grade_energy: Mean positive lane grade energy ``[n+1]``.
         mean_bivector_norm: Norm summary of the mean bivector field.
         mean_bivector_components: Representative full-layout bivector tensors.
-        gp_action_eigenvalue_magnitudes: Eigenvalues of the geometric-product left-action
+        geometric_product_action_eigenvalue_magnitudes: Eigenvalues of the geometric-product left-action
             operator (``None`` if the algebra was too large).
         skipped: Optional analysis subreports skipped by feasibility policy.
     """
@@ -234,7 +234,7 @@ class SpectralResult:
     grade_energy: torch.Tensor
     mean_bivector_norm: torch.Tensor
     mean_bivector_components: List[torch.Tensor]
-    gp_action_eigenvalue_magnitudes: Optional[torch.Tensor] = None
+    geometric_product_action_eigenvalue_magnitudes: Optional[torch.Tensor] = None
     skipped: Dict[str, Dict] = field(default_factory=dict)
 
 
@@ -335,10 +335,12 @@ class AnalysisReport:
             lines.append(f"  Grade energy: [{ge}]")
             bv = ", ".join(f"{v:.4f}" for v in sp.mean_bivector_norm.tolist())
             lines.append(f"  Mean bivector norm: [{bv}]")
-            if sp.gp_action_eigenvalue_magnitudes is not None:
-                top = min(5, len(sp.gp_action_eigenvalue_magnitudes))
-                gpe = ", ".join(f"{v:.4f}" for v in sp.gp_action_eigenvalue_magnitudes[:top].tolist())
-                lines.append(f"  GP action eigenvalue magnitudes (top {top}): [{gpe}]")
+            if sp.geometric_product_action_eigenvalue_magnitudes is not None:
+                top = min(5, len(sp.geometric_product_action_eigenvalue_magnitudes))
+                eigenvalues = ", ".join(
+                    f"{v:.4f}" for v in sp.geometric_product_action_eigenvalue_magnitudes[:top].tolist()
+                )
+                lines.append(f"  Geometric product action eigenvalue magnitudes (top {top}): [{eigenvalues}]")
             if sp.skipped:
                 lines.append(f"  Skipped: {', '.join(sorted(sp.skipped))}")
 

@@ -11,7 +11,7 @@ from typing import Callable, Sequence
 import torch
 import torch.nn as nn
 
-from clifra.core.foundation.module import CliffordModule
+from clifra.core.module import CliffordModule
 
 from .curriculum import ConstantCurriculum, LossWeightSchedule
 from .inputs import CoordinateLike
@@ -232,9 +232,7 @@ class TransformationFieldEngine(CliffordModule):
             total = total + result.loss * weight
         return total
 
-    def _term_weight(
-        self, kind: str, name: str, like: torch.Tensor, base_weight: float | torch.Tensor
-    ) -> torch.Tensor:
+    def _term_weight(self, kind: str, name: str, like: torch.Tensor, base_weight: float | torch.Tensor) -> torch.Tensor:
         aliases = (f"{kind}:{name}", name, kind, "*")
         return self.curriculum.weight(self, aliases, like, base_weight=base_weight)
 

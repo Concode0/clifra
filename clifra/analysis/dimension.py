@@ -14,9 +14,9 @@ from typing import Dict
 
 import torch
 
+from clifra.core._kernel.numerics import DEFAULT_EPS_MULTIPLIER, eps_for
+from clifra.core.algebra import AlgebraContext
 from clifra.core.config import make_algebra
-from clifra.core.foundation.module import AlgebraLike
-from clifra.core.foundation.numerics import DEFAULT_EPS_MULTIPLIER, eps_for
 
 from ._types import CONSTANTS, DimensionResult
 from ._utils import analysis_dtype, as_analysis_tensor
@@ -206,7 +206,7 @@ class CoordinateLiftAnalyzer:
     def lift(
         self,
         data: torch.Tensor,
-        target_algebra: AlgebraLike,
+        target_algebra: AlgebraContext,
         fill: float = CONSTANTS.dimension_lift_positive_fill,
     ) -> torch.Tensor:
         """Lifts data into the grade-1 subspace of a higher-dimensional algebra.
@@ -230,7 +230,7 @@ class CoordinateLiftAnalyzer:
         if n < d:
             raise ValueError(f"Target algebra dim {n} < source data dim {d}.")
         if n == d:
-            return target_algebra.embed_vector(as_analysis_tensor(data, device=self.device, dtype=dtype))
+            return target_algebra.layout((1,)).full(as_analysis_tensor(data, device=self.device, dtype=dtype))
 
         pad = torch.full(
             (N, n - d),
@@ -239,7 +239,7 @@ class CoordinateLiftAnalyzer:
             dtype=dtype,
         )
         lifted = torch.cat([as_analysis_tensor(data, device=self.device, dtype=dtype), pad], dim=-1)
-        return target_algebra.embed_vector(lifted)
+        return target_algebra.layout((1,)).full(lifted)
 
     def compare_lifts(
         self,
@@ -273,7 +273,7 @@ class CoordinateLiftAnalyzer:
         data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
         results: Dict = {}
 
-        def _measure(alg: AlgebraLike, mv: torch.Tensor) -> Dict:
+        def _measure(alg: AlgebraContext, mv: torch.Tensor) -> Dict:
             gf = NeighborhoodBivectorFlow(alg, k=k)
             alignment = gf.connection_alignment(mv)
             dissimilarity = gf.connection_dissimilarity(mv)
@@ -288,7 +288,7 @@ class CoordinateLiftAnalyzer:
             }
 
         alg_orig = make_algebra(p, q, device=self.device, dtype=self.dtype)
-        mv_orig = alg_orig.embed_vector(data[..., : alg_orig.n])
+        mv_orig = alg_orig.layout((1,)).full(data[..., : alg_orig.n])
         results["original"] = _measure(alg_orig, mv_orig)
 
         alg_pos = make_algebra(p + 1, q, device=self.device, dtype=self.dtype)

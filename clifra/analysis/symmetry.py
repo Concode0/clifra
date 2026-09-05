@@ -12,10 +12,9 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-from clifra.core.foundation.basis import operation_coefficient
-from clifra.core.foundation.module import AlgebraLike
-from clifra.core.foundation.numerics import eps_like
-from clifra.core.runtime.tensors import LaneStorage
+from clifra.core._kernel.basis import operation_coefficient
+from clifra.core._kernel.numerics import eps_like
+from clifra.core.algebra import AlgebraContext
 
 from ._types import CONSTANTS, CommutatorResult, TransformationDiagnosticsResult
 from ._utils import (
@@ -41,7 +40,7 @@ class TransformationDiagnosticsAnalyzer:
 
     def __init__(
         self,
-        algebra: AlgebraLike,
+        algebra: AlgebraContext,
         low_energy_threshold: float = CONSTANTS.low_energy_vector_threshold,
     ):
         self.algebra = algebra
@@ -106,7 +105,7 @@ class TransformationDiagnosticsAnalyzer:
         Returns:
             ``(indices, normalized_energy)`` with one energy per vector lane.
         """
-        g1_idx = self.algebra.grade_indices((1,), device=mv_data.device)
+        g1_idx = self.algebra.layout((1,)).indices_tensor(device=mv_data.device)
 
         # Energy on each grade-1 component
         g1_coeffs = mv_data[:, g1_idx]  # [N, n]
@@ -135,9 +134,7 @@ class TransformationDiagnosticsAnalyzer:
             the even sub-algebra; 1 means entirely odd grades.
         """
         alpha = self.algebra.grade_involution(
-            mv_data,
-            input_grades=full_grades(self.algebra),
-            output_storage=LaneStorage.COMPACT,
+            mv_data, input=self.algebra.layout(full_grades(self.algebra)), output=self.algebra.layout()
         )  # [N, dim]
         odd_part = (mv_data - alpha) / 2.0
         odd_energy = (odd_part**2).sum(dim=-1)
@@ -170,7 +167,7 @@ class TransformationDiagnosticsAnalyzer:
         left_feasible = product_feasibility(
             self.algebra,
             role="basis_reflection",
-            op="gp",
+            op="geometric_product",
             left_layout=vector_layout,
             right_layout=full_layout,
             output_layout=full_layout,
@@ -179,7 +176,7 @@ class TransformationDiagnosticsAnalyzer:
         right_feasible = product_feasibility(
             self.algebra,
             role="basis_reflection",
-            op="gp",
+            op="geometric_product",
             left_layout=full_layout,
             right_layout=vector_layout,
             output_layout=full_layout,
@@ -223,7 +220,9 @@ class TransformationDiagnosticsAnalyzer:
         blade_indices = vector_layout.indices_tensor(device=mv_data.device)
         signs = torch.tensor(
             [
-                operation_coefficient(int(index), int(index), self.algebra.p, self.algebra.q, self.algebra.r, "gp")
+                operation_coefficient(
+                    int(index), int(index), self.algebra.p, self.algebra.q, self.algebra.r, "geometric_product"
+                )
                 for index in blade_indices.tolist()
             ],
             device=mv_data.device,
@@ -235,19 +234,9 @@ class TransformationDiagnosticsAnalyzer:
         left = basis_vecs.unsqueeze(1).expand(n, N, vector_layout.dim).reshape(n * N, vector_layout.dim)
         values = mv_data.unsqueeze(0).expand(n, N, dim).reshape(n * N, dim)
         right = inv_basis.unsqueeze(1).expand(n, N, vector_layout.dim).reshape(n * N, vector_layout.dim)
-        first = self.algebra.geometric_product(
-            left,
-            values,
-            left_layout=vector_layout,
-            right_layout=full_layout,
-            output_layout=full_layout,
-        )
+        first = self.algebra.geometric_product(left, values, left=vector_layout, right=full_layout, output=full_layout)
         reflected = -self.algebra.geometric_product(
-            first,
-            right,
-            left_layout=full_layout,
-            right_layout=vector_layout,
-            output_layout=full_layout,
+            first, right, left=full_layout, right=vector_layout, output=full_layout
         ).reshape(n, N, dim)
         return reflected, valid
 
@@ -330,11 +319,7 @@ class TransformationDiagnosticsAnalyzer:
         bv_exp = bv_bases.unsqueeze(1).expand(n_bv, N, bivector_layout.dim)
         mv_exp = mv_data.unsqueeze(0).expand(n_bv, N, full_layout.dim)
         comm = self.algebra.commutator_product(
-            bv_exp,
-            mv_exp,
-            left_layout=bivector_layout,
-            right_layout=full_layout,
-            output_layout=full_layout,
+            bv_exp, mv_exp, left=bivector_layout, right=full_layout, output=full_layout
         )
 
         comm_norms = comm.norm(dim=-1).mean(dim=-1)  # [n_bv]

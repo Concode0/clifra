@@ -21,10 +21,11 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 
+from clifra.core._kernel.execution.action import FullSandwichActionExecutor, full_versor_factors
+from clifra.core.algebra import AlgebraContext
 from clifra.core.config import make_algebra
-from clifra.core.execution.action import FullSandwichActionExecutor, full_versor_factors
-from clifra.core.foundation.layout import AlgebraSpec
-from clifra.core.foundation.module import AlgebraLike, CliffordModule
+from clifra.core.layout import AlgebraSpec
+from clifra.core.module import CliffordModule
 
 from ._types import CONSTANTS, DimensionResult, SamplingConfig, SignatureEstimate
 from ._utils import action_matrix_feasibility_for_spec, analysis_dtype, as_analysis_tensor
@@ -34,7 +35,7 @@ from .geodesic import NeighborhoodBivectorFlow
 class _ProbeLinear(CliffordModule):
     """Core-local channel mixer used by metric-search probes."""
 
-    def __init__(self, algebra: AlgebraLike, in_channels: int, out_channels: int):
+    def __init__(self, algebra: AlgebraContext, in_channels: int, out_channels: int):
         super().__init__(algebra)
         self.weight = nn.Parameter(torch.empty(out_channels, in_channels))
         self.bias = nn.Parameter(torch.empty(out_channels, algebra.dim))
@@ -51,7 +52,7 @@ class _ProbeLinear(CliffordModule):
 class _ProbeRotor(CliffordModule):
     """Core-local full-lane rotor used only for signature search analysis."""
 
-    def __init__(self, algebra: AlgebraLike, channels: int):
+    def __init__(self, algebra: AlgebraContext, channels: int):
         super().__init__(algebra)
         self.channels = channels
         self.parameter_layout = algebra.layout((2,))
@@ -84,7 +85,7 @@ class _ProbeRotor(CliffordModule):
 class _ProbeBladeSelector(CliffordModule):
     """Core-local blade gate for metric-search probes."""
 
-    def __init__(self, algebra: AlgebraLike, channels: int):
+    def __init__(self, algebra: AlgebraContext, channels: int):
         super().__init__(algebra)
         self.weights = nn.Parameter(torch.ones(channels, algebra.dim))
 
@@ -100,7 +101,7 @@ class _SignatureProbe(nn.Module):
     is the signal used by the signature-ranking heuristic.
     """
 
-    def __init__(self, algebra: AlgebraLike, channels: int = CONSTANTS.signature_probe_channels):
+    def __init__(self, algebra: AlgebraContext, channels: int = CONSTANTS.signature_probe_channels):
         super().__init__()
         self.algebra = algebra
         self.linear_in = _ProbeLinear(algebra, 1, channels)
@@ -121,7 +122,7 @@ class _SignatureProbe(nn.Module):
 
 def _apply_biased_init(
     probe: _SignatureProbe,
-    algebra: AlgebraLike,
+    algebra: AlgebraContext,
     bias_type: str = "random",
 ) -> None:
     """Bias probe bivector weights based on signature type.
@@ -131,7 +132,7 @@ def _apply_biased_init(
     - bv_sq = +1: hyperbolic (mixed-signature base vectors)
     - bv_sq =  0: null (degenerate base vectors)
     """
-    bv_sq = algebra.bivector_squared_signs(device=algebra.device, dtype=algebra.dtype)
+    bv_sq = algebra._planner.bivector_squared_signs(device=algebra.device, dtype=algebra.dtype)
     ell = CONSTANTS.bv_sq_elliptic_bound
     hyp = CONSTANTS.bv_sq_hyperbolic_bound
     for rotor in probe.get_rotor_layers():
@@ -207,7 +208,7 @@ class RotorProbeSignatureEstimator:
         self.micro_batch_size = micro_batch_size
         self.early_stop_patience = early_stop_patience
 
-    def _lift_data(self, data: torch.Tensor) -> Tuple[torch.Tensor, AlgebraLike]:
+    def _lift_data(self, data: torch.Tensor) -> Tuple[torch.Tensor, AlgebraContext]:
         """Lifts [N, X] data into Cl(X+1, 1, 0) via CGA-style embedding."""
         data = as_analysis_tensor(data, device=self.device, dtype=self.dtype)
         N, X = data.shape
@@ -239,14 +240,14 @@ class RotorProbeSignatureEstimator:
         lifted = torch.cat([data, half_radius_squared, ones], dim=-1)
 
         algebra = make_algebra(X + 1, 1, 0, device=self.device, dtype=data.dtype)
-        mv = algebra.embed_vector(lifted)
+        mv = algebra.layout((1,)).full(lifted)
         mv = mv.unsqueeze(1)
         return mv, algebra
 
     def _train_probe(
         self,
         mv_data: torch.Tensor,
-        algebra: AlgebraLike,
+        algebra: AlgebraContext,
         bias_type: str = "random",
     ) -> Dict:
         """Trains a single probe and returns results."""
@@ -315,12 +316,12 @@ class RotorProbeSignatureEstimator:
     def _analyze_bivector_energy(
         self,
         probe: _SignatureProbe,
-        algebra: AlgebraLike,
+        algebra: AlgebraContext,
         original_dim: int,
     ) -> Tuple[Tuple[int, int, int], Dict]:
         """Map learned bivector energy to a candidate ``(p, q, r)`` tuple."""
-        bv_sq = algebra.bivector_squared_signs(device=self.device, dtype=algebra.dtype)
-        bv_indices = algebra.grade_indices((2,), device=self.device)
+        bv_sq = algebra._planner.bivector_squared_signs(device=self.device, dtype=algebra.dtype)
+        bv_indices = algebra.layout((2,)).indices_tensor(device=self.device)
 
         total_energy = torch.zeros(len(bv_indices), device=self.device)
         n_layers = 0

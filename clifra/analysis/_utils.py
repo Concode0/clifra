@@ -10,10 +10,9 @@ from typing import Iterable, Mapping
 
 import torch
 
-from clifra.core.foundation.device import resolve_dtype
-from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.planning.resources import ResourceLimits
-from clifra.core.runtime.tensors import LaneStorage
+from clifra.core._kernel.device import resolve_dtype
+from clifra.core._kernel.planning.resources import ResourceLimits
+from clifra.core.layout import AlgebraSpec, GradeLayout
 
 
 @dataclass(frozen=True)
@@ -191,10 +190,9 @@ def action_matrix_feasibility_for_spec(
 
 def declared_full_product_kwargs(algebra) -> dict[str, object]:
     """Return explicit full-grade metadata for planned compact product outputs."""
-    grades = full_grades(algebra)
+    layout = algebra.layout()
     return {
-        "left_grades": grades,
-        "right_grades": grades,
-        "output_grades": grades,
-        "output_storage": LaneStorage.COMPACT,
+        "left": layout,
+        "right": layout,
+        "output": layout,
     }

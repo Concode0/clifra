@@ -12,9 +12,8 @@ from typing import Dict
 
 import torch
 
-from clifra.core.foundation.module import AlgebraLike
-from clifra.core.foundation.numerics import eps_like
-from clifra.core.runtime.tensors import LaneStorage
+from clifra.core._kernel.numerics import eps_like
+from clifra.core.algebra import AlgebraContext
 from clifra.utils.mps import safe_linalg_eigvals
 
 from ._types import CONSTANTS, CommutatorResult
@@ -36,7 +35,7 @@ class CommutatorAnalyzer:
 
     def __init__(
         self,
-        algebra: AlgebraLike,
+        algebra: AlgebraContext,
         max_bivectors: int = CONSTANTS.commutator_max_bivectors,
     ):
         self.algebra = algebra
@@ -90,7 +89,7 @@ class CommutatorAnalyzer:
         device = mv_data.device
         dtype = mv_data.dtype
 
-        g1_idx = self.algebra.grade_indices((1,), device=device)
+        g1_idx = self.algebra.layout((1,)).indices_tensor(device=device)
         N = mv_data.shape[0]
 
         # All (i, j) pairs with i < j
@@ -108,12 +107,9 @@ class CommutatorAnalyzer:
         comm = self.algebra.commutator_product(
             left,
             right,
-            left_grades=(1,),
-            right_grades=(1,),
-            output_grades=(2,),
-            left_storage=LaneStorage.COMPACT,
-            right_storage=LaneStorage.COMPACT,
-            output_storage=LaneStorage.COMPACT,
+            left=self.algebra.layout((1,)),
+            right=self.algebra.layout((1,)),
+            output=self.algebra.layout((2,)),
         )
         vals = comm.norm(dim=-1).mean(dim=-1)  # [n_pairs]
 
@@ -204,12 +200,9 @@ class CommutatorAnalyzer:
             comm = self.algebra.commutator_product(
                 values,
                 mu.expand_as(values),
-                left_grades=(1,),
-                right_grades=(1,),
-                output_grades=(2,),
-                left_storage=LaneStorage.COMPACT,
-                right_storage=LaneStorage.COMPACT,
-                output_storage=LaneStorage.COMPACT,
+                left=self.algebra.layout((1,)),
+                right=self.algebra.layout((1,)),
+                output=self.algebra.layout((2,)),
             )
             return comm.norm(dim=-1).mean().item()
 
@@ -246,10 +239,10 @@ class CommutatorAnalyzer:
             }
 
         # Extract compact grade-2 part of mean per-sample
-        bv_data = self.algebra.grade_projection(mv_data, 2, output_storage=LaneStorage.COMPACT)  # [N, grade2_dim]
+        bv_data = self.algebra.grade_projection(mv_data, output=self.algebra.layout((2,)))  # [N, grade2_dim]
         mean_bv = bv_data.mean(dim=0)  # [grade2_dim]
 
-        bv_blade_indices = self.algebra.grade_indices((2,), device=device)
+        bv_blade_indices = self.algebra.layout((2,)).indices_tensor(device=device)
 
         if bv_blade_indices.numel() == 0:
             return {
@@ -275,12 +268,9 @@ class CommutatorAnalyzer:
         brackets_bv = self.algebra.commutator_product(
             B[a_idx],
             B[b_idx],
-            left_grades=(2,),
-            right_grades=(2,),
-            output_grades=(2,),
-            left_storage=LaneStorage.COMPACT,
-            right_storage=LaneStorage.COMPACT,
-            output_storage=LaneStorage.COMPACT,
+            left=self.algebra.layout((2,)),
+            right=self.algebra.layout((2,)),
+            output=self.algebra.layout((2,)),
         )  # [n_pairs, grade2_dim]
 
         # Project onto basis: coeffs[p, c] = <bracket_bv_p, B_c>
@@ -309,7 +299,7 @@ class CommutatorAnalyzer:
         }
 
 
-def compute_mean_commutator_and_procrustes_alignment(algebra: AlgebraLike, data_tensor: torch.Tensor):
+def compute_mean_commutator_and_procrustes_alignment(algebra: AlgebraContext, data_tensor: torch.Tensor):
     """Compute a mean commutator norm and an SVD Procrustes alignment.
 
     Args:
@@ -333,14 +323,7 @@ def compute_mean_commutator_and_procrustes_alignment(algebra: AlgebraLike, data_
     # Mean grade-1 vector and compact commutator [x_i, mu]
     mu = x_n.mean(dim=0, keepdim=True)  # [1, n]
     comm = algebra.commutator_product(
-        x_n,
-        mu.expand_as(x_n),
-        left_grades=(1,),
-        right_grades=(1,),
-        output_grades=(2,),
-        left_storage=LaneStorage.COMPACT,
-        right_storage=LaneStorage.COMPACT,
-        output_storage=LaneStorage.COMPACT,
+        x_n, mu.expand_as(x_n), left=algebra.layout((1,)), right=algebra.layout((1,)), output=algebra.layout((2,))
     )
 
     U = torch.norm(comm, p=2, dim=-1).mean().item()

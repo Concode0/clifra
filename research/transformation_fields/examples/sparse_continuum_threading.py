@@ -19,7 +19,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 from research.transformation_fields import (
     CoordinateFieldInput,
     GeneratorSubspace,
@@ -264,9 +264,7 @@ def torus_clearance(points: torch.Tensor, scene: Scene, robot_radius: float) -> 
     relative = points.unsqueeze(-2) - centers
     axial = (relative * normals).sum(dim=-1)
     radial = torch.sqrt((relative.square().sum(dim=-1) - axial.square()).clamp_min(torch.finfo(points.dtype).eps))
-    distance_to_circle = torch.sqrt(
-        (radial - major).square() + axial.square() + torch.finfo(points.dtype).eps
-    )
+    distance_to_circle = torch.sqrt((radial - major).square() + axial.square() + torch.finfo(points.dtype).eps)
     return distance_to_circle - tube - float(robot_radius)
 
 
@@ -369,9 +367,7 @@ class SparseThreadingObjective:
         self.config = config
         self.robot = robot
         self.scene = scene
-        self.gate_indices = torch.stack(
-            [torch.argmin(torch.abs(robot.section_s - value)) for value in scene.gate_s]
-        )
+        self.gate_indices = torch.stack([torch.argmin(torch.abs(robot.section_s - value)) for value in scene.gate_s])
 
     def __call__(self, field_model: InvertibleBivectorField) -> FitState:
         # Every point on one cross-section has the same s and therefore receives
@@ -385,9 +381,7 @@ class SparseThreadingObjective:
         tip_dots = (frames[-1] * self.scene.tip_frame).sum(dim=-1).clamp(-1.0, 1.0)
 
         clearance = torus_clearance(centers, self.scene, self.robot.radius)
-        violation = F.softplus(
-            (self.config.clearance_margin - clearance) / self.config.collision_temperature
-        )
+        violation = F.softplus((self.config.clearance_margin - clearance) / self.config.collision_temperature)
         strain_values = axial_strain(centers, self.robot)
         strain_excess = F.relu(strain_values.abs() - self.config.strain_soft_limit)
         curvature_values = discrete_curvature(centers)
@@ -396,9 +390,10 @@ class SparseThreadingObjective:
         controls = field_model.latent_coordinates
         material_smoothness = (controls[:, 1:] - controls[:, :-1]).square().mean()
         if controls.shape[1] > 2:
-            material_smoothness = material_smoothness + 0.35 * (
-                controls[:, 2:] - 2.0 * controls[:, 1:-1] + controls[:, :-2]
-            ).square().mean()
+            material_smoothness = (
+                material_smoothness
+                + 0.35 * (controls[:, 2:] - 2.0 * controls[:, 1:-1] + controls[:, :-2]).square().mean()
+            )
 
         components = {
             "gate": (gate_centers - self.scene.gate_centers).square().sum(dim=-1).mean(),
@@ -407,9 +402,7 @@ class SparseThreadingObjective:
             "orientation": (1.0 - tip_dots).square().sum(),
             "collision": violation.square().mean() + 0.5 * violation.amax().square(),
             "strain": (
-                0.2 * strain_values.square().mean()
-                + strain_excess.square().mean()
-                + strain_excess.amax().square()
+                0.2 * strain_values.square().mean() + strain_excess.square().mean() + strain_excess.amax().square()
             ),
             "curvature": curvature_excess.square().mean() + 0.25 * curvature_excess.amax().square(),
             "base": (final[0] - self.robot.xyz[0]).square().mean()
@@ -440,19 +433,14 @@ def verify_final(
     robot: RobotSamples,
     scene: Scene,
 ) -> tuple[dict[str, float], torch.Tensor]:
-    gate_indices = torch.stack(
-        [torch.argmin(torch.abs(robot.section_s - value)) for value in scene.gate_s]
-    )
+    gate_indices = torch.stack([torch.argmin(torch.abs(robot.section_s - value)) for value in scene.gate_s])
     with torch.no_grad():
         final = field_model(robot.field_input)
         reconstructed = field_model.inverse(robot.field_input.with_coordinates(final))
         report = {
-            name: float(value.item())
-            for name, value in geometry_metrics(final, robot, scene, gate_indices).items()
+            name: float(value.item()) for name, value in geometry_metrics(final, robot, scene, gate_indices).items()
         }
-        report["cross_section_rigidity_error"] = float(
-            cross_section_rigidity_error(final, robot.xyz).item()
-        )
+        report["cross_section_rigidity_error"] = float(cross_section_rigidity_error(final, robot.xyz).item())
         report["inverse_reconstruction_error"] = float((reconstructed - robot.xyz).abs().max().item())
     return report, final
 
@@ -529,9 +517,7 @@ class LiveView:
             linewidth=1.4,
             label="straight initial rod",
         )
-        self.current_line = self.axis.plot(
-            [], [], [], color="#173f5f", linewidth=2.8, label="current configuration"
-        )[0]
+        self.current_line = self.axis.plot([], [], [], color="#173f5f", linewidth=2.8, label="current configuration")[0]
         self.axis.scatter([0.0], [0.0], [0.0], s=48, color="black", marker="s", label="base")
         self.axis.scatter(
             *_to_numpy(scene.gate_centers).T,
@@ -709,8 +695,7 @@ def acceptance_checks(report: dict[str, Any]) -> dict[str, bool]:
             and dense["cross_section_rigidity_error"] < numerical
         ),
         "zero-shot dense transfer": (
-            report["additional_optimization_steps"] == 0
-            and report["coarse_dense_centerline_discrepancy"] < 0.03
+            report["additional_optimization_steps"] == 0 and report["coarse_dense_centerline_discrepancy"] < 0.03
         ),
     }
 
@@ -727,10 +712,7 @@ def print_report(report: dict[str, Any]) -> None:
         f"dense fit      gate {dense['gate_offset']:.4f} | tip {dense['tip_position_error']:.4f} | "
         f"orientation {math.degrees(dense['tip_orientation_error']):.1f}°"
     )
-    print(
-        f"clearance      {coarse['minimum_clearance']:+.4f} coarse | "
-        f"{dense['minimum_clearance']:+.4f} dense"
-    )
+    print(f"clearance      {coarse['minimum_clearance']:+.4f} coarse | {dense['minimum_clearance']:+.4f} dense")
     print(
         f"rod            strain {coarse['maximum_axial_strain']:.3f} | "
         f"curvature {coarse['maximum_curvature']:.2f} | base {coarse['base_drift']:.4f}"
@@ -779,9 +761,7 @@ def run(config: Config) -> dict[str, Any]:
         "optimization_sample_count": robot.point_count,
         "dense_sample_count": dense_robot.point_count,
         "additional_optimization_steps": 0,
-        "coarse_dense_centerline_discrepancy": coarse_dense_shape_error(
-            robot, coarse_final, dense_robot, dense_final
-        ),
+        "coarse_dense_centerline_discrepancy": coarse_dense_shape_error(robot, coarse_final, dense_robot, dense_final),
     }
     report["checks"] = acceptance_checks(report)
     result_path = config.output_dir / "result.png"

@@ -10,8 +10,8 @@ from typing import Optional
 
 import torch
 
+from clifra.core.algebra import AlgebraContext
 from clifra.core.config import make_algebra
-from clifra.core.foundation.module import AlgebraLike
 
 from ._types import CONSTANTS, AnalysisConfig, AnalysisReport
 from ._utils import as_analysis_tensor
@@ -49,7 +49,7 @@ class GeometricAnalyzer:
     def analyze(
         self,
         data: torch.Tensor,
-        algebra: Optional[AlgebraLike] = None,
+        algebra: Optional[AlgebraContext] = None,
     ) -> AnalysisReport:
         """Run the full geometric analysis pipeline.
 
@@ -124,7 +124,7 @@ class GeometricAnalyzer:
         if p + q + r < CONSTANTS.pipeline_min_ga_n:
             p = max(p, CONSTANTS.pipeline_min_ga_n - q - r)
 
-        algebra = make_algebra(p, q, r, device=cfg.device, dtype=cfg.dtype, default_grades=(1,))
+        algebra = make_algebra(p, q, r, device=cfg.device, dtype=cfg.dtype)
         mv_data = self._embed_raw(sampled, algebra)
 
         # GA analyses
@@ -135,7 +135,7 @@ class GeometricAnalyzer:
     def _run_ga_analyses(
         self,
         mv_data: torch.Tensor,
-        algebra: AlgebraLike,
+        algebra: AlgebraContext,
         report: AnalysisReport,
     ) -> AnalysisReport:
         cfg = self.config
@@ -186,7 +186,7 @@ class GeometricAnalyzer:
         return report
 
     @staticmethod
-    def _embed_raw(data: torch.Tensor, algebra: AlgebraLike) -> torch.Tensor:
+    def _embed_raw(data: torch.Tensor, algebra: AlgebraContext) -> torch.Tensor:
         """Embed raw ``[N, D]`` data as grade-1 multivectors ``[N, 1, dim]``."""
         n = algebra.n
         D = data.shape[1]
@@ -195,5 +195,5 @@ class GeometricAnalyzer:
         elif D < n:
             pad = torch.zeros(data.shape[0], n - D, device=data.device, dtype=data.dtype)
             data = torch.cat([data, pad], dim=-1)
-        mv = algebra.embed_vector(data.to(device=algebra.device, dtype=algebra.dtype))  # [N, dim]
+        mv = algebra.layout((1,)).full(data.to(device=algebra.device, dtype=algebra.dtype))  # [N, dim]
         return mv.unsqueeze(1)  # [N, 1, dim]

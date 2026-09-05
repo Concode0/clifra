@@ -12,9 +12,8 @@ from typing import Optional
 
 import torch
 
-from clifra.core.foundation.module import AlgebraLike
-from clifra.core.runtime.energy import lane_grade_energy
-from clifra.core.runtime.tensors import LaneStorage
+from clifra.core._kernel.energy import lane_grade_energy
+from clifra.core.algebra import AlgebraContext
 from clifra.utils.mps import safe_linalg_eigvals
 
 from ._types import CONSTANTS, SpectralResult
@@ -36,11 +35,11 @@ class SpectralAnalyzer:
        coefficient lane energy across all grades.
     2. **Mean bivector summary** -- norm and coefficients of the sample mean's
        grade-2 component, reported separately from spectral decomposition.
-    3. **GP action eigenvalue magnitudes** -- magnitudes of eigenvalues of the left-multiplication
+    3. **Geometric product action eigenvalue magnitudes** -- magnitudes of eigenvalues of the left-multiplication
        operator :math:`L_x(y) = x \\cdot y` (only for small algebras).
     """
 
-    def __init__(self, algebra: AlgebraLike):
+    def __init__(self, algebra: AlgebraContext):
         self.algebra = algebra
 
     def analyze(self, mv_data: torch.Tensor) -> SpectralResult:
@@ -51,7 +50,7 @@ class SpectralAnalyzer:
 
                 * ``[N, dim]`` -- single-channel batch.
                 * ``[N, C, dim]`` -- multi-channel batch (channels are
-                  averaged before bivector / GP analysis).
+                  averaged before bivector / geometric product analysis).
 
         Returns:
             :class:`SpectralResult`.
@@ -62,27 +61,27 @@ class SpectralAnalyzer:
         grade_energy = self.grade_energy_spectrum(mv_data)
         mean_bivector_norm, mean_bivector_components, skipped = self._mean_bivector_summary_with_skips(mv_data)
 
-        gp_action_magnitudes = None
-        gp_matrix = full_matrix_feasibility(
+        geometric_product_action_magnitudes = None
+        geometric_product_matrix = full_matrix_feasibility(
             self.algebra,
-            role="gp_action_eigenvalue_magnitudes",
-            limits=CONSTANTS.gp_spectrum_limits,
+            role="geometric_product_action_eigenvalue_magnitudes",
+            limits=CONSTANTS.geometric_product_spectrum_limits,
             matrix_kind="eigensolver",
         )
-        gp_product = full_product_feasibility(
+        geometric_product_product = full_product_feasibility(
             self.algebra,
-            role="gp_action_eigenvalue_magnitudes",
-            op="gp",
-            limits=CONSTANTS.gp_spectrum_limits,
+            role="geometric_product_action_eigenvalue_magnitudes",
+            op="geometric_product",
+            limits=CONSTANTS.geometric_product_spectrum_limits,
         )
-        if gp_matrix and gp_product:
-            gp_action_magnitudes = self.gp_action_eigenvalue_magnitudes(mv_data)
+        if geometric_product_matrix and geometric_product_product:
+            geometric_product_action_magnitudes = self.geometric_product_action_eigenvalue_magnitudes(mv_data)
         else:
-            skipped["gp_action_eigenvalue_magnitudes"] = {
-                "reason": _first_skip_reason(gp_matrix, gp_product),
+            skipped["geometric_product_action_eigenvalue_magnitudes"] = {
+                "reason": _first_skip_reason(geometric_product_matrix, geometric_product_product),
                 "checks": {
-                    "eigensolver_matrix": feasibility_record(gp_matrix),
-                    "product": feasibility_record(gp_product),
+                    "eigensolver_matrix": feasibility_record(geometric_product_matrix),
+                    "product": feasibility_record(geometric_product_product),
                 },
             }
 
@@ -90,7 +89,7 @@ class SpectralAnalyzer:
             grade_energy=grade_energy,
             mean_bivector_norm=mean_bivector_norm,
             mean_bivector_components=mean_bivector_components,
-            gp_action_eigenvalue_magnitudes=gp_action_magnitudes,
+            geometric_product_action_eigenvalue_magnitudes=geometric_product_action_magnitudes,
             skipped=skipped,
         )
 
@@ -140,7 +139,7 @@ class SpectralAnalyzer:
 
         # Extract grade-2 (bivector) part
         bv_layout = self.algebra.layout((2,))
-        mean_bv_compact = self.algebra.grade_projection(mean_mv, 2, output_storage=LaneStorage.COMPACT)
+        mean_bv_compact = self.algebra.grade_projection(mean_mv, output=self.algebra.layout((2,)))
         mean_bv = bv_layout.full(mean_bv_compact)
 
         bv_norm = mean_bv_compact.norm()
@@ -152,7 +151,9 @@ class SpectralAnalyzer:
             )
         return bv_norm.reshape(1), [mean_bv], skipped
 
-    def gp_action_eigenvalue_magnitudes(self, mv_data: torch.Tensor, n_samples: Optional[int] = None) -> torch.Tensor:
+    def geometric_product_action_eigenvalue_magnitudes(
+        self, mv_data: torch.Tensor, n_samples: Optional[int] = None
+    ) -> torch.Tensor:
         """Eigenvalue magnitudes of the left-multiplication operator.
 
         For a subsample of data points, constructs the explicit matrix
@@ -167,7 +168,7 @@ class SpectralAnalyzer:
             Sorted (descending) eigenvalue magnitudes.
         """
         if n_samples is None:
-            n_samples = CONSTANTS.gp_spectrum_n_samples
+            n_samples = CONSTANTS.geometric_product_spectrum_n_samples
         dim = self.algebra.dim
         flat = mv_data.mean(dim=1)  # [N, dim]
         N = flat.shape[0]
@@ -177,11 +178,11 @@ class SpectralAnalyzer:
             idx = torch.randperm(N, device=flat.device)[:k]
             flat = flat[idx]
 
-        # Build GP matrix: L[:, j] = gp(mean_x, e_j)
+        # Build geometric product matrix: L[:, j] = geometric_product(mean_x, e_j)
         basis = torch.eye(dim, device=flat.device, dtype=flat.dtype)
         mean_x = flat.mean(dim=0)  # [dim]
-        # Batched GP: expand mean_x to [dim, dim], basis is [dim, dim]
-        # Result[j, :] = gp(mean_x, e_j) = L[:, j], so transpose
+        # Batched geometric product: expand mean_x to [dim, dim], basis is [dim, dim]
+        # Result[j, :] = geometric_product(mean_x, e_j) = L[:, j], so transpose
         L = self.algebra.geometric_product(
             mean_x.unsqueeze(0).expand(dim, -1),
             basis,

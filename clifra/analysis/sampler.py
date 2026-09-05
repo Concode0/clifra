@@ -110,7 +110,7 @@ class StatisticalSampler:
 
         # Embed into algebra (truncate to alg_dim if needed)
         raw = data[:, :alg_dim].to(dtype=dtype)
-        mv = algebra.embed_vector(raw)  # [N, 2^alg_dim]
+        mv = algebra.layout((1,)).full(raw)  # [N, 2^alg_dim]
 
         # Compute per-point connection_alignment as the stratification metric
         gf_k = min(CONSTANTS.default_k_neighbors, N - 1)
