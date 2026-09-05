@@ -29,7 +29,7 @@ class AlgebraContext:
     Semantic layouts are never inferred from tensor widths.
     """
 
-    def __init__(self, p: int, q: int = 0, r: int = 0, *, device="cpu", dtype=torch.float32):
+    def __init__(self, p: int, q: int = 0, r: int = 0, *, device="cpu", dtype=torch.float32, registry=None):
         self.spec = AlgebraSpec(p, q, r)
         self.p, self.q, self.r = self.spec.p, self.spec.q, self.spec.r
         self.n, self.dim = self.spec.n, self.spec.dim
@@ -39,8 +39,18 @@ class AlgebraContext:
         self._planning_policy = DEFAULT_PLANNING_POLICY
         self._resource_limits = DEFAULT_RESOURCE_LIMITS
         self._bivector_exp_options = DEFAULT_BIVECTOR_EXP_OPTIONS
+        from .executors import ExecutorRegistry
+
+        if registry is not None and not isinstance(registry, ExecutorRegistry):
+            raise TypeError("registry must be an ExecutorRegistry")
+        self._registry = ExecutorRegistry.default() if registry is None else registry
         self._planner = GradePlanner(self)
         self._sync_eps()
+
+    @property
+    def registry(self):
+        """Immutable provider collection used for planning this algebra's operations."""
+        return self._registry
 
     @property
     def device(self):

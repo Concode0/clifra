@@ -54,9 +54,9 @@ class GradePlanner:
     def __init__(self, algebra):
         self.algebra = algebra
         self.spec = AlgebraSpec.from_algebra(algebra)
-        from clifra.core._kernel.execution.registry import default_registry
+        from clifra.core._kernel.execution.registry import ExecutorRegistry
 
-        self.registry = default_registry()
+        self.registry = ExecutorRegistry(algebra.registry.providers)
         self.policy = algebra._planning_policy
         self.limits = algebra._resource_limits
         self._product_executors = {}
@@ -550,8 +550,8 @@ class GradePlanner:
         return plan
 
     def _single_executor(self, family, operation, inputs, output, dtype, device, declaration=None):
-        from clifra.core._kernel.execution.interface import ExecutorRequest
         from clifra.core._kernel.execution.providers import UnaryExecutionRequest
+        from clifra.core.executors import ExecutorRequest
 
         arguments = (
             family,

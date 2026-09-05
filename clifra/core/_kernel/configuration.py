@@ -16,7 +16,7 @@ def configured_algebra(
     from clifra.core.algebra import AlgebraContext
 
     kwargs = {} if dtype is None else {"dtype": dtype}
-    algebra = AlgebraContext(p, q, r, device=device, **kwargs)
+    algebra = AlgebraContext(p, q, r, device=device, registry=executor_registry, **kwargs)
     if planning_policy is not None:
         algebra._planning_policy = planning_policy
     if resource_limits is not None:
@@ -25,6 +25,4 @@ def configured_algebra(
         algebra._bivector_exp_options = bivector_exp_options
     algebra._planner.policy = algebra._planning_policy
     algebra._planner.limits = algebra._resource_limits
-    if executor_registry is not None:
-        algebra._planner.registry = executor_registry
     return algebra

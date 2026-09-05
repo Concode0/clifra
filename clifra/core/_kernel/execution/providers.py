@@ -27,9 +27,8 @@ from clifra.core._kernel.planning.policy import (
     compose_plan_facts,
 )
 from clifra.core._kernel.planning.resources import ResourceLimitError, ResourceRequirements
+from clifra.core.executors import Assessment, ExecutorRequest, Rejected
 from clifra.core.tensors import TensorContract
-
-from .interface import Assessment, ExecutorRequest, Rejected
 
 
 @dataclass(frozen=True)

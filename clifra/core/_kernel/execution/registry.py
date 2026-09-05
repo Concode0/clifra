@@ -9,11 +9,11 @@ from clifra.core._kernel.planning.policy import (
     NoAvailableRouteError,
     PlanCandidate,
     PlanFacts,
+    environment_extensions,
     select_policy_route,
 )
 from clifra.core._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS, ResourceRequirements
-
-from .interface import Assessment, ExecutorProvider, ExecutorRequest, Rejected
+from clifra.core.executors import Assessment, ExecutorProvider, ExecutorRequest, Rejected
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,10 @@ class Selection:
         executor = self.provider.build(self.request, self.assessment)
         if not isinstance(executor, nn.Module):
             raise TypeError("provider.build must return an nn.Module")
+        from .providers import BuiltinProvider
+
+        if not isinstance(self.provider, BuiltinProvider) and self.family in {"product", "unary"}:
+            executor = CompactExecutorAdapter(executor, self.request)
         executor.metadata = ExecutorMetadata(
             self.family,
             self.route,
@@ -92,24 +96,47 @@ class ExecutorRegistry:
             family, route = provider.identity
             if family != request.family:
                 continue
-            assessment = provider.assess(request)
+            from .providers import BuiltinProvider
+
+            provider_request = (
+                request
+                if isinstance(provider, BuiltinProvider)
+                else ExecutorRequest(
+                    request.family,
+                    request.operation,
+                    request.inputs,
+                    request.output,
+                    request.dtype,
+                    request.device,
+                )
+            )
+            assessment = provider.assess(provider_request)
             if isinstance(assessment, Rejected):
                 rejected.append((route, assessment.reason))
                 continue
             if not isinstance(assessment, Assessment):
                 raise TypeError("provider.assess must return Assessment or Rejected")
             facts = assessment_facts(assessment)
+            extensions = {
+                **environment_extensions(request.output.spec, request.device.type, request.dtype.itemsize),
+                "layout.output_lanes": request.output.layout.dim,
+                "layout.left_lanes": request.inputs[0].layout.dim if request.inputs[0] is not None else 0,
+                "layout.right_lanes": request.inputs[1].layout.dim
+                if len(request.inputs) > 1 and request.inputs[1] is not None
+                else 0,
+            }
+            facts = replace(facts, extensions=extensions)
             # Built-in preparation may supply private, operation-owned policy coordinates.
             from .providers import BuiltinPreparation
 
             if isinstance(assessment.preparation, BuiltinPreparation):
-                facts = replace(facts, extensions=assessment.preparation.facts.extensions)
+                facts = replace(facts, extensions={**extensions, **dict(assessment.preparation.facts.extensions)})
             reason = facts.resources.rejection_reason(limits)
             if reason:
                 rejected.append((route, reason))
                 continue
             candidates.append(PlanCandidate(family, route, facts))
-            selections.append(Selection(provider, request, assessment, facts))
+            selections.append(Selection(provider, provider_request, assessment, facts))
         if not candidates:
             raise NoAvailableRouteError(f"No implemented {request.family} route is available: {rejected!r}")
         decision = select_policy_route(policy, tuple(candidates))
@@ -128,3 +155,29 @@ def default_registry():
     from .providers import builtin_providers
 
     return ExecutorRegistry(builtin_providers())
+
+
+class CompactExecutorAdapter(nn.Module):
+    """Keep historical built-in entrypoints out of the public provider protocol."""
+
+    def __init__(self, executor, request):
+        super().__init__()
+        self.executor = executor
+        self.inputs = request.inputs
+        self.output = request.output
+
+    def forward(self, *values):
+        return self.executor(*values)
+
+    def forward_compact(self, *values):
+        return self.executor(*values)
+
+    def forward_pairwise_compact(self, left, right):
+        return self.executor(left.unsqueeze(-2), right.unsqueeze(-3))
+
+    def forward_pairwise_compact_right_signed(self, left, right, signs):
+        return self.forward_pairwise_compact(left, right * signs)
+
+    def forward_full(self, *values):
+        compact = tuple(contract.layout.compact(value) for contract, value in zip(self.inputs, values))
+        return self.output.layout.full(self.executor(*compact))

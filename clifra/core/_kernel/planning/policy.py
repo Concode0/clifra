@@ -230,7 +230,9 @@ class DefaultPolicy:
         if family == "bivector_exp" and route == "spectral_local":
             return PolicyEvaluation(10.0 - facts["algebra.n"], "eligible")
         score = scores.get((family, route))
-        return PolicyEvaluation(score, "eligible" if score is not None else "no_policy_rule")
+        return PolicyEvaluation(
+            facts.forward_work if score is None else score, "declared_work" if score is None else "eligible"
+        )
 
 
 DEFAULT_PLANNING_POLICY = DefaultPolicy()

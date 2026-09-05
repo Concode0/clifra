@@ -12,6 +12,7 @@ __version__ = "1.4.0"
 
 from clifra.core.algebra import AlgebraContext
 from clifra.core.config import AlgebraConfig, make_algebra, make_algebra_from_config
+from clifra.core.executors import ExecutorRegistry
 from clifra.core.formatting import Multivector, format_multivector
 from clifra.core.layout import AlgebraSpec, GradeLayout, Layout
 from clifra.core.module import CliffordModule
@@ -19,6 +20,7 @@ from clifra.core.operation import PlannedOperation
 from clifra.core.tensors import LaneStorage, TensorContract
 
 __all__ = [
+    "ExecutorRegistry",
     "__version__",
     "AlgebraConfig",
     "AlgebraContext",

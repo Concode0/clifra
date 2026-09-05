@@ -9,6 +9,7 @@ import torch
 
 from ._kernel.device import resolve_dtype
 from .algebra import AlgebraContext
+from .executors import ExecutorRegistry
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class AlgebraConfig:
     r: int = 0
     device: str = "cpu"
     dtype: torch.dtype = torch.float32
+    registry: ExecutorRegistry | None = None
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any], **overrides):
@@ -31,8 +33,10 @@ class AlgebraConfig:
         return cls(**values)
 
 
-def make_algebra(p: int, q: int = 0, r: int = 0, *, device="cpu", dtype=torch.float32) -> AlgebraContext:
-    return AlgebraContext(p, q, r, device=device, dtype=dtype)
+def make_algebra(
+    p: int, q: int = 0, r: int = 0, *, device="cpu", dtype=torch.float32, registry: ExecutorRegistry | None = None
+) -> AlgebraContext:
+    return AlgebraContext(p, q, r, device=device, dtype=dtype, registry=registry)
 
 
 def make_algebra_from_config(config: Mapping[str, Any] | AlgebraConfig, **overrides) -> AlgebraContext:
