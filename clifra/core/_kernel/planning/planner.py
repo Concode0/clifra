@@ -54,9 +54,9 @@ class GradePlanner:
     def __init__(self, algebra):
         self.algebra = algebra
         self.spec = AlgebraSpec.from_algebra(algebra)
-        from clifra.core._kernel.execution.registry import ExecutorRegistry
+        from clifra.core._kernel.routing import ExecutorRouter
 
-        self.registry = ExecutorRegistry(algebra.registry.providers)
+        self.router = ExecutorRouter(algebra.registry.providers)
         self.policy = algebra._planning_policy
         self.limits = algebra._resource_limits
         self._product_executors = {}
@@ -135,7 +135,7 @@ class GradePlanner:
         if executor is None:
             from clifra.core._kernel.execution.providers import product_execution_request
 
-            executor = self.registry.execute_plan(
+            executor = self.router.execute_plan(
                 product_execution_request(self.algebra, request),
                 self.policy,
                 self.limits,
@@ -434,7 +434,7 @@ class GradePlanner:
             options=options,
             cache=cache,
         )
-        executor = self.registry.execute_plan(request, self.policy, self.limits)
+        executor = self.router.execute_plan(request, self.policy, self.limits)
         if cache:
             self._bivector_exp_executors[key] = executor
         return executor
@@ -468,7 +468,7 @@ class GradePlanner:
 
             request = action_execution_request(self.algebra, "sandwich", input_layout=layout)
             request = replace(request, dtype=dtype, device=resolved_device)
-            executor = self.registry.execute_plan(request, self.policy, self.limits)
+            executor = self.router.execute_plan(request, self.policy, self.limits)
             if cache:
                 self._full_sandwich_action_executors[key] = executor
         return executor
@@ -562,13 +562,13 @@ class GradePlanner:
             device,
         )
         request = UnaryExecutionRequest(*arguments, declaration) if family == "unary" else ExecutorRequest(*arguments)
-        return self.registry.execute_plan(request, self.policy, self.limits)
+        return self.router.execute_plan(request, self.policy, self.limits)
 
     def action_executor(self, operation, **parameters):
         from clifra.core._kernel.execution.providers import action_execution_request
 
         request = action_execution_request(self.algebra, operation, **parameters)
-        return self.registry.execute_plan(request, self.policy, self.limits)
+        return self.router.execute_plan(request, self.policy, self.limits)
 
     def _product_request_cache_key(self, request: ProductRequest) -> tuple[object, ...]:
         return (

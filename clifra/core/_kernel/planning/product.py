@@ -64,7 +64,7 @@ def select_product_route(
         dtype=dtype,
         device=device,
     )
-    return algebra._planner.registry.select(
+    return algebra._planner.router.select(
         product_execution_request(algebra, request),
         algebra._planner.policy if policy is None else policy,
         algebra._planner.limits,

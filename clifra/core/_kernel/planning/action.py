@@ -205,4 +205,4 @@ def _select_action_route(algebra, operation, parameters):
     from clifra.core._kernel.execution.providers import action_execution_request
 
     request = action_execution_request(algebra, operation, **parameters)
-    return algebra._planner.registry.select(request, algebra._planner.policy, algebra._planner.limits)
+    return algebra._planner.router.select(request, algebra._planner.policy, algebra._planner.limits)

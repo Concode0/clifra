@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from clifra.core._kernel.planning.unary import UnaryRequest
     from clifra.core.algebra import AlgebraContext
 
-    from .registry import Selection
+    from ..routing import Selection
 
 import torch
 
@@ -186,7 +186,7 @@ def _product_child(planner, left, right, output, dtype, device, op="geometric_pr
     )
     validate_product_request(planner.algebra, declaration)
     request = product_execution_request(planner.algebra, declaration)
-    return planner.registry.select(request, planner.policy, planner.limits)
+    return planner.router.select(request, planner.policy, planner.limits)
 
 
 def _unary_child(planner, layout, op, dtype, device):
@@ -206,7 +206,7 @@ def _unary_child(planner, layout, op, dtype, device):
         device,
         declaration,
     )
-    return planner.registry.select(request, planner.policy, planner.limits)
+    return planner.router.select(request, planner.policy, planner.limits)
 
 
 def _exp_child(planner, inputs, output, dtype, device):
@@ -225,7 +225,7 @@ def _exp_child(planner, inputs, output, dtype, device):
         allow_truncated_degenerate=options.spectral_allow_truncated_degenerate,
     )
     request = exp_execution_request(planner.spec, device, dtype, output, preselection, planner=planner, options=options)
-    return planner.registry.select(request, planner.policy, planner.limits)
+    return planner.router.select(request, planner.policy, planner.limits)
 
 
 def _simple_facts(request, pairs=None):
@@ -479,7 +479,7 @@ def _assess_action(request, route):
                 request.dtype,
                 request.device,
             )
-            norm = planner.registry.select(norm_request, planner.policy, planner.limits)
+            norm = planner.router.select(norm_request, planner.policy, planner.limits)
             involution = _unary_child(planner, parameter, "grade_involution", request.dtype, request.device)
             reverse = _unary_child(planner, parameter, "reverse", request.dtype, request.device)
     work = spec.n**3 + inputs.dim * output.dim if route == "vector_matrix" else pairs

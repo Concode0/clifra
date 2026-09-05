@@ -427,15 +427,15 @@ def select_bivector_exp_route(
     output_layout,
     preselection,
     policy,
-    registry=None,
+    router=None,
     limits=None,
 ) -> RouteDecision:
     from clifra.core._kernel.execution.providers import exp_execution_request
-    from clifra.core._kernel.execution.registry import default_registry
     from clifra.core._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS
+    from clifra.core._kernel.routing import default_router
 
     request = exp_execution_request(spec, device, dtype, output_layout, preselection)
-    return (default_registry() if registry is None else registry).select(
+    return (default_router() if router is None else router).select(
         request,
         policy,
         DEFAULT_RESOURCE_LIMITS if limits is None else limits,

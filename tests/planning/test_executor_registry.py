@@ -11,10 +11,10 @@ from clifra.core._kernel.execution.providers import (
     action_execution_request,
     product_execution_request,
 )
-from clifra.core._kernel.execution.registry import ExecutorRegistry
 from clifra.core._kernel.planning.layouts import ProductRequest
 from clifra.core._kernel.planning.policy import PolicyEvaluation
 from clifra.core._kernel.planning.resources import ResourceLimits
+from clifra.core._kernel.routing import ExecutorRouter
 from clifra.core.executors import Assessment, ExecutorRequest, Rejected
 
 
@@ -57,13 +57,13 @@ def test_rejected_has_no_cost_quality_or_preparation():
 def test_registry_immutable_duplicate_identity_and_ties():
     first = MockProvider(("mock", "first"), accepted())
     second = MockProvider(("mock", "second"), accepted())
-    registry = ExecutorRegistry([first, second])
+    registry = ExecutorRouter([first, second])
     assert isinstance(registry.providers, tuple)
     assert registry.select(request(), EqualPolicy()).provider is first
     with pytest.raises(FrozenInstanceError):
         registry.providers = ()
     with pytest.raises(ValueError, match="duplicate"):
-        ExecutorRegistry((first, first))
+        ExecutorRouter((first, first))
 
 
 def test_resource_and_capability_rejections_cannot_reach_policy_or_build():
@@ -78,7 +78,7 @@ def test_resource_and_capability_rejections_cannot_reach_policy_or_build():
             assert candidate.route == "valid"
             return PolicyEvaluation(0)
 
-    registry = ExecutorRegistry(providers)
+    registry = ExecutorRouter(providers)
     selection = registry.select(request(), Policy(), ResourceLimits(max_pairs=2))
     assert selection.assessment is providers[-1].result
     assert isinstance(selection.build(), nn.Identity)
@@ -136,9 +136,9 @@ def test_assess_allocates_no_execution_buffers_and_build_never_selects(monkeypat
                     output_layout=even,
                     parameter_layout=bivector,
                 )
-            selection = planner.registry.select(declaration, planner.policy, planner.limits)
+            selection = planner.router.select(declaration, planner.policy, planner.limits)
     with monkeypatch.context() as check:
-        check.setattr(ExecutorRegistry, "select", fail)
+        check.setattr(ExecutorRouter, "select", fail)
         executor = selection.build()
     assert executor.metadata.route == selection.route
     assert executor.metadata.facts == selection.facts

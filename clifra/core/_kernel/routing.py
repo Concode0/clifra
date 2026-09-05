@@ -35,7 +35,7 @@ class Selection:
         executor = self.provider.build(self.request, self.assessment)
         if not isinstance(executor, nn.Module):
             raise TypeError("provider.build must return an nn.Module")
-        from .providers import BuiltinProvider
+        from .execution.providers import BuiltinProvider
 
         if not isinstance(self.provider, BuiltinProvider) and self.family in {"product", "unary"}:
             executor = CompactExecutorAdapter(executor, self.request)
@@ -76,7 +76,7 @@ def assessment_facts(assessment):
 
 
 @dataclass(frozen=True)
-class ExecutorRegistry:
+class ExecutorRouter:
     providers: tuple[ExecutorProvider, ...]
 
     def __post_init__(self):
@@ -96,7 +96,7 @@ class ExecutorRegistry:
             family, route = provider.identity
             if family != request.family:
                 continue
-            from .providers import BuiltinProvider
+            from .execution.providers import BuiltinProvider
 
             provider_request = (
                 request
@@ -127,7 +127,7 @@ class ExecutorRegistry:
             }
             facts = replace(facts, extensions=extensions)
             # Built-in preparation may supply private, operation-owned policy coordinates.
-            from .providers import BuiltinPreparation
+            from .execution.providers import BuiltinPreparation
 
             if isinstance(assessment.preparation, BuiltinPreparation):
                 facts = replace(facts, extensions={**extensions, **dict(assessment.preparation.facts.extensions)})
@@ -151,10 +151,10 @@ class ExecutorRegistry:
         return self.select(request, policy, limits).build()
 
 
-def default_registry():
-    from .providers import builtin_providers
+def default_router():
+    from .execution.providers import builtin_providers
 
-    return ExecutorRegistry(builtin_providers())
+    return ExecutorRouter(builtin_providers())
 
 
 class CompactExecutorAdapter(nn.Module):
