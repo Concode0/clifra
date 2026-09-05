@@ -12,8 +12,8 @@ from clifra.analysis.pipeline import GeometricAnalyzer
 from clifra.analysis.signature import RotorProbeSignatureEstimator
 from clifra.analysis.spectral import SpectralAnalyzer
 from clifra.analysis.symmetry import TransformationDiagnosticsAnalyzer
+from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core.config import make_algebra
-from clifra.core.planning.resources import ResourceLimits
 
 pytestmark = pytest.mark.unit
 
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.unit
 def test_geodesic_flow_handles_single_point_without_nan():
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float64)
     flow = NeighborhoodBivectorFlow(algebra, k=4)
-    mv = algebra.embed_vector(torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64))
+    mv = algebra.layout((1,)).full(torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64))
 
     connection_alignment = flow._connection_alignment_tensor(mv)
     connection_dissimilarity = flow._connection_dissimilarity_tensor(mv)
@@ -35,14 +35,8 @@ def test_geodesic_flow_handles_single_point_without_nan():
 
 
 def test_analysis_modules_accept_context_without_reference_fallback():
-    algebra = make_algebra(
-        4,
-        0,
-        device="cpu",
-        dtype=torch.float32,
-        default_grades=(1,),
-    )
-    mv = algebra.embed_vector(torch.randn(16, algebra.n))
+    algebra = make_algebra(4, 0, device="cpu", dtype=torch.float32)
+    mv = algebra.layout((1,)).full(torch.randn(16, algebra.n))
 
     spectral = SpectralAnalyzer(algebra).analyze(mv)
     symmetry = TransformationDiagnosticsAnalyzer(algebra).analyze(mv)
@@ -89,8 +83,8 @@ def test_analysis_feasibility_reports_product_pair_cap_without_planning():
 
     feasibility = full_product_feasibility(
         algebra,
-        role="test_full_gp",
-        op="gp",
+        role="test_full_geometric_product",
+        op="geometric_product",
         limits=ResourceLimits(max_pairs=1),
     )
 
@@ -110,27 +104,27 @@ def test_signature_probe_lift_reports_action_matrix_cap():
 
 def test_reflection_analysis_uses_product_feasibility_not_dimension_cap():
     algebra = make_algebra(9, 0, device="cpu", dtype=torch.float32)
-    mv = algebra.embed_vector(torch.randn(3, algebra.n))
+    mv = algebra.layout((1,)).full(torch.randn(3, algebra.n))
 
     result = TransformationDiagnosticsAnalyzer(algebra).basis_reflection_scores(mv)
 
     assert len(result) == algebra.n
 
 
-def test_spectral_result_reports_skipped_gp_spectrum(monkeypatch):
+def test_spectral_result_reports_skipped_geometric_product_spectrum(monkeypatch):
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
-    mv = algebra.embed_vector(torch.randn(6, algebra.n))
-    monkeypatch.setattr(CONSTANTS, "gp_spectrum_limits", ResourceLimits(max_pairs=1))
+    mv = algebra.layout((1,)).full(torch.randn(6, algebra.n))
+    monkeypatch.setattr(CONSTANTS, "geometric_product_spectrum_limits", ResourceLimits(max_pairs=1))
 
     result = SpectralAnalyzer(algebra).analyze(mv)
 
-    assert result.gp_action_eigenvalue_magnitudes is None
-    assert result.skipped["gp_action_eigenvalue_magnitudes"]["reason"] == "eigensolver_matrix_cap"
+    assert result.geometric_product_action_eigenvalue_magnitudes is None
+    assert result.skipped["geometric_product_action_eigenvalue_magnitudes"]["reason"] == "eigensolver_matrix_cap"
 
 
 def test_commutator_result_reports_skipped_adjoint_eigenvalue_magnitudes(monkeypatch):
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
-    mv = algebra.embed_vector(torch.randn(6, algebra.n))
+    mv = algebra.layout((1,)).full(torch.randn(6, algebra.n))
     monkeypatch.setattr(CONSTANTS, "adjoint_limits", ResourceLimits(max_pairs=1))
 
     result = CommutatorAnalyzer(algebra).analyze(mv)
@@ -141,7 +135,7 @@ def test_commutator_result_reports_skipped_adjoint_eigenvalue_magnitudes(monkeyp
 
 def test_symmetry_result_reports_skipped_reflections_and_near_commuting_modes(monkeypatch):
     algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
-    mv = algebra.embed_vector(torch.randn(6, algebra.n))
+    mv = algebra.layout((1,)).full(torch.randn(6, algebra.n))
     monkeypatch.setattr(CONSTANTS, "reflection_limits", ResourceLimits(max_pairs=1))
     monkeypatch.setattr(CONSTANTS, "near_commuting_mode_limits", ResourceLimits(max_pairs=1))
 

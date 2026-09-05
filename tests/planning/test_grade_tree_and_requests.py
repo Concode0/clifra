@@ -20,7 +20,7 @@ def test_grade_plan_tree_groups_routes_without_runtime_partition_backend():
         left_grades=(1, 2),
         right_grades=(1,),
         output_grades=(0, 2),
-        op="gp",
+        op="geometric_product",
         chunk_pair_limit=128,
     )
 
@@ -47,7 +47,7 @@ def test_product_request_infers_declared_layouts_and_output_grades():
         right,
         left_grades=(1,),
         right_grades=(1,),
-        op="gp",
+        op="geometric_product",
     )
 
     assert request.left_grades == (1,)
@@ -70,7 +70,7 @@ def test_product_request_detects_compact_lane_tensors_from_layout_shape():
         left_layout=layout,
         right_layout=layout,
         output_grades=(0, 2),
-        op="gp",
+        op="geometric_product",
     )
 
     assert request.left_uses_compact_storage

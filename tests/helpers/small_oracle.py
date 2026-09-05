@@ -12,7 +12,7 @@ from math import fsum
 import torch
 
 _PRODUCT_OPS = {
-    "gp",
+    "geometric_product",
     "wedge",
     "symmetric_product",
     "commutator_product",
@@ -62,7 +62,7 @@ class SmallCliffordOracle:
     def basis_product(self, left_index: int, right_index: int) -> tuple[int, float]:
         return _basis_product(int(left_index), int(right_index), self.p, self.q, self.r)
 
-    def operation_coefficient(self, left_index: int, right_index: int, op: str = "gp") -> float:
+    def operation_coefficient(self, left_index: int, right_index: int, op: str = "geometric_product") -> float:
         return _operation_coefficient(int(left_index), int(right_index), self.p, self.q, self.r, op)
 
     def reverse_sign(self, index: int) -> float:
@@ -78,7 +78,7 @@ class SmallCliffordOracle:
         left: torch.Tensor,
         right: torch.Tensor,
         *,
-        op: str = "gp",
+        op: str = "geometric_product",
         left_indices: Iterable[int] | None = None,
         right_indices: Iterable[int] | None = None,
         output_indices: Iterable[int] | None = None,
@@ -110,7 +110,7 @@ class SmallCliffordOracle:
         left: torch.Tensor,
         right: torch.Tensor,
         *,
-        op: str = "gp",
+        op: str = "geometric_product",
         left_indices: Iterable[int] | None = None,
         right_indices: Iterable[int] | None = None,
         output_indices: Iterable[int] | None = None,
@@ -183,7 +183,7 @@ class SmallCliffordOracle:
         return self.product(
             left,
             right,
-            op="gp",
+            op="geometric_product",
             left_indices=left_indices,
             right_indices=right_indices,
             output_indices=(0,),
@@ -317,7 +317,7 @@ def _operation_coefficient(left_index: int, right_index: int, p: int, q: int, r:
     if op not in _PRODUCT_OPS:
         raise ValueError(f"unsupported oracle product {op!r}")
     output_index, left_right = _basis_product(left_index, right_index, p, q, r)
-    if op == "gp":
+    if op == "geometric_product":
         return left_right
     overlap = left_index & right_index
     if op == "wedge":

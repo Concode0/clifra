@@ -4,17 +4,11 @@
 import pytest
 import torch
 
-from clifra.core.foundation.layout import AlgebraSpec
-from clifra.core.planning.layouts import build_product_request
-from clifra.core.planning.unary import UnaryRequest
-from clifra.core.runtime.tensors import (
-    LaneStorage,
-    TensorContract,
-    check_layout_spec,
-    compact_pair_values,
-    infer_contract,
-    resolve_contract,
-)
+from clifra.core._kernel.contracts import check_layout_spec, compact_pair_values, infer_contract, resolve_contract
+from clifra.core._kernel.planning.layouts import build_product_request
+from clifra.core._kernel.planning.unary import UnaryRequest
+from clifra.core.layout import AlgebraSpec
+from clifra.core.tensors import LaneStorage, TensorContract
 
 pytestmark = pytest.mark.unit
 
@@ -22,8 +16,8 @@ pytestmark = pytest.mark.unit
 def test_tensor_contract_records_declared_layout_and_storage():
     spec = AlgebraSpec(5, 0, 0)
     vector_layout = spec.layout((1,))
-    compact = TensorContract.compact(spec, vector_layout)
-    canonical = TensorContract.canonical(spec, vector_layout)
+    compact = TensorContract.compact(vector_layout)
+    canonical = TensorContract.canonical(vector_layout)
 
     assert compact.layout is vector_layout
     assert compact.storage is LaneStorage.COMPACT
@@ -57,7 +51,7 @@ def test_resolve_contract_reports_role_and_grade_disagreement():
 def test_unary_request_rejects_inconsistent_contracts_at_construction():
     spec = AlgebraSpec(3, 0, 0)
     foreign_spec = AlgebraSpec(0, 3, 0)
-    foreign = TensorContract.compact(foreign_spec, foreign_spec.layout((1,)))
+    foreign = TensorContract.compact(foreign_spec.layout((1,)))
 
     with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
         UnaryRequest(
@@ -73,8 +67,8 @@ def test_unary_request_rejects_inconsistent_contracts_at_construction():
 def test_tensor_contract_converts_between_compact_and_canonical():
     spec = AlgebraSpec(4, 0, 0)
     layout = spec.layout((0, 2))
-    compact_contract = TensorContract.compact(spec, layout)
-    canonical_contract = TensorContract.canonical(spec, layout)
+    compact_contract = TensorContract.compact(layout)
+    canonical_contract = TensorContract.canonical(layout)
     compact_values = torch.randn(3, layout.dim)
     canonical_values = layout.full(compact_values)
 
@@ -121,7 +115,7 @@ def test_product_request_carries_resolved_tensor_contracts():
         left_layout=vector_layout,
         right_layout=bivector_layout,
         right_storage=LaneStorage.CANONICAL,
-        op="gp",
+        op="geometric_product",
     )
 
     assert request.left.storage is LaneStorage.COMPACT
@@ -143,7 +137,7 @@ def test_product_request_can_declare_canonical_output_storage():
         left_layout=vector_layout,
         right_layout=vector_layout,
         output_storage=LaneStorage.CANONICAL,
-        op="gp",
+        op="geometric_product",
     )
 
     assert request.output.uses_canonical_storage

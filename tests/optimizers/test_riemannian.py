@@ -17,8 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from clifra.core.runtime.algebra import AlgebraContext
-from clifra.layers import MultiVersorLayer, RotorGadget, VersorLayer
+from clifra.core.algebra import AlgebraContext
 from clifra.optimizers.riemannian import (
     MANIFOLD_SPHERE,
     MANIFOLD_SPIN,
@@ -30,6 +29,70 @@ from clifra.optimizers.riemannian import (
     project_to_tangent_space,
     tag_manifold,
 )
+
+
+class VersorLayer(nn.Module):
+    """Test-local compact spin parameters applied through a core plan."""
+
+    def __init__(self, algebra, channels):
+        super().__init__()
+        self.channels = channels
+        layout = algebra.layout((2,))
+        self.register_buffer("grade_indices", layout.indices_tensor())
+        self.grade_weights = tag_manifold(nn.Parameter(torch.randn(channels, layout.dim) * 0.01), MANIFOLD_SPIN)
+        self.action = algebra.plan_versor_action(grade=2, parameter=layout)
+
+    def forward(self, x):
+        return self.action(x, self.grade_weights)
+
+
+class MultiVersorLayer(nn.Module):
+    """Test-local model combining spin parameters and Euclidean mixing weights."""
+
+    def __init__(self, algebra, channels, num_versors):
+        super().__init__()
+        layout = algebra.layout((2,))
+        self.grade_weights = tag_manifold(nn.Parameter(torch.randn(num_versors, layout.dim) * 0.01), MANIFOLD_SPIN)
+        self.weights = nn.Parameter(torch.empty(channels, num_versors))
+        nn.init.xavier_uniform_(self.weights)
+        self.action = algebra.plan_versor_action(grade=2, parameter=layout)
+
+    def forward(self, x):
+        expanded = x.unsqueeze(-2).expand(*x.shape[:-1], self.grade_weights.shape[0], x.shape[-1])
+        transformed = self.action(expanded, self.grade_weights)
+        return (transformed * self.weights.unsqueeze(-1)).sum(dim=-2)
+
+
+class RotorGadget(nn.Module):
+    """Minimal optimizer fixture with two spin parameters and channel mixing."""
+
+    def __init__(self, algebra, in_channels, out_channels):
+        super().__init__()
+        layout = algebra.layout((2,))
+        self.bivector_left = tag_manifold(nn.Parameter(torch.randn(in_channels, layout.dim) * 0.01), MANIFOLD_SPIN)
+        self.bivector_right = tag_manifold(nn.Parameter(torch.randn(in_channels, layout.dim) * 0.01), MANIFOLD_SPIN)
+        self.mix = nn.Linear(in_channels, out_channels)
+        self.action = algebra.plan_versor_action(grade=2, parameter=layout)
+
+    def forward(self, x):
+        x = self.action(self.action(x, self.bivector_left), self.bivector_right)
+        return self.mix(x.transpose(-1, -2)).transpose(-1, -2)
+
+
+class ReflectionLayer(nn.Module):
+    """Test-local sphere parameters applied through a core reflection plan."""
+
+    def __init__(self, algebra, channels):
+        super().__init__()
+        layout = algebra.layout((1,))
+        self.vector_weights = tag_manifold(
+            nn.Parameter(F.normalize(torch.randn(channels, layout.dim), dim=-1)), MANIFOLD_SPHERE
+        )
+        self.action = algebra.plan_versor_action(grade=1, parameter=layout)
+
+    def forward(self, x):
+        return self.action(x, self.vector_weights)
+
 
 # Fixtures
 
@@ -169,7 +232,9 @@ def test_spin_tangent_projection_uses_full_lane_boundary(algebra_3d):
     tangent = project_to_tangent_space(rotor, ambient, algebra_3d)
 
     left_trivialized = algebra_3d.geometric_product(algebra_3d.reverse(rotor), tangent)
-    bivector_part = algebra_3d.grade_projection(left_trivialized, grade=2, output_storage="canonical")
+    bivector_part = algebra_3d.grade_projection(
+        left_trivialized, output=TensorContract(algebra_3d.layout((2,)), storage="canonical")
+    )
     assert tangent.shape == rotor.shape
     assert torch.allclose(left_trivialized, bivector_part, atol=1e-6, rtol=1e-6)
 
@@ -585,8 +650,6 @@ def test_empty_parameters(algebra_3d):
 
 def test_manifold_tagging(algebra_3d):
     """Verify layers tag their parameters with correct manifold types."""
-    from clifra.layers.primitives.reflection import ReflectionLayer
-
     rotor = VersorLayer(algebra_3d, channels=4)
     assert getattr(rotor.grade_weights, "_manifold", None) == MANIFOLD_SPIN
 
@@ -629,7 +692,6 @@ def test_group_parameters_rejects_unknown_manifold():
 
 def test_from_model_groups(algebra_3d):
     """Verify from_model creates separate groups per manifold."""
-    from clifra.layers.primitives.reflection import ReflectionLayer
 
     class MixedModel(nn.Module):
         def __init__(self):
@@ -670,8 +732,6 @@ def test_make_riemannian_optimizer_factory(algebra_3d):
 
 def test_sphere_retraction(algebra_3d):
     """Verify sphere-tagged params are projected to unit sphere after step."""
-    from clifra.layers.primitives.reflection import ReflectionLayer
-
     layer = ReflectionLayer(algebra_3d, channels=4)
     opt = RiemannianAdam.from_model(layer, lr=0.01, algebra=algebra_3d)
 
@@ -701,7 +761,7 @@ def test_sphere_retraction_uses_signature_norm_for_mixed_signature(optimizer_cls
 
     optimizer.step()
 
-    metric_norm = algebra.signature_norm_squared(vector, input_layout=vector_layout).abs()
+    metric_norm = algebra.signature_norm_squared(vector, input=vector_layout).abs()
     euclidean_norm = vector.norm(dim=-1, keepdim=True)
     assert torch.allclose(metric_norm, torch.ones_like(metric_norm), atol=1e-6)
     assert not torch.allclose(euclidean_norm, torch.ones_like(euclidean_norm), atol=1e-4)
@@ -772,7 +832,6 @@ def test_direct_parameter_groups_do_not_apply_spin_retraction_implicitly(algebra
 
 def test_mixed_model_convergence(algebra_3d):
     """Verify optimizer converges with mixed manifold parameter groups."""
-    from clifra.layers.primitives.reflection import ReflectionLayer
 
     class MixedModel(nn.Module):
         def __init__(self):
@@ -810,3 +869,5 @@ def test_mixed_model_convergence(algebra_3d):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+from clifra.core.tensors import TensorContract

@@ -8,8 +8,8 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core.planning.policy import FormulaPolicy, Polynomial, RouteRule
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core._kernel.planning.policy import FormulaPolicy, Polynomial, RouteRule
+from clifra.core.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
     CORE_NUMERIC_SETTINGS,
     CORE_PROPERTY_SETTINGS,
@@ -23,7 +23,7 @@ from tests.helpers.small_oracle import SmallCliffordOracle
 pytestmark = [pytest.mark.unit, pytest.mark.property]
 
 _PRODUCT_METHODS = {
-    "gp": "geometric_product",
+    "geometric_product": "geometric_product",
     "wedge": "wedge",
     "symmetric_product": "symmetric_product",
     "commutator_product": "commutator_product",
@@ -33,8 +33,8 @@ _PRODUCT_METHODS = {
 }
 
 
-def _product(algebra: AlgebraContext, op: str, left: torch.Tensor, right: torch.Tensor, **kwargs) -> torch.Tensor:
-    return getattr(algebra, _PRODUCT_METHODS[op])(left, right, **kwargs)
+def _product(algebra: AlgebraContext, op: str, a: torch.Tensor, b: torch.Tensor, **kwargs) -> torch.Tensor:
+    return getattr(algebra, _PRODUCT_METHODS[op])(a, b, **kwargs)
 
 
 @CORE_PROPERTY_SETTINGS
@@ -65,9 +65,9 @@ def test_compact_products_match_small_oracle_for_declared_layouts(case):
         op,
         left,
         right,
-        left_layout=left_layout,
-        right_layout=right_layout,
-        output_layout=output_layout,
+        left=left_layout,
+        right=right_layout,
+        output=output_layout,
     )
     expected = oracle.product(
         left,
@@ -107,7 +107,7 @@ def test_vector_wedge_with_itself_is_zero_and_matches_oracle(signature, data):
     oracle = SmallCliffordOracle(*signature)
     batch = data.draw(st.integers(min_value=1, max_value=3))
     vector = data.draw(tensor_with_shape((batch, algebra.n)))
-    values = algebra.embed_vector(vector)
+    values = algebra.layout((1,)).full(vector)
 
     actual = algebra.wedge(values, values)
     expected = oracle.product(values, values, op="wedge")
@@ -154,14 +154,12 @@ def test_full_product_routes_match_the_independent_oracle(case):
                 RouteRule("product", other, score=Polynomial(constant=1.0)),
             )
         )
-        algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64, planning_policy=policy)
+        algebra = configured_algebra(*signature, device="cpu", dtype=torch.float64, planning_policy=policy)
         layout = algebra.spec.full_layout()
-        product = algebra.plan_product(
-            op=op,
-            left_layout=layout,
-            right_layout=layout,
-            output_layout=layout,
-        )
+        product = algebra.plan_product(op=op, left=layout, right=layout, output=layout)
 
-        assert product.executor_family == selected
+        assert product._kernel.executor_family == selected
         assert torch.allclose(product(left, right), expected, atol=1e-10, rtol=1e-10)
+
+
+from clifra.core._kernel.configuration import configured_algebra

@@ -6,8 +6,8 @@ import math
 import pytest
 import torch
 
-from clifra.core import GeometricAttentionScoreExecutor
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core._kernel.execution.attention import GeometricAttentionScoreExecutor
+from clifra.core.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit
 
@@ -29,7 +29,7 @@ def _reference_attention_score(algebra, q_head, k_head, bivector_weight, *, scal
 
 def test_full_lane_attention_scorer_matches_direct_product():
     algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float64)
-    layout = algebra.default_layout()
+    layout = algebra.layout()
     scorer = GeometricAttentionScoreExecutor(
         algebra,
         head_channels=2,
@@ -46,7 +46,7 @@ def test_full_lane_attention_scorer_matches_direct_product():
 
 
 def test_compact_attention_scorer_matches_full_lane_reference():
-    context = AlgebraContext(4, 0, device="cpu", default_grades=(1,), dtype=torch.float64)
+    context = AlgebraContext(4, 0, device="cpu", dtype=torch.float64)
     full_context = AlgebraContext(4, 0, 0, device="cpu", dtype=torch.float64)
     layout = context.layout((1,))
     scorer = GeometricAttentionScoreExecutor(context, head_channels=2, bivector_weight=0.25, layout=layout)

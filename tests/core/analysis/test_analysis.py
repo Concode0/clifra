@@ -28,7 +28,7 @@ from clifra.analysis.pipeline import GeometricAnalyzer
 from clifra.analysis.sampler import StatisticalSampler
 from clifra.analysis.spectral import SpectralAnalyzer
 from clifra.analysis.symmetry import TransformationDiagnosticsAnalyzer
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 
 DEVICE = "cpu"
 
@@ -59,7 +59,7 @@ def circle_data_3d(alg3):
     torch.manual_seed(0)
     t = torch.linspace(0, 2 * math.pi, 51)[:-1]  # 50 points
     raw = torch.stack([t.cos(), t.sin(), torch.zeros_like(t)], dim=-1)
-    return alg3.embed_vector(raw)  # [50, 8]
+    return alg3.layout((1,)).full(raw)  # [50, 8]
 
 
 @pytest.fixture(scope="module")
@@ -266,16 +266,16 @@ class TestSpectralAnalyzer:
         for comp in result.mean_bivector_components:
             assert comp.shape == (alg3.dim,)
 
-    def test_gp_action_eigenvalue_magnitudes_present_small_algebra(self, alg3, circle_data_3d):
+    def test_geometric_product_action_eigenvalue_magnitudes_present_small_algebra(self, alg3, circle_data_3d):
         sa = SpectralAnalyzer(alg3)
         result = sa.analyze(circle_data_3d)
-        assert result.gp_action_eigenvalue_magnitudes is not None
-        assert result.gp_action_eigenvalue_magnitudes.numel() > 0
+        assert result.geometric_product_action_eigenvalue_magnitudes is not None
+        assert result.geometric_product_action_eigenvalue_magnitudes.numel() > 0
 
-    def test_gp_action_eigenvalue_magnitudes_sorted_descending(self, alg3, circle_data_3d):
+    def test_geometric_product_action_eigenvalue_magnitudes_sorted_descending(self, alg3, circle_data_3d):
         sa = SpectralAnalyzer(alg3)
         result = sa.analyze(circle_data_3d)
-        eigs = result.gp_action_eigenvalue_magnitudes
+        eigs = result.geometric_product_action_eigenvalue_magnitudes
         assert (eigs[:-1] >= eigs[1:] - 1e-6).all()
 
     def test_multichannel_input(self, alg3):
@@ -288,7 +288,7 @@ class TestSpectralAnalyzer:
     def test_small_algebra_cl2(self, alg2):
         torch.manual_seed(11)
         raw = torch.randn(40, 2)
-        mv = alg2.embed_vector(raw)
+        mv = alg2.layout((1,)).full(raw)
         sa = SpectralAnalyzer(alg2)
         result = sa.analyze(mv)
         # Cl(2,0): grades 0,1,2 → 3 entries
@@ -452,7 +452,7 @@ class TestCommutatorAnalyzer:
         """Cl(2,0) has 1 bivector — lie bracket structure should work."""
         torch.manual_seed(31)
         raw = torch.randn(40, 2)
-        mv = alg2.embed_vector(raw)
+        mv = alg2.layout((1,)).full(raw)
         ca = CommutatorAnalyzer(alg2)
         result = ca.analyze(mv)
         assert result.bivector_bracket_closure["basis_indices"]

@@ -8,13 +8,13 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core.foundation.basis import (
+from clifra.core._kernel.basis import (
     basis_index_tuple_for_grades,
     basis_product,
     operation_coefficient,
     reverse_sign,
 )
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
     CORE_PROPERTY_SETTINGS,
     DEEP_PROPERTY_SETTINGS,
@@ -78,13 +78,13 @@ def test_hypothesis_exercises_every_small_signature_and_homogeneous_grade(signat
         layout = algebra.layout((grade,))
         values = data.draw(tensor_with_shape((1, layout.dim)), label=f"grade {grade} values")
         assert torch.allclose(
-            algebra.reverse(values, input_layout=layout, output_layout=layout),
+            algebra.reverse(values, input=layout, output=layout),
             oracle.reverse(values, layout.basis_indices),
             atol=1e-12,
             rtol=1e-12,
         )
         assert torch.allclose(
-            algebra.signature_norm_squared(values, input_layout=layout),
+            algebra.signature_norm_squared(values, input=layout),
             oracle.signature_norm_squared(values, layout.basis_indices),
             atol=1e-12,
             rtol=1e-12,

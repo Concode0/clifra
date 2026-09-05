@@ -9,8 +9,8 @@ import torch.nn as nn
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core.foundation.manifold import MANIFOLD_EUCLIDEAN, MANIFOLD_SPHERE, MANIFOLD_SPIN
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
+from clifra.core.manifold import MANIFOLD_EUCLIDEAN, MANIFOLD_SPHERE, MANIFOLD_SPIN
 from clifra.optimizers import ExponentialSGD, RiemannianAdam
 from tests.helpers.hypothesis_cases import PROPERTY_SETTINGS, signature_strategy, tensor_with_shape
 
@@ -137,7 +137,7 @@ def test_manifold_retractions_satisfy_declared_norm_contracts(optimizer_cls, sig
         algebra=algebra,
     )
     optimizer.step()
-    metric_norm = algebra.signature_norm_squared(vector, input_layout=algebra.layout((1,))).abs()
+    metric_norm = algebra.signature_norm_squared(vector, input=algebra.layout((1,))).abs()
     euclidean_norm = vector.norm(dim=-1, keepdim=True)
 
     assert torch.isfinite(vector).all()

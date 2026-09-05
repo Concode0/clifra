@@ -4,10 +4,9 @@
 import pytest
 import torch
 
-from clifra.core.config import AlgebraConfig
-from clifra.core.execution.product import FullTableProductExecutor, GradeProductExecutor
-from clifra.core.planning.layouts import ProductRequest
-from clifra.core.planning.policy import (
+from clifra.core._kernel.execution.product import FullTableProductExecutor, GradeProductExecutor
+from clifra.core._kernel.planning.layouts import ProductRequest
+from clifra.core._kernel.planning.policy import (
     BoundaryRegion,
     FormulaConstraint,
     FormulaPolicy,
@@ -19,6 +18,7 @@ from clifra.core.planning.policy import (
     RouteRule,
     select_policy_route,
 )
+from clifra.core.config import AlgebraConfig
 
 pytestmark = pytest.mark.unit
 
@@ -125,15 +125,14 @@ def test_module_apply_clears_policy_dependent_plans_before_dtype_replanning():
             RouteRule("product", "sparse", score=Polynomial(constant=6.0)),
         )
     )
-    from clifra.core.runtime.algebra import AlgebraContext
 
-    algebra = AlgebraContext(3, device="cpu", dtype=torch.float32, planning_policy=policy)
+    algebra = configured_algebra(3, device="cpu", dtype=torch.float32, planning_policy=policy)
     layout = algebra.spec.full_layout()
 
     def request(dtype):
         return ProductRequest.compact(
             algebra.spec,
-            op="gp",
+            op="geometric_product",
             left_layout=layout,
             right_layout=layout,
             output_layout=layout,
@@ -141,15 +140,18 @@ def test_module_apply_clears_policy_dependent_plans_before_dtype_replanning():
             device="cpu",
         )
 
-    first = algebra.planner.product_executor(request(torch.float32))
+    first = algebra._planner.product_executor(request(torch.float32))
     assert isinstance(first, FullTableProductExecutor)
 
     algebra._apply(lambda value: value.to(torch.float64))
-    assert not algebra.planner._product_executors
-    second = algebra.planner.product_executor(request(torch.float64))
+    assert not algebra._planner._product_executors
+    second = algebra._planner.product_executor(request(torch.float64))
     assert isinstance(second, GradeProductExecutor)
 
 
 def test_config_rejects_unknown_fields_instead_of_silently_ignoring_them():
     with pytest.raises(TypeError, match="unexpected_policy"):
         AlgebraConfig.from_mapping({"p": 3, "unexpected_policy": object()})
+
+
+from clifra.core._kernel.configuration import configured_algebra

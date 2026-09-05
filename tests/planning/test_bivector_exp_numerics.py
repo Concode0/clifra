@@ -4,16 +4,16 @@
 import pytest
 import torch
 
-from clifra.core.execution.action import BivectorVectorGeneratorExecutor
-from clifra.core.execution.exp import (
+from clifra.core._kernel.execution.action import BivectorVectorGeneratorExecutor
+from clifra.core._kernel.execution.exp import (
     _filtered_eigenvalue_cauchy_inverse,
     _filtered_symmetric_eigh_op,
     _spectral_local_nilpotent_coefficients_impl,
     _spectral_local_sinc_impl,
     _symmetric_eigh_diagonal_perturbation,
 )
-from clifra.core.planning.policy import FormulaPolicy, Polynomial, RouteRule
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core._kernel.planning.policy import FormulaPolicy, Polynomial, RouteRule
+from clifra.core.algebra import AlgebraContext
 from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
 
 pytestmark = pytest.mark.unit
@@ -41,7 +41,7 @@ def test_bivector_exp_closed_simple_matches_cpu_reference_on_basis_point():
     bivectors = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
     e12_position = bivector_layout.basis_indices.index(3)
     bivectors[0, e12_position] = 0.25
-    actual = context.bivector_exp(bivectors, input_layout=bivector_layout, output_layout=rotor_layout)
+    actual = context.bivector_exp(bivectors, input=bivector_layout, output=rotor_layout)
     expected = bivector_exp_cpu_reference(
         context,
         bivectors,
@@ -71,7 +71,7 @@ def test_bivector_exp_closed_biquadratic_matches_cpu_reference(signature):
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     generator = torch.Generator(device=DEVICE).manual_seed(283)
     values = torch.randn(5, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.25
-    executor = algebra.planner.bivector_exp_executor(
+    executor = algebra._planner.bivector_exp_executor(
         input_layout=bivector_layout,
         output_layout=even_layout,
         dtype=torch.float64,
@@ -112,11 +112,7 @@ def test_bivector_exp_closed_biquadratic_resolves_degenerate_derivative_limit(
     values[:, positions[6]] = 1.0
     values[:, positions[9]] = 2.0
 
-    actual = algebra.bivector_exp(
-        values,
-        input_layout=bivector_layout,
-        output_layout=bivector_layout,
-    )
+    actual = algebra.bivector_exp(values, input=bivector_layout, output=bivector_layout)
 
     delta_sq = deltas.square()
     sinhc = 1.0 - delta_sq / 6.0 + delta_sq.square() / 120.0
@@ -153,11 +149,7 @@ def test_bivector_exp_closed_biquadratic_resolves_coalescing_complex_roots(
     values[:, input_positions[3]] = 1.0
     values[:, input_positions[12]] = deltas
 
-    actual = algebra.bivector_exp(
-        values,
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-    )
+    actual = algebra.bivector_exp(values, input=bivector_layout, output=even_layout)
 
     expected = torch.zeros_like(actual)
     expected[:, output_positions[0]] = torch.cos(torch.ones_like(deltas)) * torch.cosh(deltas)
@@ -180,7 +172,7 @@ def test_bivector_exp_closed_biquadratic_coalescing_complex_vjp_matches_referenc
     values = raw.clone().requires_grad_(True)
     reference_values = raw.clone().requires_grad_(True)
 
-    actual = algebra.bivector_exp(values, input_layout=bivector_layout, output_layout=even_layout)
+    actual = algebra.bivector_exp(values, input=bivector_layout, output=even_layout)
     expected = bivector_exp_cpu_reference(
         algebra,
         reference_values,
@@ -214,7 +206,7 @@ def test_bivector_exp_divided_difference_switch_matches_reference_through_third_
     algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2, 4))
-    executor = algebra.plan_bivector_exp(input_layout=bivector_layout, output_layout=even_layout)
+    executor = algebra._planner.bivector_exp_executor(input_layout=bivector_layout, output_layout=even_layout)
     positions = {index: position for position, index in enumerate(bivector_layout.basis_indices)}
     base = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
     direction = torch.zeros_like(base)
@@ -270,11 +262,7 @@ def test_bivector_exp_closed_biquadratic_resolves_coalescing_real_roots(
     values[:, input_positions[12]] = 1.0
     values[:, input_positions[20]] = null_weights
 
-    actual = algebra.bivector_exp(
-        values,
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-    )
+    actual = algebra.bivector_exp(values, input=bivector_layout, output=even_layout)
 
     simple_norms_sq = simple_norms.square()
     simple_sinc = 1.0 - simple_norms_sq / 6.0 + simple_norms_sq.square() / 120.0
@@ -297,7 +285,7 @@ def test_bivector_exp_closed_paths_have_finite_zero_gradients():
         algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
         bivector_layout = algebra.layout((2,))
         even_layout = algebra.layout(range(0, algebra.n + 1, 2))
-        executor = algebra.planner.bivector_exp_executor(
+        executor = algebra._planner.bivector_exp_executor(
             input_layout=bivector_layout,
             output_layout=even_layout,
             dtype=torch.float64,
@@ -438,7 +426,7 @@ def test_filtered_symmetric_eigh_static_perturbation_tracks_dtype_scale():
 
 @pytest.mark.parametrize("signature", [(6, 0, 0), (0, 6, 0), (7, 0, 0)])
 def test_bivector_exp_spectral_local_matches_cpu_reference_with_low_transition(signature):
-    algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(*signature, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     values = (
@@ -450,13 +438,8 @@ def test_bivector_exp_spectral_local_matches_cpu_reference_with_low_transition(s
         )
         * 0.2
     )
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.0,
-        spectral_tol_rel=0.0,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.0, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=even_layout
     )
 
     actual = executor(values)
@@ -485,12 +468,7 @@ def test_bivector_exp_meso_cpu_defaults_to_matrix_exp_reference():
         )
         * 0.1
     )
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-    )
+    executor = algebra._planner.bivector_exp_executor(input_layout=bivector_layout, output_layout=even_layout)
 
     expected = bivector_exp_cpu_reference(
         algebra,
@@ -505,7 +483,7 @@ def test_bivector_exp_meso_cpu_defaults_to_matrix_exp_reference():
 
 @pytest.mark.parametrize("signature", [(4, 0, 2), (0, 4, 2), (6, 0, 2), (2, 0, 4)])
 def test_bivector_exp_spectral_local_degenerate_block_matches_cpu_reference(signature):
-    algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(*signature, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2, 4))
     values = (
@@ -517,13 +495,8 @@ def test_bivector_exp_spectral_local_degenerate_block_matches_cpu_reference(sign
         )
         * 0.08
     )
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.0,
-        spectral_tol_rel=0.0,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.0, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=even_layout
     )
 
     actual = executor(values)
@@ -541,20 +514,15 @@ def test_bivector_exp_spectral_local_degenerate_block_matches_cpu_reference(sign
 
 
 def test_bivector_exp_spectral_local_degenerate_block_handles_pure_mixed_kernel():
-    algebra = AlgebraContext(4, 0, 2, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(4, 0, 2, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     values = torch.zeros(2, bivector_layout.dim, dtype=torch.float64)
     for axes, coefficient in [((0, 4), 0.30), ((1, 5), -0.20), ((3, 4), 0.10)]:
         values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
     values[1] = -0.5 * values[0]
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.0,
-        spectral_tol_rel=0.0,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.0, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=even_layout
     )
     expected = bivector_exp_cpu_reference(
         algebra,
@@ -568,19 +536,14 @@ def test_bivector_exp_spectral_local_degenerate_block_handles_pure_mixed_kernel(
 
 
 def test_bivector_exp_spectral_local_degenerate_block_keeps_r4_ideal_square_term():
-    algebra = AlgebraContext(2, 0, 4, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(2, 0, 4, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
     for axes, coefficient in [((2, 3), 0.40), ((4, 5), 0.60)]:
         values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.0,
-        spectral_tol_rel=0.0,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.0, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=even_layout
     )
     expected = bivector_exp_cpu_reference(
         algebra,
@@ -594,7 +557,7 @@ def test_bivector_exp_spectral_local_degenerate_block_keeps_r4_ideal_square_term
 
 
 def test_bivector_exp_spectral_local_truncates_odd_degenerate_kernel():
-    algebra = AlgebraContext(5, 0, 1, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(5, 0, 1, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4))
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
@@ -612,13 +575,8 @@ def test_bivector_exp_spectral_local_truncates_odd_degenerate_kernel():
         values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
     for axes, coefficient in kept_terms:
         truncated[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=output_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.0,
-        spectral_tol_rel=0.0,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.0, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=output_layout
     )
     expected = bivector_exp_cpu_reference(
         algebra,
@@ -634,7 +592,7 @@ def test_bivector_exp_spectral_local_truncates_odd_degenerate_kernel():
 
 
 def test_bivector_exp_spectral_local_truncates_uncovered_degenerate_rank():
-    algebra = AlgebraContext(10, 0, 1, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(10, 0, 1, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4))
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
@@ -655,14 +613,12 @@ def test_bivector_exp_spectral_local_truncates_uncovered_degenerate_rank():
         values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
     for axes, coefficient in kept_terms:
         truncated[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=output_layout,
-        dtype=torch.float64,
-        device=DEVICE,
+    executor = algebra._planner.bivector_exp_executor(
         spectral_max_planes=8,
         spectral_tol_abs=0.0,
         spectral_tol_rel=0.0,
+        input_layout=bivector_layout,
+        output_layout=output_layout,
     )
     expected = bivector_exp_cpu_reference(
         algebra,
@@ -678,20 +634,15 @@ def test_bivector_exp_spectral_local_truncates_uncovered_degenerate_rank():
 
 
 def test_bivector_exp_spectral_local_uses_cl8_kernel_for_four_planes():
-    algebra = AlgebraContext(8, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(8, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2))
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
     planes = [((0, 1), 0.20), ((2, 3), 0.13), ((4, 5), 0.07), ((6, 7), 0.03)]
     for axes, coefficient in planes:
         values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.0,
-        spectral_tol_rel=0.0,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.0, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=even_layout
     )
 
     actual = executor(values)
@@ -709,21 +660,19 @@ def test_bivector_exp_spectral_local_uses_cl8_kernel_for_four_planes():
 
 
 def test_bivector_exp_spectral_local_explicit_cap_matches_when_tail_is_zero():
-    algebra = AlgebraContext(10, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(10, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2))
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
     planes = [((0, 1), 0.20), ((2, 3), 0.13), ((4, 5), 0.07), ((6, 7), 0.03)]
     for axes, coefficient in planes:
         values[0, bivector_layout.basis_indices.index(sum(1 << axis for axis in axes))] = coefficient
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
+    executor = algebra._planner.bivector_exp_executor(
         spectral_max_planes=4,
         spectral_tol_abs=0.0,
         spectral_tol_rel=0.0,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
     )
     expected = bivector_exp_cpu_reference(
         algebra,
@@ -737,7 +686,7 @@ def test_bivector_exp_spectral_local_explicit_cap_matches_when_tail_is_zero():
 
 
 def test_bivector_exp_spectral_local_dominant_plane_threshold_masks_small_planes():
-    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
@@ -750,14 +699,12 @@ def test_bivector_exp_spectral_local_dominant_plane_threshold_masks_small_planes
     for index, coefficient in planes:
         values[0, bivector_layout.basis_indices.index(index)] = coefficient
     truncated[0, bivector_layout.basis_indices.index(planes[0][0])] = planes[0][1]
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
+    executor = algebra._planner.bivector_exp_executor(
         spectral_tol_abs=0.0,
         spectral_tol_rel=0.0,
         spectral_dominant_rel=0.05,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
     )
     expected = bivector_exp_cpu_reference(
         algebra,
@@ -771,16 +718,11 @@ def test_bivector_exp_spectral_local_dominant_plane_threshold_masks_small_planes
 
 
 def test_bivector_exp_spectral_local_handles_repeated_rotated_angles():
-    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.0,
-        spectral_tol_rel=0.0,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.0, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=even_layout
     )
     base = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
     for index, coefficient in [
@@ -822,16 +764,11 @@ def test_bivector_exp_spectral_local_handles_repeated_rotated_angles():
 
 
 def test_bivector_exp_spectral_local_repeated_angle_gradient_is_filtered_finite():
-    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.0,
-        spectral_tol_rel=0.0,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.0, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=even_layout
     )
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
     for index, coefficient in [
@@ -865,7 +802,7 @@ def test_bivector_exp_spectral_local_repeated_angle_gradient_is_filtered_finite(
 
 
 def test_bivector_exp_spectral_local_degenerate_gradient_matches_cpu_reference():
-    algebra = AlgebraContext(4, 0, 2, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(4, 0, 2, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     values = (
@@ -886,11 +823,7 @@ def test_bivector_exp_spectral_local_degenerate_gradient_matches_cpu_reference()
         generator=torch.Generator(device=DEVICE).manual_seed(373),
     )
 
-    actual = algebra.bivector_exp(
-        values,
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-    )
+    actual = algebra.bivector_exp(values, input=bivector_layout, output=even_layout)
     expected = bivector_exp_cpu_reference(
         algebra,
         reference_values,
@@ -905,15 +838,11 @@ def test_bivector_exp_spectral_local_degenerate_gradient_matches_cpu_reference()
 
 
 def test_bivector_exp_spectral_local_gradcheck_smoke():
-    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2))
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_max_planes=1,
+    executor = algebra._planner.bivector_exp_executor(
+        spectral_max_planes=1, input_layout=bivector_layout, output_layout=even_layout
     )
     values = (
         torch.randn(
@@ -937,7 +866,7 @@ def test_bivector_exp_spectral_local_gradcheck_smoke():
 
 @pytest.mark.parametrize("output_grades", [(0,), tuple(range(7))])
 def test_bivector_exp_spectral_local_public_exp_matches_cpu_reference_for_output_layouts(output_grades):
-    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     output_layout = algebra.layout(output_grades)
     values = (
@@ -950,11 +879,7 @@ def test_bivector_exp_spectral_local_public_exp_matches_cpu_reference_for_output
         * 0.15
     )
 
-    actual = algebra.bivector_exp(
-        values,
-        input_layout=bivector_layout,
-        output_layout=output_layout,
-    )
+    actual = algebra.bivector_exp(values, input=bivector_layout, output=output_layout)
     expected = bivector_exp_cpu_reference(
         algebra,
         values,
@@ -966,7 +891,7 @@ def test_bivector_exp_spectral_local_public_exp_matches_cpu_reference_for_output
 
 
 def test_bivector_exp_spectral_local_respects_static_plane_cap_and_tail_tolerance():
-    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float64)
@@ -981,23 +906,15 @@ def test_bivector_exp_spectral_local_respects_static_plane_cap_and_tail_toleranc
     for index, coefficient in planes[:2]:
         truncated[0, bivector_layout.basis_indices.index(index)] = coefficient
 
-    capped = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
+    capped = algebra._planner.bivector_exp_executor(
         spectral_max_planes=2,
         spectral_tol_abs=0.0,
         spectral_tol_rel=0.0,
-    )
-    tolerance_masked = algebra.plan_bivector_exp(
         input_layout=bivector_layout,
         output_layout=even_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-        spectral_tol_abs=0.08,
-        spectral_tol_rel=0.0,
-        cache=False,
+    )
+    tolerance_masked = algebra._planner.bivector_exp_executor(
+        spectral_tol_abs=0.08, spectral_tol_rel=0.0, input_layout=bivector_layout, output_layout=even_layout
     )
     expected = bivector_exp_cpu_reference(
         algebra,
@@ -1014,17 +931,15 @@ def test_bivector_exp_spectral_local_respects_static_plane_cap_and_tail_toleranc
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 def test_bivector_exp_spectral_local_compiles_fullgraph_with_aot_eager():
-    algebra = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float32, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float32, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2))
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float32,
-        device=DEVICE,
+    executor = algebra._planner.bivector_exp_executor(
         spectral_max_planes=1,
         spectral_tol_abs=0.0,
         spectral_tol_rel=0.0,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
     )
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float32)
     values[0, bivector_layout.basis_indices.index((1 << 0) | (1 << 1))] = 0.10
@@ -1045,17 +960,15 @@ def test_bivector_exp_spectral_local_compiles_fullgraph_with_aot_eager():
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 def test_bivector_exp_spectral_local_degenerate_compiles_fullgraph_with_aot_eager():
-    algebra = AlgebraContext(5, 0, 1, device=DEVICE, dtype=torch.float32, planning_policy=FORCE_SPECTRAL_POLICY)
+    algebra = configured_algebra(5, 0, 1, device=DEVICE, dtype=torch.float32, planning_policy=FORCE_SPECTRAL_POLICY)
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2))
-    executor = algebra.plan_bivector_exp(
-        input_layout=bivector_layout,
-        output_layout=even_layout,
-        dtype=torch.float32,
-        device=DEVICE,
+    executor = algebra._planner.bivector_exp_executor(
         spectral_max_planes=1,
         spectral_tol_abs=0.0,
         spectral_tol_rel=0.0,
+        input_layout=bivector_layout,
+        output_layout=even_layout,
     )
     values = torch.zeros(1, bivector_layout.dim, dtype=torch.float32)
     for axes, coefficient in [((0, 1), 0.08), ((0, 5), 0.02), ((1, 5), -0.03)]:
@@ -1082,9 +995,7 @@ def test_mps_closed_biquadratic_bivector_exp_executor_compiles_fullgraph():
     algebra = AlgebraContext(5, 0, device="mps", dtype=torch.float32)
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout((0, 2, 4))
-    executor = algebra.plan_bivector_exp(
-        input_layout=input_layout, output_layout=output_layout, dtype=torch.float32, device="mps"
-    )
+    executor = algebra._planner.bivector_exp_executor(input_layout=input_layout, output_layout=output_layout)
     values = (
         torch.randn(
             3,
@@ -1107,3 +1018,6 @@ def test_mps_closed_biquadratic_bivector_exp_executor_compiles_fullgraph():
 
     assert executor.executor_family == "closed_biquadratic"
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
+from clifra.core._kernel.configuration import configured_algebra

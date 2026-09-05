@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 from research.transformation_fields import (
     CoordinateFieldInput,
     InvertibleBivectorField,

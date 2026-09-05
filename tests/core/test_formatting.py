@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from clifra.core import Multivector, basis_blade_label, format_multivector
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit
 

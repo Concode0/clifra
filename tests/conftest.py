@@ -4,7 +4,7 @@
 import pytest
 from hypothesis import HealthCheck, settings
 
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 
 DEVICE = "cpu"
 
@@ -17,6 +17,19 @@ _PBT_SETTINGS = {
 settings.register_profile("standard", settings(), max_examples=100, **_PBT_SETTINGS)
 settings.register_profile("full", settings.get_profile("standard"), max_examples=400)
 settings.load_profile("standard")
+
+
+@pytest.fixture(autouse=True)
+def isolated_compilation_cache(request):
+    """Each compilation test measures its own plans, not prior tests' specializations."""
+    if "compile" not in request.node.name and "fullgraph" not in request.node.name:
+        yield
+        return
+    import torch
+
+    torch._dynamo.reset()
+    yield
+    torch._dynamo.reset()
 
 
 # -- Function-scoped (default) ------------------------------------------

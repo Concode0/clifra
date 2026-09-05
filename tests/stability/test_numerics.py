@@ -4,8 +4,7 @@
 import pytest
 import torch
 
-from clifra.core.foundation.numerics import covariance_regularizer, eps_for, signed_clamp_min
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core._kernel.numerics import covariance_regularizer, eps_for, signed_clamp_min
 
 pytestmark = pytest.mark.unit
 

@@ -4,7 +4,7 @@
 import pytest
 import torch
 
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit
 

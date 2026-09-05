@@ -11,7 +11,7 @@ import torch
 from hypothesis import assume, settings
 from hypothesis import strategies as st
 
-from clifra.core.foundation.basis import expand_output_grades
+from clifra.core._kernel.basis import expand_output_grades
 
 _PBT_SCALE = settings().max_examples / settings.get_profile("standard").max_examples
 
@@ -41,7 +41,7 @@ COEFFICIENTS = st.one_of(
 )
 
 PRODUCT_OPS = (
-    "gp",
+    "geometric_product",
     "wedge",
     "symmetric_product",
     "commutator_product",

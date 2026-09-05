@@ -11,8 +11,8 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core.planning.policy import DEFAULT_PLANNING_POLICY, FormulaPolicy, Polynomial
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY, FormulaPolicy, Polynomial
+from clifra.core.algebra import AlgebraContext
 from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
 from tests.helpers.hypothesis_cases import (
     CORE_NUMERIC_SETTINGS,
@@ -93,7 +93,7 @@ def test_bivector_exp_matches_cpu_oracle_for_even_output_layouts(case):
     signature, input_layout, output_layout, values = case
     algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
 
-    actual = algebra.bivector_exp(values, input_layout=input_layout, output_layout=output_layout)
+    actual = algebra.bivector_exp(values, input=input_layout, output=output_layout)
     expected = bivector_exp_cpu_reference(
         algebra,
         values,
@@ -113,7 +113,7 @@ def test_euclidean_bivector_exp_is_unit_rotor_by_small_oracle(case):
     oracle = SmallCliffordOracle(p, q, r)
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
 
-    rotor = algebra.bivector_exp(values, input_layout=input_layout, output_layout=even_layout)
+    rotor = algebra.bivector_exp(values, input=input_layout, output=even_layout)
     rotor_reverse = oracle.reverse(rotor, even_layout.basis_indices)
     product = oracle.product(
         rotor,
@@ -142,7 +142,7 @@ def test_disjoint_null_bivectors_match_projected_nilpotent_closed_form(exponent,
         blade = (1 << (2 * pair)) | (1 << (2 * pair + 1))
         values[:, bivector_layout.basis_indices.index(blade)] = coefficients[:, pair]
 
-    actual = algebra.bivector_exp(values, input_layout=bivector_layout, output_layout=output_layout)
+    actual = algebra.bivector_exp(values, input=bivector_layout, output=output_layout)
     expected = torch.cat((torch.ones(batch, 1, dtype=torch.float64), values), dim=-1)
 
     assert torch.allclose(actual, expected, atol=1e-10, rtol=1e-10)
@@ -159,7 +159,7 @@ def test_mixed_signature_scalar_exp_gradient_at_zero_real_invariant():
     values[0, rotation] = 1.0
     values.requires_grad_(True)
 
-    scalar = algebra.bivector_exp(values, input_layout=input_layout, output_layout=output_layout)
+    scalar = algebra.bivector_exp(values, input=input_layout, output=output_layout)
     gradient = torch.autograd.grad(scalar, values)[0]
     expected = torch.zeros_like(values)
     expected[0, boost] = torch.sinh(values[0, boost]) * torch.cos(values[0, rotation])
@@ -174,7 +174,7 @@ def test_bivector_exp_vjp_matches_dense_independent_reference(case):
     signature, input_layout, output_layout, values = case
     algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
     values = values.requires_grad_(True)
-    actual = algebra.bivector_exp(values, input_layout=input_layout, output_layout=output_layout)
+    actual = algebra.bivector_exp(values, input=input_layout, output=output_layout)
     expected = bivector_exp_cpu_reference(
         algebra,
         values,
@@ -200,12 +200,7 @@ def test_forced_bivector_exp_routes_match_dense_reference_and_vjp(route, data):
         signature = (6, 0, 0)
     else:
         signature = data.draw(signature_strategy(min_n=2, max_n=5))
-    algebra = AlgebraContext(
-        *signature,
-        device="cpu",
-        dtype=torch.float64,
-        planning_policy=_force_exp_route(route),
-    )
+    algebra = configured_algebra(*signature, device="cpu", dtype=torch.float64, planning_policy=_force_exp_route(route))
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout(range(0, algebra.n + 1, 2))
     if route == "spectral_local":
@@ -214,7 +209,7 @@ def test_forced_bivector_exp_routes_match_dense_reference_and_vjp(route, data):
         raw = 0.1 * data.draw(tensor_with_shape((1, input_layout.dim)))
     values = raw.clone().requires_grad_(True)
     reference_values = raw.clone().requires_grad_(True)
-    executor = algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output_layout)
+    executor = algebra._planner.bivector_exp_executor(input_layout=input_layout, output_layout=output_layout)
 
     actual = executor(values)
     expected = bivector_exp_cpu_reference(
@@ -234,17 +229,14 @@ def test_forced_bivector_exp_routes_match_dense_reference_and_vjp(route, data):
 
 @pytest.mark.parametrize("signature", ((6, 0, 0), (4, 0, 2), (2, 2, 2)))
 def test_forced_spectral_exp_identity_vjp_matches_dense_reference(signature):
-    algebra = AlgebraContext(
-        *signature,
-        device="cpu",
-        dtype=torch.float64,
-        planning_policy=_force_exp_route("spectral_local"),
+    algebra = configured_algebra(
+        *signature, device="cpu", dtype=torch.float64, planning_policy=_force_exp_route("spectral_local")
     )
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout(range(0, algebra.n + 1, 2))
     values = torch.zeros(1, input_layout.dim, dtype=torch.float64, requires_grad=True)
     reference_values = values.detach().clone().requires_grad_(True)
-    actual = algebra.bivector_exp(values, input_layout=input_layout, output_layout=output_layout)
+    actual = algebra.bivector_exp(values, input=input_layout, output=output_layout)
     expected = bivector_exp_cpu_reference(
         algebra,
         reference_values,
@@ -260,3 +252,6 @@ def test_forced_spectral_exp_identity_vjp_matches_dense_reference(signature):
         atol=1e-12,
         rtol=1e-12,
     )
+
+
+from clifra.core._kernel.configuration import configured_algebra

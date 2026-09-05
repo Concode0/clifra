@@ -8,9 +8,8 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core.runtime.algebra import AlgebraContext
-from clifra.core.runtime.energy import lane_distance, lane_dot_product, lane_energy, lane_norm
-from clifra.core.runtime.forms import (
+from clifra.core._kernel.energy import lane_distance, lane_dot_product, lane_energy, lane_norm
+from clifra.core._kernel.forms import (
     conjugate_form_distance_like,
     conjugate_form_magnitude,
     conjugate_scalar_form,
@@ -18,7 +17,8 @@ from clifra.core.runtime.forms import (
     signature_norm_squared,
     signature_trace_form,
 )
-from clifra.core.runtime.metric import scalar_product, signature_magnitude
+from clifra.core._kernel.metric import scalar_product, signature_magnitude
+from clifra.core.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
     CORE_PROPERTY_SETTINGS,
     compact_multivector_cases,

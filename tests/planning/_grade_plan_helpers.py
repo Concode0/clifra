@@ -5,42 +5,40 @@
 import pytest
 import torch
 
-from clifra.core.config import make_algebra
-from clifra.core.execution.action import FullSandwichActionExecutor, GradedLinearActionExecutor
-from clifra.core.execution.handles import (
-    FullSandwichActionHandle,
-    MultiVersorActionHandle,
-    PairedBivectorActionHandle,
-    ProductPlanHandle,
-    UnaryPlanHandle,
-    VersorActionHandle,
-)
-from clifra.core.execution.metric import SignatureNormSquaredExecutor
-from clifra.core.execution.permutation import PseudoscalarProductExecutor
-from clifra.core.execution.product import FullTableProductExecutor, GradeProductExecutor
-from clifra.core.foundation.basis import (
+from clifra.core._kernel.basis import (
     basis_indices_for_grades,
     expand_output_grades,
 )
-from clifra.core.foundation.layout import AlgebraSpec
-from clifra.core.planning.layouts import build_product_request
-from clifra.core.planning.planner import GradePlanner
-from clifra.core.planning.policy import (
+from clifra.core._kernel.execution.action import (
+    FullSandwichActionExecutor,
+    GradedLinearActionExecutor,
+    MultiVersorActionExecutor,
+    PairedBivectorActionExecutor,
+)
+from clifra.core._kernel.execution.metric import SignatureNormSquaredExecutor
+from clifra.core._kernel.execution.permutation import PseudoscalarProductExecutor
+from clifra.core._kernel.execution.product import FullTableProductExecutor, GradeProductExecutor
+from clifra.core._kernel.planning.layouts import build_product_request
+from clifra.core._kernel.planning.planner import GradePlanner
+from clifra.core._kernel.planning.policy import (
     FormulaPolicy,
     Polynomial,
     RouteRule,
 )
-from clifra.core.planning.product import build_grade_product_plan, select_product_route
-from clifra.core.planning.resources import ResourceLimits
-from clifra.core.planning.tree import build_grade_plan_tree
-from clifra.core.planning.unary import build_unary_request
-from clifra.core.runtime.algebra import AlgebraContext
-from clifra.core.runtime.tensors import LaneStorage
+from clifra.core._kernel.planning.product import build_grade_product_plan, select_product_route
+from clifra.core._kernel.planning.resources import ResourceLimits
+from clifra.core._kernel.planning.tree import build_grade_plan_tree
+from clifra.core._kernel.planning.unary import build_unary_request
+from clifra.core.algebra import AlgebraContext
+from clifra.core.config import make_algebra
+from clifra.core.layout import AlgebraSpec
+from clifra.core.operation import PlannedOperation
+from clifra.core.tensors import LaneStorage
 from tests.helpers.small_oracle import SmallCliffordOracle
 
 DEVICE = "cpu"
 _PRODUCT_METHODS = {
-    "gp": "geometric_product",
+    "geometric_product": "geometric_product",
     "wedge": "wedge",
     "symmetric_product": "symmetric_product",
     "commutator_product": "commutator_product",

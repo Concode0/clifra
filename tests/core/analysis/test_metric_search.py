@@ -8,7 +8,7 @@ import torch
 
 from clifra.analysis.geodesic import NeighborhoodBivectorFlow
 from clifra.analysis.signature import RotorProbeSignatureEstimator, _apply_biased_init, _SignatureProbe
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 
 
 @pytest.fixture(scope="module")
@@ -135,7 +135,7 @@ class TestBiasedInit:
         """Verify Euclidean bias prioritizes elliptic bivectors."""
         probe = _SignatureProbe(alg_conformal, channels=2)
         _apply_biased_init(probe, alg_conformal, "euclidean")
-        bv_sq = alg_conformal.bivector_squared_signs(device=alg_conformal.device, dtype=alg_conformal.dtype)
+        bv_sq = alg_conformal._planner.bivector_squared_signs(device=alg_conformal.device, dtype=alg_conformal.dtype)
         for rotor in probe.get_rotor_layers():
             weights = rotor.bivector_weights.detach()
             # Elliptic bivectors (bv_sq < -0.5) should have larger weights
@@ -162,7 +162,7 @@ class TestDifferentiableMethods:
         """Verify connection_alignment calculation is differentiable."""
         alg = AlgebraContext(3, 0, device="cpu")
         data = torch.randn(16, 3, requires_grad=True)
-        mv = alg.embed_vector(data)
+        mv = alg.layout((1,)).full(data)
         gf = NeighborhoodBivectorFlow(alg, k=4)
         coh = gf._connection_alignment_tensor(mv)
         assert isinstance(coh, torch.Tensor)
@@ -174,7 +174,7 @@ class TestDifferentiableMethods:
         """Verify connection_dissimilarity calculation is differentiable."""
         alg = AlgebraContext(3, 0, device="cpu")
         data = torch.randn(16, 3, requires_grad=True)
-        mv = alg.embed_vector(data)
+        mv = alg.layout((1,)).full(data)
         gf = NeighborhoodBivectorFlow(alg, k=4)
         curv = gf._connection_dissimilarity_tensor(mv)
         assert isinstance(curv, torch.Tensor)
@@ -186,7 +186,7 @@ class TestDifferentiableMethods:
         alg = AlgebraContext(3, 0, device="cpu")
         torch.manual_seed(10)
         data = torch.randn(16, 3)
-        mv = alg.embed_vector(data)
+        mv = alg.layout((1,)).full(data)
         gf = NeighborhoodBivectorFlow(alg, k=4)
         coh_float = gf.connection_alignment(mv)
         coh_tensor = gf._connection_alignment_tensor(mv).item()

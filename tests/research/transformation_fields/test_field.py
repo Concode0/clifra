@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 from research.transformation_fields import (
     ConformalChart,
     CoordinateChart,
@@ -170,12 +170,7 @@ def test_field_accepts_injected_chart_and_action_components():
     algebra = AlgebraContext(2, 0, 0, device="cpu", dtype=torch.float64)
     chart = CoordinateChart.direct(algebra, 2)
     bivector_layout = algebra.layout((2,))
-    action = algebra.plan_versor_action(
-        grade=2,
-        input_layout=chart.layout,
-        output_layout=chart.layout,
-        parameter_layout=bivector_layout,
-    )
+    action = algebra.plan_versor_action(grade=2, input=chart.layout, output=chart.layout, parameter=bivector_layout)
     field = InvertibleBivectorField(
         algebra,
         2,
@@ -193,12 +188,7 @@ def test_field_accepts_injected_chart_and_action_components():
 def test_broadcast_field_exponentiates_one_generator_per_path_step():
     algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float64)
     chart = CoordinateChart.direct(algebra, 3)
-    planned_action = algebra.plan_versor_action(
-        grade=2,
-        input_layout=chart.layout,
-        output_layout=chart.layout,
-        parameter_layout=algebra.layout((2,)),
-    )
+    planned_action = algebra.plan_versor_action(grade=2, input=chart.layout, output=chart.layout, parameter=algebra.layout((2,)))
     action = _CountingAction(planned_action)
     field = InvertibleBivectorField(algebra, 3, path_steps=3, chart=chart, action=action)
 
@@ -210,12 +200,7 @@ def test_broadcast_field_exponentiates_one_generator_per_path_step():
 def test_regular_grid_field_does_not_repeat_exponentials_across_batches():
     algebra = AlgebraContext(2, 0, 0, device="cpu", dtype=torch.float64)
     chart = CoordinateChart.direct(algebra, 2)
-    planned_action = algebra.plan_versor_action(
-        grade=2,
-        input_layout=chart.layout,
-        output_layout=chart.layout,
-        parameter_layout=algebra.layout((2,)),
-    )
+    planned_action = algebra.plan_versor_action(grade=2, input=chart.layout, output=chart.layout, parameter=algebra.layout((2,)))
     action = _CountingAction(planned_action)
     field = InvertibleBivectorField(
         algebra,
@@ -241,13 +226,7 @@ def test_conformal_chart_uses_null_embedding_and_field_round_trips():
 
     embedded = chart.embed(coordinates)
     scalar_layout = algebra.layout((0,))
-    squared = algebra.geometric_product(
-        embedded,
-        embedded,
-        left_layout=chart.layout,
-        right_layout=chart.layout,
-        output_layout=scalar_layout,
-    )
+    squared = algebra.geometric_product(embedded, embedded, left=chart.layout, right=chart.layout, output=scalar_layout)
     state = field.state(coordinates)
     reconstructed = field.inverse(state.inverse_input())
 

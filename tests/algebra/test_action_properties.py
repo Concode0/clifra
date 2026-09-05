@@ -10,8 +10,8 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core.planning.policy import DEFAULT_PLANNING_POLICY, FormulaPolicy, Polynomial
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY, FormulaPolicy, Polynomial
+from clifra.core.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
     CORE_NUMERIC_SETTINGS,
     QUICK_PROPERTY_SETTINGS,
@@ -35,9 +35,7 @@ def _force_action_route(route: str) -> FormulaPolicy:
 def _rotor_action_reference(algebra, oracle, values, weights, layout):
     parameter_layout = algebra.layout((2,))
     rotor_layout = algebra.layout(range(0, algebra.n + 1, 2))
-    rotor = rotor_layout.full(
-        algebra.bivector_exp(-0.5 * weights, input_layout=parameter_layout, output_layout=rotor_layout)
-    )
+    rotor = rotor_layout.full(algebra.bivector_exp(-0.5 * weights, input=parameter_layout, output=rotor_layout))
     full_values = layout.full(values)
     return layout.compact(oracle.product(oracle.product(rotor, full_values), oracle.reverse(rotor)))
 
@@ -62,13 +60,10 @@ def test_full_sandwich_execution_modes_match_independent_products(signature, dat
     expected_channels = oracle.product(oracle.product(channel_left, values), channel_right)
 
     assert torch.allclose(
-        algebra.sandwich_product(batch_left, values, batch_right),
-        expected_batch,
-        atol=1e-10,
-        rtol=1e-10,
+        specialized.sandwich_product(algebra, batch_left, values, batch_right), expected_batch, atol=1e-10, rtol=1e-10
     )
     assert torch.allclose(
-        algebra.per_channel_sandwich(channel_left, values, channel_right),
+        specialized.per_channel_sandwich(algebra, channel_left, values, channel_right),
         expected_channels,
         atol=1e-10,
         rtol=1e-10,
@@ -79,25 +74,17 @@ def test_full_sandwich_execution_modes_match_independent_products(signature, dat
 @QUICK_PROPERTY_SETTINGS
 @given(signature=signature_strategy(min_n=2, max_n=4), data=st.data())
 def test_forced_compact_versor_action_routes_match_independent_products(route, signature, data):
-    algebra = AlgebraContext(
-        *signature,
-        device="cpu",
-        dtype=torch.float64,
-        planning_policy=_force_action_route(route),
+    algebra = configured_algebra(
+        *signature, device="cpu", dtype=torch.float64, planning_policy=_force_action_route(route)
     )
     oracle = SmallCliffordOracle(*signature)
     layout = algebra.layout((1,))
     channels = data.draw(st.integers(1, 3))
     values = data.draw(tensor_with_shape((data.draw(st.integers(1, 2)), channels, layout.dim)))
     weights = 0.1 * data.draw(tensor_with_shape((channels, algebra.layout((2,)).dim)))
-    action = algebra.plan_versor_action(
-        grade=2,
-        input_layout=layout,
-        output_layout=layout,
-        parameter_layout=algebra.layout((2,)),
-    )
+    action = algebra.plan_versor_action(grade=2, input=layout, output=layout, parameter=algebra.layout((2,)))
 
-    assert action.executor.execution_path == route
+    assert action._kernel.execution_path == route
     assert torch.allclose(
         action(values, weights), _rotor_action_reference(algebra, oracle, values, weights, layout), atol=1e-9, rtol=1e-9
     )
@@ -107,25 +94,17 @@ def test_forced_compact_versor_action_routes_match_independent_products(route, s
 @QUICK_PROPERTY_SETTINGS
 @given(signature=signature_strategy(min_n=2, max_n=4), data=st.data())
 def test_forced_full_versor_action_routes_match_independent_products(route, signature, data):
-    algebra = AlgebraContext(
-        *signature,
-        device="cpu",
-        dtype=torch.float64,
-        planning_policy=_force_action_route(route),
+    algebra = configured_algebra(
+        *signature, device="cpu", dtype=torch.float64, planning_policy=_force_action_route(route)
     )
     oracle = SmallCliffordOracle(*signature)
     layout = algebra.layout(range(algebra.n + 1))
     channels = data.draw(st.integers(1, 2))
     values = data.draw(tensor_with_shape((1, channels, layout.dim)))
     weights = 0.1 * data.draw(tensor_with_shape((channels, algebra.layout((2,)).dim)))
-    action = algebra.plan_versor_action(
-        grade=2,
-        input_layout=layout,
-        output_layout=layout,
-        parameter_layout=algebra.layout((2,)),
-    )
+    action = algebra.plan_versor_action(grade=2, input=layout, output=layout, parameter=algebra.layout((2,)))
 
-    assert action.executor.execution_path == route
+    assert action._kernel.execution_path == route
     assert torch.allclose(
         action(values, weights), _rotor_action_reference(algebra, oracle, values, weights, layout), atol=1e-9, rtol=1e-9
     )
@@ -135,11 +114,8 @@ def test_forced_full_versor_action_routes_match_independent_products(route, sign
 @QUICK_PROPERTY_SETTINGS
 @given(signature=signature_strategy(min_n=2, max_n=4), data=st.data())
 def test_forced_paired_action_routes_match_independent_products(route, signature, data):
-    algebra = AlgebraContext(
-        *signature,
-        device="cpu",
-        dtype=torch.float64,
-        planning_policy=_force_action_route(route),
+    algebra = configured_algebra(
+        *signature, device="cpu", dtype=torch.float64, planning_policy=_force_action_route(route)
     )
     oracle = SmallCliffordOracle(*signature)
     layout = algebra.layout(range(algebra.n + 1))
@@ -151,18 +127,12 @@ def test_forced_paired_action_routes_match_independent_products(route, signature
     left_weights = 0.1 * data.draw(tensor_with_shape((pairs, parameter_layout.dim)))
     right_weights = 0.1 * data.draw(tensor_with_shape((pairs, parameter_layout.dim)))
     channel_to_pair = torch.tensor([index % pairs for index in range(channels)], dtype=torch.long)
-    action = algebra.plan_paired_bivector_action(
-        input_layout=layout,
-        output_layout=layout,
-        parameter_layout=parameter_layout,
+    action = specialized.plan_paired_bivector_action(
+        algebra, input_layout=layout, output_layout=layout, parameter_layout=parameter_layout
     )
-    left = rotor_layout.full(
-        algebra.bivector_exp(-0.5 * left_weights, input_layout=parameter_layout, output_layout=rotor_layout)
-    )
+    left = rotor_layout.full(algebra.bivector_exp(-0.5 * left_weights, input=parameter_layout, output=rotor_layout))
     right = oracle.reverse(
-        rotor_layout.full(
-            algebra.bivector_exp(-0.5 * right_weights, input_layout=parameter_layout, output_layout=rotor_layout)
-        )
+        rotor_layout.full(algebra.bivector_exp(-0.5 * right_weights, input=parameter_layout, output=rotor_layout))
     )
     expected = torch.stack(
         [
@@ -172,5 +142,9 @@ def test_forced_paired_action_routes_match_independent_products(route, signature
         dim=1,
     )
 
-    assert action.executor.execution_path == route
+    assert action.execution_path == route
     assert torch.allclose(action(values, left_weights, right_weights, channel_to_pair), expected, atol=1e-9, rtol=1e-9)
+
+
+from clifra.core._kernel import specialized
+from clifra.core._kernel.configuration import configured_algebra

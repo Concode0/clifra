@@ -10,7 +10,7 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core.foundation.basis import (
+from clifra.core._kernel.basis import (
     basis_count_for_grades,
     basis_index_tuple_for_grades,
     basis_indices_for_grades,
@@ -19,8 +19,8 @@ from clifra.core.foundation.basis import (
     operation_coefficient,
     product_output_grades,
 )
-from clifra.core.foundation.layout import AlgebraSpec
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
+from clifra.core.layout import AlgebraSpec
 from tests.helpers.hypothesis_cases import CORE_PROPERTY_SETTINGS, PRODUCT_OPS, compact_multivector_cases, grade_sets
 
 pytestmark = [pytest.mark.unit, pytest.mark.property]
@@ -123,9 +123,9 @@ def test_geometric_product_grade_bounds_for_high_dimensional_routes():
     assert product_output_grades(2, 1, 16, op="wedge") == (3,)
     assert product_output_grades(2, 1, 16, op="commutator_product") == (1,)
     assert product_output_grades(2, 1, 16, op="anti_commutator_product") == (3,)
-    assert expand_output_grades((0, 2), (1,), 16, op="gp") == (1, 3)
+    assert expand_output_grades((0, 2), (1,), 16, op="geometric_product") == (1, 3)
     assert expand_output_grades((1,), (1,), 16, op="wedge") == (2,)
-    assert expand_output_grades((1,), (1,), 16, op="gp", project_grades=(0,)) == (0,)
+    assert expand_output_grades((1,), (1,), 16, op="geometric_product", project_grades=(0,)) == (0,)
 
 
 def test_basis_tensorization_reports_int64_bitmask_boundary():

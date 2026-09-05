@@ -23,7 +23,7 @@ def bivector_exp_cpu_reference(
     columns = oracle.product(
         cpu_values.unsqueeze(-2),
         cpu_basis,
-        op="gp",
+        op="geometric_product",
         left_indices=input_layout.basis_indices,
         right_indices=operator_indices,
         output_indices=operator_indices,

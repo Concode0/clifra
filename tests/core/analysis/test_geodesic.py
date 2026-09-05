@@ -17,7 +17,7 @@ import torch
 
 from clifra.analysis.dimension import CoordinateLiftAnalyzer
 from clifra.analysis.geodesic import NeighborhoodBivectorFlow
-from clifra.core.runtime.algebra import AlgebraContext
+from clifra.core.algebra import AlgebraContext
 
 pytestmark = pytest.mark.unit
 
@@ -197,8 +197,8 @@ class TestNeighborhoodBivectorFlow:
         """Interpolated endpoints must match a and b (up to approximation)."""
         gf = NeighborhoodBivectorFlow(alg3, k=4)
         # Use simple unit vectors
-        a = alg3.embed_vector(torch.tensor([[1.0, 0.0, 0.0]]))  # [1, 8]
-        b = alg3.embed_vector(torch.tensor([[0.0, 1.0, 0.0]]))  # [1, 8]
+        a = alg3.layout((1,)).full(torch.tensor([[1.0, 0.0, 0.0]]))  # [1, 8]
+        b = alg3.layout((1,)).full(torch.tensor([[0.0, 1.0, 0.0]]))  # [1, 8]
         path = gf.approximate_bivector_interpolation(a[0], b[0], steps=10)  # [10, 8]
         assert path.shape == (10, alg3.dim)
         # Step 0 should be close to a
@@ -207,8 +207,8 @@ class TestNeighborhoodBivectorFlow:
     def test_interpolate_steps(self, alg3):
         """Number of returned frames should equal steps."""
         gf = NeighborhoodBivectorFlow(alg3, k=4)
-        a = alg3.embed_vector(torch.tensor([[1.0, 0.0, 0.0]]))
-        b = alg3.embed_vector(torch.tensor([[0.0, 1.0, 0.0]]))
+        a = alg3.layout((1,)).full(torch.tensor([[1.0, 0.0, 0.0]]))
+        b = alg3.layout((1,)).full(torch.tensor([[0.0, 1.0, 0.0]]))
         for steps in [2, 5, 20]:
             path = gf.approximate_bivector_interpolation(a[0], b[0], steps=steps)
             assert path.shape[0] == steps
