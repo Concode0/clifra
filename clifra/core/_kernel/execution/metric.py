@@ -24,11 +24,14 @@ class SignatureNormSquaredExecutor(nn.Module):
         self.input_contract = plan.input_contract
         self.input_grades = plan.input_grades
         self.input_dim = plan.input_dim
+        self._positive = self.spec.q == 0 and self.spec.r == 0
         self.register_buffer("signs", plan.signs, persistent=False)
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         """Return ``<values reverse(values)>_0`` as ``[..., 1]``."""
         self.input_contract.validate(values, name="values")
+        if self._positive and values.dtype == self.signs.dtype and values.device == self.signs.device:
+            return values.square().sum(dim=-1, keepdim=True)
         return (values * values * self.signs).sum(dim=-1, keepdim=True)
 
 

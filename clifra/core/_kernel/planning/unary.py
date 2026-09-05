@@ -11,7 +11,7 @@ from typing import Literal, Optional
 
 import torch
 
-from clifra.core._kernel.basis import normalize_grades, reverse_sign
+from clifra.core._kernel.basis import normalize_grades, unary_sign
 from clifra.core._kernel.contracts import _check_contract_spec, infer_contract
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import LaneStorage, TensorContract
@@ -192,7 +192,7 @@ def build_unary_plan_from_request(request: UnaryRequest) -> GradeUnaryPlan:
                 f"output basis index {index} is not available in input grades {request.input_layout.grades}"
             )
         input_positions.append(position)
-        signs.append(_unary_sign(request.op, index))
+        signs.append(unary_sign(request.op, index))
 
     return GradeUnaryPlan(
         spec=request.spec,
@@ -247,16 +247,3 @@ def resolve_unary_output_layout(
             raise ValueError(f"Cannot project missing grades {missing} from input grades {input_layout.grades}")
         return spec.layout(projected)
     return input_layout
-
-
-def _unary_sign(op: GradeUnaryOp, index: int) -> float:
-    grade = int(index).bit_count()
-    if op in {"identity", "grade_projection"}:
-        return 1.0
-    if op == "reverse":
-        return reverse_sign(index)
-    if op == "grade_involution":
-        return -1.0 if grade % 2 else 1.0
-    if op == "clifford_conjugation":
-        return (-1.0 if grade % 2 else 1.0) * reverse_sign(index)
-    raise ValueError(f"Unsupported grade unary op {op!r}")

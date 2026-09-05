@@ -41,6 +41,10 @@ class GradeProductExecutor(nn.Module):
         self.right_canonical_contract = TensorContract.canonical(self.right_layout)
         self._output_dim = plan.output_dim
         self._pair_count = plan.pair_count
+        self._empty_product = len(plan.tree.paths) == 0
+        scalar_product = self.op in {"geometric_product", "wedge", "symmetric_product"}
+        self._scalar_left = scalar_product and self.left_grades == (0,) and self.right_layout == self.output_layout
+        self._scalar_right = scalar_product and self.right_grades == (0,) and self.left_layout == self.output_layout
         self.register_buffer("left_indices", plan.left_indices, persistent=False)
         self.register_buffer("right_indices", plan.right_indices, persistent=False)
         self.register_buffer("output_indices", plan.output_indices, persistent=False)
@@ -68,11 +72,17 @@ class GradeProductExecutor(nn.Module):
         self.left_canonical_contract.validate(left, name="left")
         self.right_canonical_contract.validate(right, name="right")
 
+        if self._scalar_multiply(left, right):
+            if self._scalar_left:
+                return left[..., :1] * torch.index_select(right, -1, self.output_basis_indices)
+            return torch.index_select(left, -1, self.output_basis_indices) * right[..., :1]
+
         left_terms = torch.index_select(left, -1, self.left_indices)
         right_terms = torch.index_select(right, -1, self.right_indices)
-        left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
         terms = left_terms * right_terms * self.coefficients
 
+        if self._empty_product:
+            return terms.sum(-1, keepdim=True).expand(*terms.shape[:-1], self.output_dim)
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
         return output.index_add(-1, self.output_positions, terms)
 
@@ -80,13 +90,24 @@ class GradeProductExecutor(nn.Module):
         """Return compact output for inputs already stored in this plan's compact layouts."""
         self.left_contract.validate(left, name="left")
         self.right_contract.validate(right, name="right")
+        if self._scalar_multiply(left, right):
+            return left * right
         left_terms = torch.index_select(left, -1, self.left_compact_positions)
         right_terms = torch.index_select(right, -1, self.right_compact_positions)
-        left_terms, right_terms = torch.broadcast_tensors(left_terms, right_terms)
         terms = left_terms * right_terms * self.coefficients
 
+        if self._empty_product:
+            return terms.sum(-1, keepdim=True).expand(*terms.shape[:-1], self.output_dim)
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
         return output.index_add(-1, self.output_positions, terms)
+
+    def _scalar_multiply(self, left: torch.Tensor, right: torch.Tensor) -> bool:
+        # Preserve coefficient promotion and device checks for directly used modules.
+        return (
+            (self._scalar_left or self._scalar_right)
+            and left.dtype == right.dtype == self.coefficients.dtype
+            and left.device == right.device == self.coefficients.device
+        )
 
     def forward_pairwise_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Pairwise compact product for sequence-style bilinear scoring.

@@ -204,6 +204,20 @@ def reverse_sign(index: int) -> float:
     return -1.0 if ((grade * (grade - 1) // 2) % 2) else 1.0
 
 
+def unary_sign(op: str, index: int) -> float:
+    """Return the static sign of an involution or grade-preserving identity."""
+    grade = int(index).bit_count()
+    if op in {"identity", "grade_projection"}:
+        return 1.0
+    if op == "reverse":
+        return reverse_sign(index)
+    if op == "grade_involution":
+        return -1.0 if grade % 2 else 1.0
+    if op == "clifford_conjugation":
+        return (-1.0 if grade % 2 else 1.0) * reverse_sign(index)
+    raise ValueError(f"Unsupported grade unary op {op!r}")
+
+
 def operation_coefficient(
     index_a: int,
     index_b: int,
