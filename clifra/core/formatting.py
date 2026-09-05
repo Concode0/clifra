@@ -14,8 +14,8 @@ from typing import Iterable, Optional, Sequence
 
 import torch
 
-from clifra.core.foundation.layout import AlgebraSpec, GradeLayout
-from clifra.core.runtime.tensors import resolve_contract
+from clifra.core._kernel.contracts import resolve_contract
+from clifra.core.layout import AlgebraSpec, GradeLayout
 
 
 @dataclass(frozen=True)

@@ -3,29 +3,34 @@
 
 """Layout-first Clifford algebra tools for PyTorch.
 
-clifra exposes one planner-owned algebra host through ``make_algebra``. Tensors
-can use full lanes or declared compact ``GradeLayout`` lanes; planning resolves
-the static graph, execution modules own the compiled tensor work, and layers
-consume those layout contracts without depending on a second algebra host.
+``make_algebra`` constructs one concrete mathematical API. Layouts and tensor
+contracts describe coefficient storage; planned operations execute those
+contracts independently of the private planner and kernel implementations.
 """
 
 __version__ = "1.4.0"
 
+from clifra.core.algebra import AlgebraContext
 from clifra.core.config import AlgebraConfig, make_algebra, make_algebra_from_config
 from clifra.core.formatting import Multivector, format_multivector
-from clifra.core.foundation.module import CliffordModule
-from clifra.core.runtime.algebra import AlgebraContext
-from clifra.layers import CliffordLinear, VersorLayer
+from clifra.core.layout import AlgebraSpec, GradeLayout, Layout
+from clifra.core.module import CliffordModule
+from clifra.core.operation import PlannedOperation
+from clifra.core.tensors import LaneStorage, TensorContract
 
 __all__ = [
     "__version__",
     "AlgebraConfig",
     "AlgebraContext",
     "CliffordModule",
+    "AlgebraSpec",
+    "GradeLayout",
+    "Layout",
+    "LaneStorage",
+    "TensorContract",
+    "PlannedOperation",
     "Multivector",
     "format_multivector",
     "make_algebra",
     "make_algebra_from_config",
-    "VersorLayer",
-    "CliffordLinear",
 ]
