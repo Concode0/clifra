@@ -12,6 +12,17 @@ from clifra.core._kernel.planning.product import FullTableProductPlan, GradeProd
 from clifra.core.tensors import TensorContract
 
 
+def _pairwise_inputs(left: torch.Tensor, right: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    if left.shape[:-2] == right.shape[:-2]:
+        return left, right
+    # In float64, einsum broadcasting avoids repeated gathers without losing
+    # numerical agreement. Preserve the existing lower-precision accumulation.
+    if left.dtype == right.dtype == torch.float64 and left.device.type == right.device.type == "cpu":
+        return left, right
+    prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
+    return left.expand(*prefix, *left.shape[-2:]), right.expand(*prefix, *right.shape[-2:])
+
+
 class GradeProductExecutor(nn.Module):
     """Compile-friendly grade-restricted product using a static interaction plan.
 
@@ -137,9 +148,7 @@ class GradeProductExecutor(nn.Module):
         """
         self.left_contract.validate(left, name="left")
         self.right_contract.validate(right, name="right")
-        prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
-        left = left.expand(*prefix, *left.shape[-2:])
-        right = right.expand(*prefix, *right.shape[-2:])
+        left, right = _pairwise_inputs(left, right)
 
         if self._pairwise_contract_left:
             flat_positions = self.pairwise_gather_positions.reshape(-1)
@@ -171,9 +180,7 @@ class GradeProductExecutor(nn.Module):
         self.right_contract.validate(right, name="right")
         if right_signs.shape != (self.right_layout.dim,):
             raise ValueError(f"right_signs shape must be {(self.right_layout.dim,)}, got {tuple(right_signs.shape)}")
-        prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
-        left = left.expand(*prefix, *left.shape[-2:])
-        right = right.expand(*prefix, *right.shape[-2:])
+        left, right = _pairwise_inputs(left, right)
 
         if self._pairwise_contract_left:
             flat_positions = self.pairwise_gather_positions.reshape(-1)
@@ -261,9 +268,7 @@ class FullTableProductExecutor(nn.Module):
         """Pairwise full-layout product for item-axis operands."""
         self.left_contract.validate(left, name="left")
         self.right_contract.validate(right, name="right")
-        prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
-        left = left.expand(*prefix, *left.shape[-2:])
-        right = right.expand(*prefix, *right.shape[-2:])
+        left, right = _pairwise_inputs(left, right)
         right_gathered = self._gather_right(right)
         weighted_right = right_gathered * self.signs
         return torch.einsum("...li,...rik->...lrk", left, weighted_right)

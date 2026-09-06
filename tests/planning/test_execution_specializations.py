@@ -233,3 +233,40 @@ def test_vector_scalar_compiles_with_gradients():
     _check(
         torch.compile(executor.forward_compact, fullgraph=True, backend="aot_eager"), executor.forward_compact, *values
     )
+
+
+@pytest.mark.parametrize("left_grades,right_grades", [((1,), (1, 2)), ((1, 2), (1,))])
+@pytest.mark.parametrize("signed", [False, True])
+@pytest.mark.parametrize("empty", [False, True])
+def test_pairwise_gathers_before_float64_batch_broadcast(left_grades, right_grades, signed, empty):
+    plan = build_grade_product_plan(
+        6,
+        op="geometric_product",
+        left_grades=left_grades,
+        right_grades=right_grades,
+        output_grades=(0, 1, 2, 3),
+        dtype=torch.float64,
+    )
+    executor = GradeProductExecutor(plan)
+    left = torch.randn(0 if empty else 2, 1, 4, plan.left_layout.dim, dtype=torch.float64, requires_grad=True)
+    right = torch.randn(1, 3, 5, plan.right_layout.dim, dtype=torch.float64, requires_grad=True)
+    signs = torch.randn(plan.right_layout.dim, dtype=torch.float64)
+
+    def method(a, b):
+        if signed:
+            return executor.forward_pairwise_compact_right_signed(a, b, signs)
+        return executor.forward_pairwise_compact(a, b)
+
+    def expanded_reference(a, b):
+        prefix = torch.broadcast_shapes(a.shape[:-2], b.shape[:-2])
+        return method(a.expand(*prefix, *a.shape[-2:]), b.expand(*prefix, *b.shape[-2:]))
+
+    _check(method, expanded_reference, left, right, atol=1e-10, rtol=1e-10)
+    _check(
+        torch.compile(method, fullgraph=True, backend="aot_eager"),
+        expanded_reference,
+        left,
+        right,
+        atol=1e-10,
+        rtol=1e-10,
+    )
