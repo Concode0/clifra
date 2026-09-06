@@ -8,11 +8,11 @@ import torch
 
 from clifra.core._kernel.execution.metric import SignatureNormSquaredExecutor
 from clifra.core._kernel.execution.permutation import PseudoscalarProductExecutor
-from clifra.core._kernel.execution.product import GradeProductExecutor
+from clifra.core._kernel.execution.product import FullTableProductExecutor, GradeProductExecutor
 from clifra.core._kernel.execution.unary import GradeUnaryExecutor
 from clifra.core._kernel.planning.metric import build_signature_norm_squared_plan
 from clifra.core._kernel.planning.permutation import build_pseudoscalar_product_plan
-from clifra.core._kernel.planning.product import build_grade_product_plan
+from clifra.core._kernel.planning.product import build_full_table_product_plan, build_grade_product_plan
 from clifra.core._kernel.planning.unary import UnaryRequest, build_unary_plan_from_request
 from clifra.core.layout import AlgebraSpec
 
@@ -20,15 +20,15 @@ pytestmark = pytest.mark.unit
 DEVICES = ["cpu"] + (["mps"] if torch.backends.mps.is_available() else [])
 
 
-def _check(function, reference, *values):
+def _check(function, reference, *values, **tolerances):
     actual, expected = function(*values), reference(*values)
-    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(actual, expected, **tolerances)
     assert actual.dtype == expected.dtype
     seed = torch.randn_like(expected)
-    actual_grad = torch.autograd.grad(actual, values, seed, retain_graph=True)
-    expected_grad = torch.autograd.grad(expected, values, seed, retain_graph=True)
+    actual_grad = torch.autograd.grad(actual, values, seed)
+    expected_grad = torch.autograd.grad(expected, values, seed)
     for actual, expected in zip(actual_grad, expected_grad):
-        torch.testing.assert_close(actual, expected)
+        torch.testing.assert_close(actual, expected, **tolerances)
 
 
 @pytest.mark.parametrize("device", DEVICES)
@@ -144,3 +144,92 @@ def test_scalar_product_compiles_with_broadcast_gradients():
     left = torch.randn(2, 1, 1, requires_grad=True)
     right = torch.randn(1, 3, 6, requires_grad=True)
     _check(compiled, executor.forward_compact, left, right)
+
+
+@pytest.mark.parametrize("n", [3, 6])
+@pytest.mark.parametrize("pairwise", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_full_table_gather_preserves_broadcast_strides_and_gradients(n, pairwise, dtype):
+    spec = AlgebraSpec(n - 1, 1)
+    plan = build_full_table_product_plan(spec, op="geometric_product", dtype=dtype)
+    executor = FullTableProductExecutor(plan)
+    left = torch.randn(2, 4 if pairwise else 1, 2 * spec.dim, dtype=dtype)[..., ::2].requires_grad_()
+    right = torch.randn(1, 3, 2 * spec.dim, dtype=dtype)[..., ::2].requires_grad_()
+
+    def reference(a, b):
+        weighted = b[..., plan.cayley_indices] * plan.signs
+        if pairwise:
+            return torch.einsum("...li,...rik->...lrk", a, weighted)
+        return (a.unsqueeze(-2) @ weighted).squeeze(-2)
+
+    method = executor.forward_pairwise_compact if pairwise else executor.forward_compact
+    tolerance = 2e-5 if dtype == torch.float32 else 1e-10
+    _check(method, reference, left, right, atol=tolerance, rtol=tolerance)
+    _check(
+        torch.compile(method, backend="aot_eager", fullgraph=True),
+        reference,
+        left,
+        right,
+        atol=tolerance,
+        rtol=tolerance,
+    )
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("signature", [(4, 0, 0), (2, 1, 1), (0, 0, 4)])
+@pytest.mark.parametrize(
+    "op", ["geometric_product", "left_contraction", "right_contraction", "symmetric_product", "anti_commutator_product"]
+)
+def test_vector_scalar_products_preserve_sparse_interactions(device, signature, op):
+    plan = build_grade_product_plan(
+        *signature,
+        op=op,
+        left_grades=(1,),
+        right_grades=(1,),
+        output_grades=(0,),
+        device=device,
+    )
+    executor = GradeProductExecutor(plan)
+    for canonical in (False, True):
+        dim = plan.dim if canonical else plan.n
+        left = torch.randn(2, 1, 2 * dim, device=device)[..., ::2].requires_grad_()
+        right = torch.randn(1, 3, 2 * dim, device=device)[..., ::2].requires_grad_()
+        lp = (plan.left_indices if canonical else plan.left_compact_positions).cpu()
+        rp = (plan.right_indices if canonical else plan.right_compact_positions).cpu()
+
+        def reference(a, b):
+            terms = a.cpu().index_select(-1, lp) * b.cpu().index_select(-1, rp) * plan.coefficients.cpu()
+            return terms.new_zeros(*terms.shape[:-1], 1).index_add(-1, plan.output_positions.cpu(), terms).to(device)
+
+        _check(executor.forward if canonical else executor.forward_compact, reference, left, right)
+
+
+def test_vector_scalar_null_directions_do_not_introduce_nan():
+    for signature in ((2, 1, 1), (0, 0, 4)):
+        plan = build_grade_product_plan(
+            *signature,
+            op="left_contraction",
+            left_grades=(1,),
+            right_grades=(1,),
+            output_grades=(0,),
+        )
+        executor = GradeProductExecutor(plan)
+        values = torch.ones(3, 4)
+        values[..., sum(signature[:2]) :] = float("inf")
+        values.requires_grad_()
+        output = executor.forward_compact(values, values)
+        assert torch.isfinite(output).all()
+        (gradient,) = torch.autograd.grad(output.sum(), values)
+        assert torch.isfinite(gradient).all()
+        assert torch.count_nonzero(gradient[..., sum(signature[:2]) :]) == 0
+
+
+def test_vector_scalar_compiles_with_gradients():
+    plan = build_grade_product_plan(
+        2, 1, 1, op="symmetric_product", left_grades=(1,), right_grades=(1,), output_grades=(0,)
+    )
+    executor = GradeProductExecutor(plan)
+    values = (torch.randn(2, 1, 4, requires_grad=True), torch.randn(1, 3, 4, requires_grad=True))
+    _check(
+        torch.compile(executor.forward_compact, fullgraph=True, backend="aot_eager"), executor.forward_compact, *values
+    )

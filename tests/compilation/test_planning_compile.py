@@ -106,7 +106,8 @@ def test_algebra_projected_product_compiles_fullgraph_after_cache_warm():
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_context_projected_product_compiles_fullgraph_from_cold_planner_cache():
+@pytest.mark.parametrize("output_grades", [(0, 2), (0,)])
+def test_context_projected_product_compiles_fullgraph_from_cold_planner_cache(output_grades):
     if hasattr(torch, "_dynamo"):
         torch._dynamo.reset()
     algebra = AlgebraContext(6, 0, device=DEVICE, dtype=torch.float32)
@@ -116,7 +117,7 @@ def test_context_projected_product_compiles_fullgraph_from_cold_planner_cache():
 
     def product(x, y):
         return algebra.geometric_product(
-            x, y, left=algebra.layout((1,)), right=algebra.layout((1,)), output=algebra.layout((0, 2))
+            x, y, left=algebra.layout((1,)), right=algebra.layout((1,)), output=algebra.layout(output_grades)
         )
 
     assert not algebra._planner._product_executors

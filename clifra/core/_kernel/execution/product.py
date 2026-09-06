@@ -45,6 +45,18 @@ class GradeProductExecutor(nn.Module):
         scalar_product = self.op in {"geometric_product", "wedge", "symmetric_product"}
         self._scalar_left = scalar_product and self.left_grades == (0,) and self.right_layout == self.output_layout
         self._scalar_right = scalar_product and self.right_grades == (0,) and self.left_layout == self.output_layout
+        self._vector_scalar = (
+            self.left_grades == self.right_grades == (1,)
+            and self.output_grades == (0,)
+            and self.op
+            in {
+                "geometric_product",
+                "left_contraction",
+                "right_contraction",
+                "symmetric_product",
+                "anti_commutator_product",
+            }
+        )
         self.register_buffer("left_indices", plan.left_indices, persistent=False)
         self.register_buffer("right_indices", plan.right_indices, persistent=False)
         self.register_buffer("output_indices", plan.output_indices, persistent=False)
@@ -81,6 +93,8 @@ class GradeProductExecutor(nn.Module):
         right_terms = torch.index_select(right, -1, self.right_indices)
         terms = left_terms * right_terms * self.coefficients
 
+        if self._vector_scalar:
+            return terms.sum(-1, keepdim=True)
         if self._empty_product:
             return terms.sum(-1, keepdim=True).expand(*terms.shape[:-1], self.output_dim)
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
@@ -92,6 +106,11 @@ class GradeProductExecutor(nn.Module):
         self.right_contract.validate(right, name="right")
         if self._scalar_multiply(left, right):
             return left * right
+        if self._vector_scalar:
+            # Null directions have no planned diagonal interaction. Do not
+            # multiply them by zero: that would introduce NaNs for infinite lanes.
+            terms = left[..., : self.p + self.q] * right[..., : self.p + self.q] * self.coefficients
+            return terms.sum(-1, keepdim=True)
         left_terms = torch.index_select(left, -1, self.left_compact_positions)
         right_terms = torch.index_select(right, -1, self.right_compact_positions)
         terms = left_terms * right_terms * self.coefficients
@@ -235,7 +254,7 @@ class FullTableProductExecutor(nn.Module):
         """Return full-layout product lanes for full-layout compact values."""
         self.left_contract.validate(left, name="left")
         self.right_contract.validate(right, name="right")
-        right_gathered = right[..., self.cayley_indices]
+        right_gathered = self._gather_right(right)
         return torch.matmul(left.unsqueeze(-2), right_gathered * self.signs).squeeze(-2)
 
     def forward_pairwise_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -245,9 +264,18 @@ class FullTableProductExecutor(nn.Module):
         prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
         left = left.expand(*prefix, *left.shape[-2:])
         right = right.expand(*prefix, *right.shape[-2:])
-        right_gathered = right[..., self.cayley_indices]
+        right_gathered = self._gather_right(right)
         weighted_right = right_gathered * self.signs
         return torch.einsum("...li,...rik->...lrk", left, weighted_right)
+
+    def _gather_right(self, right: torch.Tensor) -> torch.Tensor:
+        # Larger float32 CPU tables benefit from flattened indexing. Keep the
+        # other dtypes, accelerators, and tiny tables on their existing path.
+        if self.dim >= 64 and right.device.type == "cpu" and right.dtype == torch.float32:
+            return right.index_select(-1, self.cayley_indices.reshape(-1)).reshape(
+                *right.shape[:-1], self.dim, self.dim
+            )
+        return right[..., self.cayley_indices]
 
     def forward_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return full-layout product lanes."""
