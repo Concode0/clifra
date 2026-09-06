@@ -408,7 +408,7 @@ def test_compact_versor_action_routes_vector_actions_without_full_rotor_layouts(
     assert mixed_rotor._kernel.left_product is not None
     assert mixed_rotor._kernel.right_product is not None
     assert reflection._kernel.vector_matrix.metric_signs.numel() == vector_layout.dim
-    assert reflection._kernel.action.flat_positions_1.numel() == vector_layout.dim * vector_layout.dim
+    assert not hasattr(reflection._kernel.action, "flat_positions_1")
 
 
 def test_compact_vector_bivector_action_has_nonzero_infinitesimal_gradient_at_identity():

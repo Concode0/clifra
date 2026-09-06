@@ -34,8 +34,9 @@ class GradedLinearActionExecutor(nn.Module):
         self.register_buffer(
             "scalar_flat_positions", _scalar_action_positions(input_layout, output_layout), persistent=False
         )
-        self._grade_count = self.n + 1
-        for grade in range(1, self._grade_count):
+        self._vector_only = input_layout.grades == output_layout.grades == (1,)
+        self._grades = tuple(grade for grade in input_layout.grades if grade > 0 and grade in output_layout.grades)
+        for grade in () if self._vector_only else self._grades:
             flat_positions, row_indices, col_indices = _graded_action_plan_tensors(
                 input_layout,
                 output_layout,
@@ -77,27 +78,34 @@ class GradedLinearActionExecutor(nn.Module):
 
     def coefficients_unchecked(self, matrices: torch.Tensor) -> torch.Tensor:
         """Validation-free lifted action coefficients for prepared matrices."""
+        if self._vector_only:
+            return matrices
         flat = matrices.new_zeros(matrices.shape[0], self.output_dim * self.input_dim)
         scalar_positions = self.scalar_flat_positions
         if scalar_positions.numel() > 0:
             scalar_values = matrices.new_ones(matrices.shape[0], scalar_positions.numel())
             flat = flat.index_copy(-1, scalar_positions, scalar_values)
 
-        grade_one_positions = self.flat_positions_1
-        if grade_one_positions.numel() > 0:
+        if 1 in self._grades:
             row_indices = self.row_indices_1[:, 0]
             col_indices = self.col_indices_1[:, 0]
             coefficients = matrices[:, row_indices, col_indices]
-            flat = flat.index_copy(-1, grade_one_positions, coefficients)
+            flat = flat.index_copy(-1, self.flat_positions_1, coefficients)
 
-        for grade in range(2, self._grade_count):
-            positions = getattr(self, f"flat_positions_{grade}")
-            if positions.numel() == 0:
+        for grade in self._grades:
+            if grade == 1:
                 continue
+            positions = getattr(self, f"flat_positions_{grade}")
             row_indices = getattr(self, f"row_indices_{grade}")
             col_indices = getattr(self, f"col_indices_{grade}")
-            submatrix = matrices[:, row_indices.unsqueeze(-1), col_indices.unsqueeze(-2)]
-            flat = flat.index_copy(-1, positions, torch.linalg.det(submatrix))
+            # Keep tiny CPU determinant batches on LU; many small minors and MPS
+            # benefit from direct arithmetic without materializing submatrices.
+            if grade in (2, 3) and (positions.numel() >= 128 or matrices.device.type == "mps"):
+                coefficients = _small_action_minors(matrices, row_indices, col_indices, grade)
+            else:
+                submatrix = matrices[:, row_indices.unsqueeze(-1), col_indices.unsqueeze(-2)]
+                coefficients = torch.linalg.det(submatrix)
+            flat = flat.index_copy(-1, positions, coefficients)
 
         return flat.reshape(matrices.shape[0], self.output_dim, self.input_dim)
 
@@ -105,6 +113,22 @@ class GradedLinearActionExecutor(nn.Module):
         if values.ndim < 2:
             raise ValueError(f"values must include channel and lane axes, got shape {tuple(values.shape)}")
         self.input_contract.validate(values, name="values")
+
+
+def _small_action_minors(matrices: torch.Tensor, rows: torch.Tensor, cols: torch.Tensor, grade: int) -> torch.Tensor:
+    """Evaluate requested 2x2 or 3x3 minors directly from a vector-space map."""
+    a = matrices[:, rows[:, 0], cols[:, 0]]
+    b = matrices[:, rows[:, 0], cols[:, 1]]
+    d = matrices[:, rows[:, 1], cols[:, 0]]
+    e = matrices[:, rows[:, 1], cols[:, 1]]
+    if grade == 2:
+        return a * e - b * d
+    c = matrices[:, rows[:, 0], cols[:, 2]]
+    f = matrices[:, rows[:, 1], cols[:, 2]]
+    g = matrices[:, rows[:, 2], cols[:, 0]]
+    h = matrices[:, rows[:, 2], cols[:, 1]]
+    i = matrices[:, rows[:, 2], cols[:, 2]]
+    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
 
 
 class BivectorVectorGeneratorExecutor(nn.Module):
@@ -680,7 +704,7 @@ def _graded_action_plan_tensors(
     row_indices: list[tuple[int, ...]] = []
     col_indices: list[tuple[int, ...]] = []
     input_items = [
-        (input_position, input_index)
+        (input_position, _basis_bits_tuple(input_index, input_layout.spec.n))
         for input_position, input_index in enumerate(input_layout.basis_indices)
         if input_index.bit_count() == grade
     ]
@@ -688,10 +712,10 @@ def _graded_action_plan_tensors(
         if output_index.bit_count() != grade:
             continue
         output_bits = _basis_bits_tuple(output_index, input_layout.spec.n)
-        for input_position, input_index in input_items:
+        for input_position, input_bits in input_items:
             flat_positions.append(output_position * input_layout.dim + input_position)
             row_indices.append(output_bits)
-            col_indices.append(_basis_bits_tuple(input_index, input_layout.spec.n))
+            col_indices.append(input_bits)
 
     if not flat_positions:
         empty = torch.empty(0, dtype=torch.long)
