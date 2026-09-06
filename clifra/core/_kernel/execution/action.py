@@ -314,6 +314,16 @@ class FullSandwichActionExecutor(nn.Module):
 
     def action_matrices_unchecked(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Validation-free action matrices for prepared full-layout factors."""
+        if self.dim >= 256 and left.device.type == "cpu" and left.dtype == right.dtype == torch.float32:
+            # XOR addressing is symmetric. Gather directly in the transposed
+            # action's order without another table or a strided intermediate.
+            indices = self.cayley_indices.reshape(-1)
+            left_action = left.index_select(-1, indices).reshape(left.shape[0], self.dim, self.dim) * self.left_sign_t
+            right_action = (
+                right.index_select(-1, indices).reshape(right.shape[0], self.dim, self.dim)
+                * self.geometric_product_sign_t
+            )
+            return torch.bmm(right_action, left_action)
         left_gathered = left[:, self.cayley_indices]
         left_action = left_gathered.permute(0, 2, 1) * self.left_sign_t.unsqueeze(0)
 

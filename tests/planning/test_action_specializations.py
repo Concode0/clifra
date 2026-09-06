@@ -8,7 +8,7 @@ from itertools import permutations
 import pytest
 import torch
 
-from clifra.core._kernel.execution.action import GradedLinearActionExecutor
+from clifra.core._kernel.execution.action import FullSandwichActionExecutor, GradedLinearActionExecutor
 from clifra.core.layout import AlgebraSpec
 
 pytestmark = pytest.mark.unit
@@ -100,3 +100,41 @@ def test_induced_action_explicit_minors_gradcheck():
     executor = GradedLinearActionExecutor(input_layout=layout, output_layout=layout)
     matrix = torch.randn(1, 6, 6, dtype=torch.float64, requires_grad=True)
     assert torch.autograd.gradcheck(executor.coefficients, (matrix,), fast_mode=True)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("n", [3, 6, 8])
+def test_full_sandwich_flat_gather_preserves_matrices_and_gradients(dtype, n):
+    spec = AlgebraSpec(n - 2, 1, 1)
+    executor = FullSandwichActionExecutor.from_layout(spec.full_layout(), dtype=dtype)
+    left = torch.randn(2, spec.dim * 2, dtype=dtype)[:, ::2].requires_grad_()
+    right = torch.randn(2, spec.dim * 2, dtype=dtype)[:, ::2].requires_grad_()
+
+    def reference(a, b):
+        la = a[:, executor.cayley_indices].transpose(-1, -2) * executor.left_sign_t
+        ra = b[:, executor.cayley_indices].transpose(-1, -2) * executor.geometric_product_sign_t
+        return torch.bmm(ra, la)
+
+    tolerance = 2e-5 if dtype == torch.float32 else 1e-10
+    for fn in (
+        executor.action_matrices_unchecked,
+        torch.compile(executor.action_matrices_unchecked, fullgraph=True, backend="aot_eager"),
+    ):
+        actual, expected = fn(left, right), reference(left, right)
+        torch.testing.assert_close(actual, expected, atol=tolerance, rtol=tolerance)
+        seed = torch.randn_like(expected)
+        actual_grad = torch.autograd.grad(actual, (left, right), seed)
+        expected_grad = torch.autograd.grad(expected, (left, right), seed)
+        if dtype == torch.float32:
+            # Parallel gather reductions use different summation orders. Check
+            # both implementations against double precision instead of treating
+            # the original float32 cancellation error as the exact reference.
+            doubles = tuple(value.detach().double().requires_grad_() for value in (left, right))
+            precise_grad = torch.autograd.grad(reference(*doubles), doubles, seed.double())
+            for actual, expected, precise in zip(actual_grad, expected_grad, precise_grad):
+                bound = 1e-6 * precise.norm().clamp_min(1.0)
+                assert (actual.double() - precise).norm() <= bound
+                assert (expected.double() - precise).norm() <= bound
+        else:
+            for actual, expected in zip(actual_grad, expected_grad):
+                torch.testing.assert_close(actual, expected, atol=tolerance, rtol=tolerance)
