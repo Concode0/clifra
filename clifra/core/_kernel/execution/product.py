@@ -150,6 +150,8 @@ class GradeProductExecutor(nn.Module):
         self.right_contract.validate(right, name="right")
         left, right = _pairwise_inputs(left, right)
 
+        if self._scalar_multiply(left, right):
+            return left.unsqueeze(-2) * right.unsqueeze(-3)
         if self._pairwise_contract_left:
             flat_positions = self.pairwise_gather_positions.reshape(-1)
             right_gathered = torch.index_select(right, -1, flat_positions).reshape(

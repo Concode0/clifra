@@ -270,3 +270,35 @@ def test_pairwise_gathers_before_float64_batch_broadcast(left_grades, right_grad
         atol=1e-10,
         rtol=1e-10,
     )
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("layouts", [((0,), (1, 2), (1, 2)), ((1, 2), (0,), (1, 2))])
+@pytest.mark.parametrize("op", ["geometric_product", "symmetric_product"])
+def test_scalar_pairwise_specializations(device, layouts, op):
+    lg, rg, og = layouts
+    plan = build_grade_product_plan(3, 1, op=op, left_grades=lg, right_grades=rg, output_grades=og, device=device)
+    executor = GradeProductExecutor(plan)
+    left = torch.randn(2, 1, 3, 2 * plan.left_layout.dim, device=device)[..., ::2].requires_grad_()
+    right = torch.randn(1, 3, 4, 2 * plan.right_layout.dim, device=device)[..., ::2].requires_grad_()
+
+    def reference(a, b):
+        prefix = torch.broadcast_shapes(a.shape[:-2], b.shape[:-2])
+        a, b = a.expand(*prefix, *a.shape[-2:]), b.expand(*prefix, *b.shape[-2:])
+        positions = plan.pairwise_gather_positions.reshape(-1)
+        if plan.pairwise_contract_left:
+            gathered = b.index_select(-1, positions).reshape(*b.shape[:-1], plan.left_layout.dim, plan.output_dim)
+            return torch.einsum("...li,...rik->...lrk", a, gathered * plan.pairwise_coefficients)
+        gathered = a.index_select(-1, positions).reshape(*a.shape[:-1], plan.right_layout.dim, plan.output_dim)
+        return torch.einsum("...ljk,...rj->...lrk", gathered * plan.pairwise_coefficients, b)
+
+    _check(executor.forward_pairwise_compact, reference, left, right, atol=2e-5, rtol=2e-5)
+    if device == "cpu":
+        _check(
+            torch.compile(executor.forward_pairwise_compact, fullgraph=True, backend="aot_eager"),
+            reference,
+            left,
+            right,
+            atol=2e-5,
+            rtol=2e-5,
+        )
