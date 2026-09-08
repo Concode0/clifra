@@ -12,7 +12,6 @@ from typing import Sequence
 import torch
 import torch.nn as nn
 
-from clifra.core.manifold import MANIFOLD_SPIN, tag_manifold
 from clifra.core.module import CliffordModule
 from clifra.core.algebra import AlgebraContext
 from clifra.core._kernel.numerics import signed_clamp_min
@@ -355,7 +354,6 @@ class InvertibleBivectorField(CliffordModule):
         self._latent_coordinates = nn.Parameter(
             torch.empty(parameter_shape, device=algebra.device, dtype=algebra.dtype)
         )
-        tag_manifold(self._latent_coordinates, MANIFOLD_SPIN)
         nn.init.normal_(self._latent_coordinates, mean=0.0, std=float(init_scale))
 
     @property

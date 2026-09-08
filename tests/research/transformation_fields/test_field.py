@@ -37,6 +37,7 @@ class _CountingAction(nn.Module):
 def test_zero_bivectors_are_identity(projective):
     algebra = AlgebraContext(2, 0, int(projective), device="cpu", dtype=torch.float64)
     field = InvertibleBivectorField(algebra, 2, projective=projective, path_steps=3, init_scale=0.0)
+    assert all(not hasattr(parameter, "_manifold") for parameter in field.parameters())
     coordinates = torch.randn(2, 5, 2, dtype=torch.float64)
 
     actual = field(coordinates)
@@ -188,7 +189,9 @@ def test_field_accepts_injected_chart_and_action_components():
 def test_broadcast_field_exponentiates_one_generator_per_path_step():
     algebra = AlgebraContext(3, 0, 0, device="cpu", dtype=torch.float64)
     chart = CoordinateChart.direct(algebra, 3)
-    planned_action = algebra.plan_versor_action(grade=2, input=chart.layout, output=chart.layout, parameter=algebra.layout((2,)))
+    planned_action = algebra.plan_versor_action(
+        grade=2, input=chart.layout, output=chart.layout, parameter=algebra.layout((2,))
+    )
     action = _CountingAction(planned_action)
     field = InvertibleBivectorField(algebra, 3, path_steps=3, chart=chart, action=action)
 
@@ -200,7 +203,9 @@ def test_broadcast_field_exponentiates_one_generator_per_path_step():
 def test_regular_grid_field_does_not_repeat_exponentials_across_batches():
     algebra = AlgebraContext(2, 0, 0, device="cpu", dtype=torch.float64)
     chart = CoordinateChart.direct(algebra, 2)
-    planned_action = algebra.plan_versor_action(grade=2, input=chart.layout, output=chart.layout, parameter=algebra.layout((2,)))
+    planned_action = algebra.plan_versor_action(
+        grade=2, input=chart.layout, output=chart.layout, parameter=algebra.layout((2,))
+    )
     action = _CountingAction(planned_action)
     field = InvertibleBivectorField(
         algebra,

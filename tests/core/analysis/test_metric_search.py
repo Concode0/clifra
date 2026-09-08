@@ -94,6 +94,7 @@ class TestSignatureProbe:
         """Verify forward pass output shape."""
         probe = _SignatureProbe(alg_conformal, channels=2)
         x = torch.randn(8, 1, alg_conformal.dim)
+        assert all(not hasattr(parameter, "_manifold") for parameter in probe.parameters())
         out = probe(x)
         assert out.shape == (8, 1, alg_conformal.dim)
 

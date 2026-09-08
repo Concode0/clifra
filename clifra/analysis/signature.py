@@ -63,7 +63,6 @@ class _ProbeRotor(CliffordModule):
             dtype=algebra.dtype,
         )
         self.bivector_weights = nn.Parameter(torch.empty(channels, self.parameter_layout.dim))
-        self.bivector_weights._manifold = "spin"
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
