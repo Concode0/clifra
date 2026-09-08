@@ -104,7 +104,7 @@ class GradeProductExecutor(nn.Module):
         right_terms = torch.index_select(right, -1, self.right_indices)
         terms = left_terms * right_terms * self.coefficients
 
-        if self._vector_scalar:
+        if self._vector_scalar or self.output_dim == 1:
             return terms.sum(-1, keepdim=True)
         if self._empty_product:
             return terms.sum(-1, keepdim=True).expand(*terms.shape[:-1], self.output_dim)
@@ -126,6 +126,10 @@ class GradeProductExecutor(nn.Module):
         right_terms = torch.index_select(right, -1, self.right_compact_positions)
         terms = left_terms * right_terms * self.coefficients
 
+        # A one-lane output is a reduction, not a scatter. Besides avoiding
+        # atomic accumulation, this supports scalar-output compiled Taylor.
+        if self.output_dim == 1:
+            return terms.sum(-1, keepdim=True)
         if self._empty_product:
             return terms.sum(-1, keepdim=True).expand(*terms.shape[:-1], self.output_dim)
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)

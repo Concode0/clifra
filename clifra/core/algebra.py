@@ -8,7 +8,6 @@ import torch
 
 from ._kernel.basis import expand_output_grades
 from ._kernel.device import resolve_device, resolve_dtype
-from ._kernel.planning.exp import DEFAULT_BIVECTOR_EXP_OPTIONS
 from ._kernel.planning.layouts import ProductRequest, normalize_product_op
 from ._kernel.planning.planner import GradePlanner
 from ._kernel.planning.policy import DEFAULT_PLANNING_POLICY
@@ -38,7 +37,6 @@ class AlgebraContext:
         self._dtype = resolve_dtype(dtype)
         self._planning_policy = DEFAULT_PLANNING_POLICY
         self._resource_limits = DEFAULT_RESOURCE_LIMITS
-        self._bivector_exp_options = DEFAULT_BIVECTOR_EXP_OPTIONS
         from .executors import ExecutorRegistry
 
         if registry is not None and not isinstance(registry, ExecutorRegistry):

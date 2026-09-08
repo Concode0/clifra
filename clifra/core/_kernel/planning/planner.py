@@ -11,7 +11,6 @@ import torch
 from clifra.core._kernel.basis import operation_coefficient
 from clifra.core._kernel.contracts import _check_contract_spec
 from clifra.core._kernel.execution.action import FullSandwichActionExecutor
-from clifra.core._kernel.execution.exp import BivectorExpExecutor
 from clifra.core._kernel.execution.metric import SignatureNormSquaredExecutor
 from clifra.core._kernel.execution.permutation import PseudoscalarProductExecutor
 from clifra.core._kernel.execution.product import FullTableProductExecutor, GradeProductExecutor
@@ -24,7 +23,6 @@ from clifra.core._kernel.planning.action import (
     build_paired_bivector_action_plan,
     build_versor_action_plan,
 )
-from clifra.core._kernel.planning.exp import DEFAULT_BIVECTOR_EXP_OPTIONS
 from clifra.core._kernel.planning.layouts import ProductRequest, build_product_request
 from clifra.core._kernel.planning.product import (
     select_product_route,
@@ -329,114 +327,22 @@ class GradePlanner:
                 self._pseudoscalar_product_executors[key] = executor
         return executor
 
-    def bivector_exp_executor(
-        self,
-        *,
-        input_layout: GradeLayout,
-        output_layout: GradeLayout,
-        dtype=None,
-        device=None,
-        cache: bool = True,
-        spectral_max_planes: int | None = None,
-        spectral_tol_abs: float | None = None,
-        spectral_tol_rel: float | None = None,
-        spectral_dominant_rel: float | None = None,
-        spectral_allow_degenerate: bool | None = None,
-        spectral_allow_truncated_degenerate: bool | None = None,
-    ) -> BivectorExpExecutor:
-        """Return a cached executor for the bivector exponential ``exp(B)``."""
+    def bivector_exp_executor(self, *, input_layout, output_layout, dtype=None, device=None, cache=True):
+        """Return a cached materialized Clifford-exponential executor."""
         dtype = self.algebra.dtype if dtype is None else dtype
         device = self.algebra.device if device is None else device
         input_layout = self._compact_contract(input_layout, "input_layout").layout
         output_layout = self._compact_contract(output_layout, "output_layout").layout
         if input_layout.grades != (2,):
             raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
-        resolved_device = torch.device(device)
-        options = getattr(self.algebra, "_bivector_exp_options", DEFAULT_BIVECTOR_EXP_OPTIONS)
-        resolved_spectral_max_planes = (
-            options.spectral_max_planes if spectral_max_planes is None else spectral_max_planes
-        )
-        resolved_spectral_tol_abs = options.spectral_tol_abs if spectral_tol_abs is None else spectral_tol_abs
-        resolved_spectral_tol_rel = options.spectral_tol_rel if spectral_tol_rel is None else spectral_tol_rel
-        resolved_spectral_dominant_rel = (
-            options.spectral_dominant_rel if spectral_dominant_rel is None else spectral_dominant_rel
-        )
-        resolved_spectral_allow_degenerate = (
-            options.spectral_allow_degenerate if spectral_allow_degenerate is None else bool(spectral_allow_degenerate)
-        )
-        resolved_spectral_allow_truncated_degenerate = (
-            options.spectral_allow_truncated_degenerate
-            if spectral_allow_truncated_degenerate is None
-            else bool(spectral_allow_truncated_degenerate)
-        )
-        full_rank_planes = (self.spec.p + self.spec.q) // 2
-        resolved_spectral_max_planes = (
-            min(full_rank_planes, 4)
-            if resolved_spectral_max_planes is None
-            else min(int(resolved_spectral_max_planes), full_rank_planes, 4)
-        )
-        resolved_spectral_tol_abs = (
-            float(torch.finfo(dtype).eps * 32.0)
-            if resolved_spectral_tol_abs is None
-            else float(resolved_spectral_tol_abs)
-        )
-        resolved_spectral_dominant_rel = (
-            float(max(torch.finfo(dtype).eps ** 0.5, torch.finfo(dtype).eps * 32.0))
-            if resolved_spectral_dominant_rel is None
-            else float(resolved_spectral_dominant_rel)
-        )
-        key = (
-            self.spec,
-            str(resolved_device),
-            str(dtype),
-            "bivector_exp",
-            resolved_spectral_max_planes,
-            resolved_spectral_tol_abs,
-            resolved_spectral_tol_rel,
-            resolved_spectral_dominant_rel,
-            resolved_spectral_allow_degenerate,
-            resolved_spectral_allow_truncated_degenerate,
-            input_layout.grades,
-            output_layout.grades,
-        )
+        key = (self.spec, str(device), dtype, input_layout.grades, output_layout.grades)
         executor = self._bivector_exp_executors.get(key) if cache else None
-        if executor is not None:
-            return executor
-        from clifra.core._kernel.execution.providers import exp_execution_request
-        from clifra.core._kernel.planning.exp import BivectorExpOptions, spectral_exp_preselection
-
-        options = BivectorExpOptions(
-            spectral_max_planes=None if full_rank_planes == 0 else resolved_spectral_max_planes,
-            spectral_tol_abs=resolved_spectral_tol_abs,
-            spectral_tol_rel=resolved_spectral_tol_rel,
-            spectral_dominant_rel=resolved_spectral_dominant_rel,
-            spectral_allow_degenerate=resolved_spectral_allow_degenerate,
-            spectral_allow_truncated_degenerate=resolved_spectral_allow_truncated_degenerate,
-        )
-        preselection = spectral_exp_preselection(
-            self.spec,
-            resolved_device,
-            dtype=dtype,
-            max_planes=options.spectral_max_planes,
-            tol_abs=options.spectral_tol_abs,
-            tol_rel=options.spectral_tol_rel,
-            dominant_rel=options.spectral_dominant_rel,
-            allow_degenerate=options.spectral_allow_degenerate,
-            allow_truncated_degenerate=options.spectral_allow_truncated_degenerate,
-        )
-        request = exp_execution_request(
-            self.spec,
-            resolved_device,
-            dtype,
-            output_layout,
-            preselection,
-            planner=self,
-            options=options,
-            cache=cache,
-        )
-        executor = self.router.execute_plan(request, self.policy, self.limits)
-        if cache:
-            self._bivector_exp_executors[key] = executor
+        if executor is None:
+            from clifra.core._kernel.execution.providers import exp_execution_request
+            request = exp_execution_request(self.spec, device, dtype, output_layout, planner=self)
+            executor = self.router.execute_plan(request, self.policy, self.limits)
+            if cache:
+                self._bivector_exp_executors[key] = executor
         return executor
 
     def full_sandwich_action_executor(
@@ -605,7 +511,6 @@ class GradePlanner:
             self.spec,
             str(self.algebra.device),
             str(self.algebra.dtype),
-            self.algebra._bivector_exp_options,
             family,
             grade,
             input_layout.grades,

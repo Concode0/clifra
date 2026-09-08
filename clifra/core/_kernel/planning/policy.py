@@ -19,9 +19,6 @@ _COMMON_FACT_NAMES = frozenset(
         "backward_work",
         "peak_bytes",
         "compile_work",
-        "quality_exact",
-        "quality_truncated",
-        "quality_value_dependent",
     }
 )
 _COMMON_FACT_ORDER = tuple(sorted(_COMMON_FACT_NAMES))
@@ -57,15 +54,17 @@ def _normalize_extensions(values) -> tuple[tuple[str, float], ...]:
 
 @dataclass(frozen=True)
 class PlanFacts(Mapping[str, float]):
-    """Common route facts plus operation-owned extension attributes."""
+    """Private built-in costs, resources, and operation-owned coordinates.
+
+    These estimates are not part of the external provider contract. All accepted
+    routes implement their declared operation; there is no approximation-quality
+    flag. Input-dependent work (such as Taylor scaling) does not change semantics.
+    """
 
     forward_work: float = 0.0
     backward_work: float = 0.0
     peak_bytes: int = 0
     compile_work: float = 0.0
-    exact: bool = True
-    truncated: bool = False
-    value_dependent: bool = False
     extensions: Mapping[str, float] | Iterable[tuple[str, float]] = ()
     resources: ResourceRequirements | None = None
 
@@ -83,10 +82,6 @@ class PlanFacts(Mapping[str, float]):
         if peak_bytes < 0:
             raise ValueError("planning fact 'peak_bytes' must be non-negative")
         object.__setattr__(self, "peak_bytes", peak_bytes)
-        if self.exact and self.truncated:
-            raise ValueError("a route cannot be both exact and truncated")
-        if self.exact and self.value_dependent:
-            raise ValueError("an exact guarantee cannot be value-dependent")
         object.__setattr__(self, "extensions", _normalize_extensions(self.extensions))
 
     def __getitem__(self, name: str) -> float:
@@ -98,12 +93,6 @@ class PlanFacts(Mapping[str, float]):
             return float(self.peak_bytes)
         if name == "compile_work":
             return self.compile_work
-        if name == "quality_exact":
-            return float(self.exact)
-        if name == "quality_truncated":
-            return float(self.truncated)
-        if name == "quality_value_dependent":
-            return float(self.value_dependent)
         for key, value in self.extensions:
             if key == name:
                 return value
@@ -141,9 +130,6 @@ def compose_plan_facts(
         backward_work=sum(part.backward_work for part in parts),
         peak_bytes=max(peak_bytes, *(part.peak_bytes for part in parts)),
         compile_work=sum(part.compile_work for part in parts),
-        exact=all(part.exact for part in parts),
-        truncated=any(part.truncated for part in parts),
-        value_dependent=any(part.value_dependent for part in parts),
         extensions=extensions,
         resources=ResourceRequirements(
             max((part.resources.lanes for part in parts), default=0),
@@ -196,6 +182,15 @@ class DefaultPolicy:
 
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation:
         family, route, facts = candidate.family, candidate.route, candidate.facts
+        if family == "bivector_exp":
+            if route == "closed":
+                return PolicyEvaluation(0.0, "closed_domain")
+            if route == "taylor":
+                return PolicyEvaluation(1.0, "general_clifford_execution")
+            if route == "left_matrix_exp":
+                n = facts["algebra.n"]
+                preferred = (facts["backend.cpu"] and n == 6) or (facts["backend.mps"] and 6 <= n <= 7)
+                return PolicyEvaluation(0.0 if preferred else 2.0, "measured_matrix_crossover")
         if family == "product" and route in {"full_table", "sparse"}:
             backend = "mps" if facts["backend.mps"] else ("cpu" if facts["backend.cpu"] else "other")
             if route == "full_table":
@@ -214,10 +209,6 @@ class DefaultPolicy:
             )
             return PolicyEvaluation(score, "eligible")
         scores = {
-            ("bivector_exp", "closed_simple"): 0.0,
-            ("bivector_exp", "closed_biquadratic"): 0.0,
-            ("bivector_exp", "left_matrix_exp"): 0.0,
-            ("bivector_exp", "cpu_matrix_exp"): 1.0,
             ("action", "vector_matrix"): -1.0,
             ("action", "rotor_product"): 0.0,
             ("action", "full_action_matrix"): -2.0,
@@ -227,12 +218,8 @@ class DefaultPolicy:
             ("metric", "diagonal"): 0.0,
             ("permutation", "pseudoscalar"): 0.0,
         }
-        if family == "bivector_exp" and route == "spectral_local":
-            return PolicyEvaluation(10.0 - facts["algebra.n"], "eligible")
         score = scores.get((family, route))
-        return PolicyEvaluation(
-            facts.forward_work if score is None else score, "declared_work" if score is None else "eligible"
-        )
+        return PolicyEvaluation(score, "unknown_builtin_route" if score is None else "eligible")
 
 
 DEFAULT_PLANNING_POLICY = DefaultPolicy()

@@ -43,7 +43,7 @@ def request():
 
 
 def accepted(**overrides):
-    return Assessment(lanes=2, pairs=2, forward_work=1, exact=True, **overrides)
+    return Assessment(lanes=2, pairs=2, **overrides)
 
 
 def test_rejected_has_no_cost_quality_or_preparation():
@@ -75,8 +75,7 @@ def test_resource_and_capability_rejections_cannot_reach_policy_or_build():
 
     class Policy:
         def evaluate(self, candidate):
-            assert candidate.route == "valid"
-            return PolicyEvaluation(0)
+            raise AssertionError("external providers must not enter private policy")
 
     registry = ExecutorRouter(providers)
     selection = registry.select(request(), Policy(), ResourceLimits(max_pairs=2))
@@ -91,14 +90,37 @@ def test_resource_and_capability_rejections_cannot_reach_policy_or_build():
     [
         {"lanes": -1},
         {"pairs": 1.5},
-        {"forward_work": float("nan")},
-        {"exact": True, "truncated": True},
-        {"exact": True, "value_dependent": True},
+        {"lanes": True},
+        {"pairs": float("nan")},
+        {"pairs": -1},
     ],
 )
 def test_invalid_assessment_rejected(change):
     with pytest.raises(ValueError):
         replace(accepted(), **change)
+
+
+def test_zero_assessment_counts_do_not_bypass_declared_lane_limits():
+    provider = MockProvider(("mock", "minimal"), Assessment())
+    with pytest.raises(ValueError, match="intermediate lanes 2 exceed max_lanes=1"):
+        ExecutorRouter((provider,)).select(request(), EqualPolicy(), ResourceLimits(max_lanes=1))
+
+
+def test_builtin_private_facts_are_not_reconstructed_from_public_assessment():
+    a = AlgebraContext(4)
+    selection = _exp_child(a._planner, a.layout((2,)), a.layout((0, 2, 4)), a.dtype, a.device)
+    assert selection.facts.forward_work == selection.assessment.preparation.facts.forward_work
+    assert selection.facts.forward_work > 0
+    for name in (
+        "forward_work",
+        "backward_work",
+        "peak_bytes",
+        "compile_work",
+        "exact",
+        "truncated",
+        "value_dependent",
+    ):
+        assert not hasattr(selection.assessment, name)
 
 
 @pytest.mark.parametrize("kind", ["product", "exponential", "action"])

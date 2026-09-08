@@ -62,19 +62,6 @@ class ExecutorMetadata:
     facts: PlanFacts
 
 
-def assessment_facts(assessment):
-    return PlanFacts(
-        assessment.forward_work,
-        assessment.backward_work,
-        assessment.peak_bytes,
-        assessment.compile_work,
-        exact=assessment.exact,
-        truncated=assessment.truncated,
-        value_dependent=assessment.value_dependent,
-        resources=ResourceRequirements(assessment.lanes, assessment.pairs),
-    )
-
-
 @dataclass(frozen=True)
 class ExecutorRouter:
     providers: tuple[ExecutorProvider, ...]
@@ -91,16 +78,21 @@ class ExecutorRouter:
             raise ValueError("duplicate executor family/route")
 
     def select(self, request, policy, limits=DEFAULT_RESOURCE_LIMITS):
+        from .execution.providers import BuiltinPreparation, BuiltinProvider
+
         candidates, selections, rejected = [], [], []
         for provider in self.providers:
             family, route = provider.identity
             if family != request.family:
                 continue
-            from .execution.providers import BuiltinProvider
-
+            builtin = isinstance(provider, BuiltinProvider)
+            # An eligible built-in establishes precedence over later external
+            # providers. Policy still compares all eligible built-in routes.
+            if selections and not builtin:
+                continue
             provider_request = (
                 request
-                if isinstance(provider, BuiltinProvider)
+                if builtin
                 else ExecutorRequest(
                     request.family,
                     request.operation,
@@ -116,27 +108,42 @@ class ExecutorRouter:
                 continue
             if not isinstance(assessment, Assessment):
                 raise TypeError("provider.assess must return Assessment or Rejected")
-            facts = assessment_facts(assessment)
+            if builtin:
+                if not isinstance(assessment.preparation, BuiltinPreparation):
+                    raise TypeError("built-in assessment requires private planning facts")
+                facts = assessment.preparation.facts
+            else:
+                facts = PlanFacts()
+            contract_lanes = max(
+                (
+                    request.output.layout.dim,
+                    *(contract.layout.dim for contract in request.inputs if contract is not None),
+                )
+            )
+            resources = ResourceRequirements(
+                max(contract_lanes, assessment.lanes, facts.resources.lanes),
+                max(assessment.pairs, facts.resources.pairs),
+            )
             extensions = {
                 **environment_extensions(request.output.spec, request.device.type, request.dtype.itemsize),
                 "layout.output_lanes": request.output.layout.dim,
-                "layout.left_lanes": request.inputs[0].layout.dim if request.inputs[0] is not None else 0,
+                "layout.left_lanes": request.inputs[0].layout.dim
+                if request.inputs and request.inputs[0] is not None
+                else 0,
                 "layout.right_lanes": request.inputs[1].layout.dim
                 if len(request.inputs) > 1 and request.inputs[1] is not None
                 else 0,
             }
-            facts = replace(facts, extensions=extensions)
-            # Built-in preparation may supply private, operation-owned policy coordinates.
-            from .execution.providers import BuiltinPreparation
-
-            if isinstance(assessment.preparation, BuiltinPreparation):
-                facts = replace(facts, extensions={**extensions, **dict(assessment.preparation.facts.extensions)})
+            facts = replace(facts, resources=resources, extensions={**extensions, **dict(facts.extensions)})
             reason = facts.resources.rejection_reason(limits)
             if reason:
                 rejected.append((route, reason))
                 continue
+            selection = Selection(provider, provider_request, assessment, facts)
+            if not builtin:
+                return selection
             candidates.append(PlanCandidate(family, route, facts))
-            selections.append(Selection(provider, provider_request, assessment, facts))
+            selections.append(selection)
         if not candidates:
             raise NoAvailableRouteError(f"No implemented {request.family} route is available: {rejected!r}")
         decision = select_policy_route(policy, tuple(candidates))

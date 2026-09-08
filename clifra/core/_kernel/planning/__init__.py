@@ -13,18 +13,8 @@ from .action import (
     build_versor_action_plan,
 )
 from .exp import (
-    DEFAULT_BIVECTOR_EXP_OPTIONS,
-    SPECTRAL_LOCAL_TRUNCATION_NOTICE,
-    BivectorExpOptions,
     BivectorExpPlan,
-    SpectralExpAngleDiagnostics,
-    SpectralExpPreselection,
-    SpectralExpUniformTailStress,
     build_bivector_exp_plan,
-    format_spectral_exp_uniform_tail_stress,
-    spectral_exp_angle_diagnostics,
-    spectral_exp_preselection,
-    spectral_exp_uniform_tail_stress,
 )
 from .layouts import ProductRequest, build_product_request
 from .metric import SignatureNormSquaredPlan, build_signature_norm_squared_plan
@@ -65,12 +55,6 @@ __all__ = [
     "DEFAULT_PLANNING_POLICY",
     "PolicyCoverageError",
     "BivectorExpPlan",
-    "BivectorExpOptions",
-    "DEFAULT_BIVECTOR_EXP_OPTIONS",
-    "SPECTRAL_LOCAL_TRUNCATION_NOTICE",
-    "SpectralExpAngleDiagnostics",
-    "SpectralExpPreselection",
-    "SpectralExpUniformTailStress",
     "LinearActionPlan",
     "PairedBivectorActionPlan",
     "VersorActionPlan",
@@ -85,10 +69,6 @@ __all__ = [
     "build_full_table_product_plan",
     "build_grade_plan_tree",
     "build_bivector_exp_plan",
-    "format_spectral_exp_uniform_tail_stress",
-    "spectral_exp_angle_diagnostics",
-    "spectral_exp_preselection",
-    "spectral_exp_uniform_tail_stress",
     "build_signature_norm_squared_plan",
     "build_pseudoscalar_product_plan",
     "build_product_request",

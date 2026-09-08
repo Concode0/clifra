@@ -1,6 +1,6 @@
 """An external-style provider: this file imports no private clifra modules."""
 
-from dataclasses import FrozenInstanceError, dataclass
+from dataclasses import FrozenInstanceError, dataclass, fields
 
 import pytest
 import torch
@@ -28,7 +28,9 @@ class ScalarProduct(nn.Module):
 @dataclass(frozen=True)
 class ExternalScalarProvider:
     calls: list
-    identity = ("product", "external_scalar")
+    identity: tuple[str, str] = ("product", "external_scalar")
+    lanes: int = 1
+    pairs: int = 1
 
     def assess(self, request):
         assert type(request) is ExecutorRequest
@@ -38,10 +40,8 @@ class ExternalScalarProvider:
         ):
             return Rejected("only scalar geometric products")
         assessment = Assessment(
-            lanes=1,
-            pairs=1,
-            forward_work=0,
-            exact=True,
+            lanes=self.lanes,
+            pairs=self.pairs,
             preparation=ScalarPreparation(request.dtype, request.device),
         )
         self.calls.append(("assess", request, assessment))
@@ -124,3 +124,69 @@ def test_explicit_empty_registry_does_not_silently_restore_defaults():
     algebra = AlgebraContext(2, registry=ExecutorRegistry(()))
     with pytest.raises(ValueError, match="No implemented product"):
         algebra.plan_product()
+
+
+def test_public_assessment_requires_only_resource_counts_and_preparation():
+    assert [field.name for field in fields(Assessment)] == ["lanes", "pairs", "preparation"]
+    assert Assessment() == Assessment(lanes=0, pairs=0, preparation=None)
+    calls = []
+    provider = ExternalScalarProvider(calls, lanes=0, pairs=0)
+    a = AlgebraContext(3, registry=ExecutorRegistry((provider,)))
+    scalar = a.layout((0,))
+    operation = a.plan_product(left=scalar, right=scalar, output=scalar)
+    request, assessment = calls[0][1:]
+    assert request.device == torch.device("cpu")
+    assert request.dtype == torch.float32
+    assert calls[1][1] is request and calls[1][2] is assessment
+    assert isinstance(assessment.preparation, ScalarPreparation)
+    torch.testing.assert_close(operation(torch.tensor([2.0]), torch.tensor([3.0])), torch.tensor([6.0]))
+
+
+@pytest.mark.parametrize("external_first", [True, False])
+def test_registry_order_defines_external_precedence_against_builtins(external_first):
+    calls = []
+    external = ExternalScalarProvider(calls)
+    builtins = ExecutorRegistry.default().providers
+    providers = (external, *builtins) if external_first else (*builtins, external)
+    a = AlgebraContext(3, registry=ExecutorRegistry(providers))
+    scalar = a.layout((0,))
+    operation = a.plan_product(left=scalar, right=scalar, output=scalar)
+    torch.testing.assert_close(operation(torch.tensor([2.0]), torch.tensor([3.0])), torch.tensor([6.0]))
+    assert bool(calls) == external_first
+    assert any(isinstance(module, ScalarProduct) for module in operation.modules()) == external_first
+
+
+def test_appended_external_provider_extends_builtin_capability():
+    calls = []
+    # Built-in tensorized products reject n > 63. Scalar multiplication itself
+    # has no such restriction and this external module needs no bitmask tables.
+    providers = (*ExecutorRegistry.default().providers, ExternalScalarProvider(calls))
+    a = AlgebraContext(64, registry=ExecutorRegistry(providers))
+    scalar = a.layout((0,))
+    operation = a.plan_product(left=scalar, right=scalar, output=scalar)
+    assert [event for event, *_ in calls] == ["assess", "build"]
+    torch.testing.assert_close(operation(torch.tensor([2.0]), torch.tensor([3.0])), torch.tensor([6.0]))
+
+
+def test_external_resource_rejection_falls_through_without_build():
+    oversized, first, second = [], [], []
+    providers = (
+        ExternalScalarProvider(oversized, identity=("product", "oversized"), pairs=10**12),
+        ExternalScalarProvider(first, identity=("product", "first")),
+        ExternalScalarProvider(second, identity=("product", "second")),
+        *ExecutorRegistry.default().providers,
+    )
+    a = AlgebraContext(3, registry=ExecutorRegistry(providers))
+    scalar = a.layout((0,))
+    a.plan_product(left=scalar, right=scalar, output=scalar)
+    assert [event for event, *_ in oversized] == ["assess"]
+    assert [event for event, *_ in first] == ["assess", "build"]
+    assert second == []
+
+
+@pytest.mark.parametrize(
+    "field", ["forward_work", "backward_work", "compile_work", "peak_bytes", "exact", "truncated", "value_dependent"]
+)
+def test_provider_cost_and_quality_flags_are_not_public_assessment_fields(field):
+    with pytest.raises(TypeError):
+        Assessment(**{field: 0})

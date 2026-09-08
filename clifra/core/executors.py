@@ -9,7 +9,6 @@ Provider identity and behavior must remain fixed while a registry is in use.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -41,42 +40,33 @@ class ExecutorRequest:
 
 @dataclass(frozen=True, kw_only=True)
 class Assessment:
-    """An executable route. Exact means no deliberate approximation, not zero roundoff.
+    """Acceptance of the declared mathematical operation and tensor contracts.
 
-    Counts describe static coefficient lanes and interaction/table entries.
-    Work and storage estimates are selection facts, not measured performance.
-    Preparation belongs exclusively to the provider that returned this object.
+    No deliberate truncation or approximation of the operation is implied by
+    acceptance. Ordinary numerical roundoff is permitted. Providers must report
+    conservative maximum coefficient-lane and interaction/table-entry counts
+    for their intermediates, excluding caller-controlled batch dimensions.
+    Zero declares no additional requirement; input/output widths are guarded
+    independently. Assessment must not allocate execution buffers.
+
+    Preparation belongs exclusively to the provider. The exact assessment and
+    request objects returned/received here are passed unchanged to build().
     """
 
-    lanes: int
-    pairs: int
-    forward_work: float
-    exact: bool
-    backward_work: float = 0.0
-    peak_bytes: int = 0
-    compile_work: float = 0.0
-    truncated: bool = False
-    value_dependent: bool = False
+    lanes: int = 0
+    pairs: int = 0
     preparation: object = None
 
     def __post_init__(self):
-        for name in ("lanes", "pairs", "peak_bytes"):
+        for name in ("lanes", "pairs"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
-        for name in ("forward_work", "backward_work", "compile_work"):
-            value = getattr(self, name)
-            if not math.isfinite(value) or value < 0:
-                raise ValueError(f"{name} must be finite and non-negative")
-        if any(not isinstance(value, bool) for value in (self.exact, self.truncated, self.value_dependent)):
-            raise ValueError("quality guarantees must be booleans")
-        if self.exact and (self.truncated or self.value_dependent):
-            raise ValueError("exact routes cannot be truncated or value-dependent")
 
 
 @dataclass(frozen=True)
 class Rejected:
-    """An unavailable route has no cost, quality guarantee, or preparation."""
+    """An unavailable route has only a reason, with no preparation."""
 
     reason: str
 
@@ -101,8 +91,12 @@ class ExecutorRegistry:
     """Immutable explicit provider collection, replacing the default registry.
 
     Use default().providers when retaining built-ins alongside supplied providers.
-    Registration order breaks equal policy scores. New route identities use declared
-    forward work as their default score; built-ins retain their regime rules.
+    The first eligible provider establishes precedence. If it is external, it
+    wins. If it is built-in, private policy chooses among eligible built-ins.
+    Thus prepended external providers override built-ins and appended external
+    providers are fallbacks when no built-in can execute the request. Rejected
+    and over-budget providers do not establish precedence. External routes are
+    never compared using built-in work scores.
     There is no global registry.
     """
 

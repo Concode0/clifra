@@ -29,7 +29,7 @@ def _force_exp_route(route: str):
 
 
 @st.composite
-def _well_conditioned_spectral_bivectors(draw):
+def _rotated_three_plane_bivectors(draw):
     angles = torch.tensor(
         [
             draw(st.floats(0.05, 0.08, allow_nan=False, allow_infinity=False)),
@@ -180,23 +180,21 @@ def test_bivector_exp_vjp_matches_dense_independent_reference(case):
     assert torch.allclose(actual_vjp, expected_vjp, atol=1e-8, rtol=1e-8)
 
 
-@pytest.mark.parametrize("route", ("closed_simple", "closed_biquadratic", "spectral_local", "left_matrix_exp"))
+@pytest.mark.parametrize("route", ("closed", "taylor", "left_matrix_exp"))
 @CORE_NUMERIC_SETTINGS
 @given(data=st.data())
 def test_forced_bivector_exp_routes_match_dense_reference_and_vjp(route, data):
-    if route == "closed_simple":
-        signature = data.draw(signature_strategy(min_n=2, max_n=3))
-    elif route == "closed_biquadratic":
-        signature = data.draw(signature_strategy(min_n=4, max_n=5))
-    elif route == "spectral_local":
-        signature = (6, 0, 0)
-    else:
+    if route == "closed":
         signature = data.draw(signature_strategy(min_n=2, max_n=5))
+    elif route == "taylor":
+        signature = data.draw(signature_strategy(min_n=6, max_n=7))
+    else:
+        signature = data.draw(signature_strategy(min_n=6, max_n=6))
     algebra = configured_algebra(*signature, device="cpu", dtype=torch.float64, planning_policy=_force_exp_route(route))
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout(range(0, algebra.n + 1, 2))
-    if route == "spectral_local":
-        raw = data.draw(_well_conditioned_spectral_bivectors())
+    if route == "left_matrix_exp":
+        raw = data.draw(_rotated_three_plane_bivectors())
     else:
         raw = 0.1 * data.draw(tensor_with_shape((1, input_layout.dim)))
     values = raw.clone().requires_grad_(True)
@@ -220,9 +218,9 @@ def test_forced_bivector_exp_routes_match_dense_reference_and_vjp(route, data):
 
 
 @pytest.mark.parametrize("signature", ((6, 0, 0), (4, 0, 2), (2, 2, 2)))
-def test_forced_spectral_exp_identity_vjp_matches_dense_reference(signature):
+def test_forced_taylor_exp_identity_vjp_matches_dense_reference(signature):
     algebra = configured_algebra(
-        *signature, device="cpu", dtype=torch.float64, planning_policy=_force_exp_route("spectral_local")
+        *signature, device="cpu", dtype=torch.float64, planning_policy=_force_exp_route("taylor")
     )
     input_layout = algebra.layout((2,))
     output_layout = algebra.layout(range(0, algebra.n + 1, 2))

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 from clifra.core.layout import AlgebraSpec, GradeLayout
 
 if TYPE_CHECKING:
-    from clifra.core._kernel.planning.exp import BivectorExpOptions, SpectralExpPreselection
     from clifra.core._kernel.planning.layouts import ProductRequest
     from clifra.core._kernel.planning.planner import GradePlanner
     from clifra.core._kernel.planning.tree import GradePlanTree
@@ -17,7 +16,6 @@ if TYPE_CHECKING:
 
     from ..routing import Selection
 
-import torch
 
 from clifra.core._kernel.planning.policy import (
     NoAvailableRouteError,
@@ -40,8 +38,6 @@ class ProductExecutionRequest(ExecutorRequest):
 @dataclass(frozen=True)
 class ExpExecutionRequest(ExecutorRequest):
     spec: AlgebraSpec
-    preselection: SpectralExpPreselection
-    options: BivectorExpOptions
     planner: GradePlanner | None
 
 
@@ -71,11 +67,13 @@ class ProductPreparation(BuiltinPreparation):
 
 @dataclass(frozen=True)
 class ExpPreparation(BuiltinPreparation):
-    preselection: SpectralExpPreselection
     left_product: Selection | None = None
     bivector_wedge: Selection | None = None
     grade4_square: Selection | None = None
     bivector_grade4_product: Selection | None = None
+    polynomial: tuple = ()
+    full_polynomial: tuple = ()
+    square: Selection | None = None
 
 
 @dataclass(frozen=True)
@@ -103,9 +101,7 @@ def product_execution_request(algebra, request):
     )
 
 
-def exp_execution_request(spec, device, dtype, output_layout, preselection, *, planner=None, options=None, cache=True):
-    from clifra.core._kernel.planning.exp import BivectorExpOptions
-
+def exp_execution_request(spec, device, dtype, output_layout, *, planner=None):
     output_layout = spec.layout((0,)) if output_layout is None else output_layout
     inputs = spec.layout((2,)) if spec.n >= 2 else spec.layout(())
     return ExpExecutionRequest(
@@ -116,8 +112,6 @@ def exp_execution_request(spec, device, dtype, output_layout, preselection, *, p
         dtype,
         device,
         spec,
-        preselection,
-        BivectorExpOptions() if options is None else options,
         planner,
     )
 
@@ -160,13 +154,6 @@ def _accepted(facts, preparation):
     return Assessment(
         lanes=facts.resources.lanes,
         pairs=facts.resources.pairs,
-        forward_work=facts.forward_work,
-        backward_work=facts.backward_work,
-        peak_bytes=facts.peak_bytes,
-        compile_work=facts.compile_work,
-        exact=facts.exact,
-        truncated=facts.truncated,
-        value_dependent=facts.value_dependent,
         preparation=preparation,
     )
 
@@ -210,21 +197,7 @@ def _unary_child(planner, layout, op, dtype, device):
 
 
 def _exp_child(planner, inputs, output, dtype, device):
-    from clifra.core._kernel.planning.exp import spectral_exp_preselection
-
-    options = planner.algebra._bivector_exp_options
-    preselection = spectral_exp_preselection(
-        planner.spec,
-        device,
-        dtype=dtype,
-        max_planes=options.spectral_max_planes,
-        tol_abs=options.spectral_tol_abs,
-        tol_rel=options.spectral_tol_rel,
-        dominant_rel=options.spectral_dominant_rel,
-        allow_degenerate=options.spectral_allow_degenerate,
-        allow_truncated_degenerate=options.spectral_allow_truncated_degenerate,
-    )
-    request = exp_execution_request(planner.spec, device, dtype, output, preselection, planner=planner, options=options)
+    request = exp_execution_request(planner.spec, device, dtype, output, planner=planner)
     return planner.router.select(request, planner.policy, planner.limits)
 
 
@@ -342,6 +315,8 @@ class BuiltinProvider:
 
 
 def _assess_exp(request, route):
+    from clifra.core._kernel.planning.exp import taylor_degree, taylor_layouts
+
     from .exp import assess_bivector_exp_routes
 
     candidate = next(
@@ -351,7 +326,6 @@ def _assess_exp(request, route):
             request.device,
             dtype=request.dtype,
             output_layout=request.output.layout,
-            preselection=request.preselection,
         )
         if item.route == route
     )
@@ -362,50 +336,80 @@ def _assess_exp(request, route):
         reason = facts.resources.rejection_reason(request.planner.limits)
         if reason:
             return Rejected(reason)
-    left_product = wedge = square = mixed = None
-    # Standalone route diagnostics do not construct executors.
+    left_product = wedge = square4 = mixed = square = None
+    polynomial = full_polynomial = ()
     if request.planner is not None:
         spec, planner = request.spec, request.planner
         inputs, output = request.inputs[0].layout, request.output.layout
-        if route in {"left_matrix_exp", "cpu_matrix_exp"}:
-            even = spec.layout(range(0, spec.n + 1, 2))
-            device = torch.device("cpu") if route == "cpu_matrix_exp" else request.device
-            left_product = _product_child(planner, inputs, even, even, request.dtype, device)
-        elif route == "closed_biquadratic":
+        even = spec.layout(range(0, spec.n + 1, 2))
+
+        def child(left, right, out, op="geometric_product"):
+            return _product_child(planner, left, right, out, request.dtype, request.device, op)
+
+        if route == "left_matrix_exp":
+            # The measured matrix regime uses CPU, including small MPS inputs.
+            left_product = _product_child(planner, inputs, even, even, request.dtype, "cpu")
+        elif route == "closed" and spec.n >= 4:
             grade4 = spec.layout((4,))
-            wedge = _product_child(planner, inputs, inputs, grade4, request.dtype, request.device, "wedge")
-            square = _product_child(planner, grade4, grade4, spec.layout((0,)), request.dtype, request.device)
-            mixed = _product_child(planner, inputs, grade4, output, request.dtype, request.device)
-        children = tuple(child.facts for child in (left_product, wedge, square, mixed) if child is not None)
+            wedge = child(inputs, inputs, grade4, "wedge")
+            square4 = child(grade4, grade4, spec.layout((0,)))
+            mixed = child(inputs, grade4, output)
+        elif route == "taylor":
+
+            def polynomial_children(out):
+                layouts = taylor_layouts(spec, out, taylor_degree(request.dtype))
+                return tuple(child(inputs, left, right) for left, right in zip(layouts, layouts[1:]))
+
+            polynomial = polynomial_children(output)
+            full_polynomial = polynomial if output == even else polynomial_children(even)
+            # x*x equals the symmetric Clifford product. The shared planner
+            # removes anticommuting basis pairs before allocating intermediates.
+            square = child(even, even, even, "symmetric_product")
+        children = tuple(
+            c.facts
+            for c in (left_product, wedge, square4, mixed, square, *polynomial, *full_polynomial)
+            if c is not None
+        )
         if children:
             facts = compose_plan_facts(facts, *children, peak_bytes=facts.peak_bytes, extensions=facts.extensions)
-    return _accepted(facts, ExpPreparation(facts, request.preselection, left_product, wedge, square, mixed))
+    return _accepted(
+        facts, ExpPreparation(facts, left_product, wedge, square4, mixed, polynomial, full_polynomial, square)
+    )
 
 
 def _build_exp(request, route, preparation):
     from clifra.core._kernel.planning.exp import build_bivector_exp_plan
 
-    from .exp import BivectorExpExecutor
+    from .exp import BivectorExpExecutor, TaylorPolynomial
 
-    options = request.options
     plan = build_bivector_exp_plan(
         request.spec,
         input_layout=request.inputs[0].layout,
         output_layout=request.output.layout,
         dtype=request.dtype,
         device=request.device,
-        spectral_max_planes=options.spectral_max_planes,
-        spectral_tol_abs=options.spectral_tol_abs,
-        spectral_tol_rel=options.spectral_tol_rel,
-        spectral_dominant_rel=options.spectral_dominant_rel,
-        spectral_allow_degenerate=options.spectral_allow_degenerate,
-        spectral_allow_truncated_degenerate=options.spectral_allow_truncated_degenerate,
         route_decision=RouteDecision(route, preparation.facts, "bivector_exp"),
-        preselection=preparation.preselection,
     )
+    cache = {}
 
     def build(child):
-        return None if child is None else child.build()
+        if child is None:
+            return None
+        # Repeated Horner layouts share the same optimized product executor.
+        key = (child.route, child.request.operation, child.request.inputs, child.request.output)
+        if key not in cache:
+            cache[key] = child.build()
+        return cache[key]
+
+    def polynomial(children):
+        if not children:
+            return None
+        return TaylorPolynomial(
+            [build(c) for c in children],
+            [c.request.output.layout for c in children],
+            dtype=request.dtype,
+            device=request.device,
+        )
 
     return BivectorExpExecutor(
         plan,
@@ -413,6 +417,9 @@ def _build_exp(request, route, preparation):
         bivector_wedge=build(preparation.bivector_wedge),
         grade4_square=build(preparation.grade4_square),
         bivector_grade4_product=build(preparation.bivector_grade4_product),
+        polynomial=polynomial(preparation.polynomial),
+        full_polynomial=polynomial(preparation.full_polynomial),
+        square=build(preparation.square),
     )
 
 
@@ -574,7 +581,7 @@ def builtin_providers():
             ("permutation", ("pseudoscalar",)),
             (
                 "bivector_exp",
-                ("closed_simple", "closed_biquadratic", "spectral_local", "left_matrix_exp", "cpu_matrix_exp"),
+                ("closed", "taylor", "left_matrix_exp"),
             ),
             (
                 "action",
