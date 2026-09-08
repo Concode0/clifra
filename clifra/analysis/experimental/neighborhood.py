@@ -10,13 +10,16 @@ from clifra.core.algebra import AlgebraContext
 from clifra.core.config import make_algebra
 from clifra.core.tensors import TensorContract
 
+from .._observations import canonical_observations
+
 __all__ = ["NeighborhoodBivectorAnalyzer", "compare_coordinate_lifts"]
 
 
 class NeighborhoodBivectorAnalyzer:
     """Explore normalized vector wedges over Euclidean coefficient neighbors.
 
-    Accepts canonical [N, dim] tensors. Wedges use their grade-1 parts;
+    Accepts canonical [N, dim] tensors, normalized to the algebra's dtype/device.
+    Wedges use their grade-1 parts;
     neighbor selection uses all supplied coefficients, including probe outputs.
     Alignment and dissimilarity are research scores in coefficient space.
     """
@@ -26,12 +29,6 @@ class NeighborhoodBivectorAnalyzer:
             raise ValueError("k must be a positive integer")
         self.algebra = algebra
         self.k = k
-
-    def _validate(self, mv):
-        if mv.ndim != 2 or mv.shape[0] == 0 or mv.shape[1] != self.algebra.dim:
-            raise ValueError(f"expected nonempty canonical [N, {self.algebra.dim}] data")
-        if not mv.dtype.is_floating_point:
-            raise TypeError("neighborhood data must be floating point")
 
     def _bivector_alignment_tensor(self, mv: torch.Tensor) -> torch.Tensor:
         return self.per_point_bivector_alignment(mv).mean()
@@ -49,6 +46,7 @@ class NeighborhoodBivectorAnalyzer:
         Returns:
             torch.Tensor: ``[N, k]`` neighbor indices.
         """
+        mv = canonical_observations(mv, self.algebra)
         N = mv.shape[0]
         k = min(self.k, N - 1)
         if k <= 0:
@@ -64,7 +62,7 @@ class NeighborhoodBivectorAnalyzer:
         Returns [N, k, dim] canonical bivectors, or compact grade-2 coefficients.
         Each wedge is divided by max(coefficient norm, epsilon); zero stays zero.
         """
-        self._validate(mv)
+        mv = canonical_observations(mv, self.algebra)
         N, D = mv.shape
         k = min(self.k, N - 1)
         if self.algebra.n < 2:
@@ -97,7 +95,7 @@ class NeighborhoodBivectorAnalyzer:
         """
         bv = self._normalized_neighbor_bivectors(mv)  # [N, k, dim]
         if bv.shape[1] == 0:
-            return mv.new_zeros(mv.shape[0], mv.shape[-1])
+            return bv.new_zeros(mv.shape[0], mv.shape[-1])
         return bv.mean(dim=1)  # [N, dim]
 
     def _bivector_dissimilarity_tensor(self, mv: torch.Tensor) -> torch.Tensor:
@@ -112,7 +110,7 @@ class NeighborhoodBivectorAnalyzer:
         bv = self._normalized_neighbor_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
         if k == 0 or D == 0:
-            return mv.new_zeros(())
+            return bv.new_zeros(())
         nn_idx = self._knn(mv)  # [N, k_nn]
 
         bi = bv.unsqueeze(2)  # [N, k, 1, dim]
@@ -147,24 +145,25 @@ class NeighborhoodBivectorAnalyzer:
         bv = self._normalized_neighbor_bivectors(mv, compact_output=True)  # [N, k, grade2_dim]
         N, k, D = bv.shape
         if k < 2 or D == 0:
-            return mv.new_zeros(N)
+            return bv.new_zeros(N)
 
         bi = bv.unsqueeze(2)  # [N, k, 1, dim]
         bj = bv.unsqueeze(1)  # [N, 1, k, dim]
         abs_cos = (bi * bj).sum(dim=-1).abs()  # [N, k, k]
 
-        mask = ~torch.eye(k, dtype=torch.bool, device=mv.device)  # [k, k]
+        mask = ~torch.eye(k, dtype=torch.bool, device=bv.device)  # [k, k]
         # Mean over off-diagonal pairs per point
         off_diag = abs_cos[:, mask].reshape(N, -1)  # [N, k*(k-1)]
-        return off_diag.mean(dim=1) if off_diag.shape[-1] > 0 else mv.new_zeros(N)  # [N]
+        return off_diag.mean(dim=1) if off_diag.shape[-1] > 0 else bv.new_zeros(N)  # [N]
 
 
-def compare_coordinate_lifts(data: torch.Tensor, p: int, q: int, *, k: int = 8) -> dict:
+def compare_coordinate_lifts(data: torch.Tensor, p: int, q: int, *, k: int = 8, appended_value: float = 1.0) -> dict:
     """Compare coordinate lifts preserving the original positive/negative directions.
 
     Input has shape [N, p+q]; its floating dtype and device are preserved.
-    The positive-count extension inserts 1 after the p positive coordinates
-    and uses Cl(p+1,q). The negative-count extension appends 0 and uses Cl(p,q+1).
+    Both extensions add ``appended_value``. The positive-count extension inserts
+    it after the p positive coordinates and uses Cl(p+1,q); the negative-count
+    extension appends it and uses Cl(p,q+1).
     Returns signatures and neighborhood scores for the three embeddings.
     There is no threshold verdict or automatic preferred representation.
     """
@@ -178,8 +177,8 @@ def compare_coordinate_lifts(data: torch.Tensor, p: int, q: int, *, k: int = 8) 
     results = {}
     for key, positive, negative, fill in (
         ("original", p, q, None),
-        ("positive_count_extension", p + 1, q, 1.0),
-        ("negative_count_extension", p, q + 1, 0.0),
+        ("positive_count_extension", p + 1, q, appended_value),
+        ("negative_count_extension", p, q + 1, appended_value),
     ):
         algebra = make_algebra(positive, negative, device=data.device, dtype=data.dtype)
         if fill is None:

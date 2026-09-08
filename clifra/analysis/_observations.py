@@ -9,7 +9,7 @@ from clifra.core.algebra import AlgebraContext
 
 
 def canonical_observations(data: torch.Tensor, algebra: AlgebraContext) -> torch.Tensor:
-    """Validate nonempty canonical [N, algebra.dim] floating-point observations."""
+    """Validate canonical [N, algebra.dim] floats and use the algebra's dtype/device."""
     if not isinstance(algebra, AlgebraContext):
         raise TypeError("analysis requires an explicit AlgebraContext")
     if data.ndim != 2 or data.shape[-1] != algebra.dim:
@@ -18,4 +18,4 @@ def canonical_observations(data: torch.Tensor, algebra: AlgebraContext) -> torch
         raise ValueError("analysis requires nonempty observations")
     if not data.dtype.is_floating_point:
         raise TypeError("analysis requires floating-point observations")
-    return data
+    return data.to(device=algebra.device, dtype=algebra.dtype)

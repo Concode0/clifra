@@ -1,11 +1,11 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Learned signature candidates from a fixed quadratic-lift probe workflow.
+"""Active signature evidence from a fixed quadratic-lift probe workflow.
 
 Probes train in Cl(D+1,1); the selected probe's bivector parameter energies are mapped to a
-candidate (p, q) pair under a nondegenerate-algebra hypothesis. This workflow
-does not estimate a degenerate component.
+heuristic active (p, q) pair. Unresolved features are counted separately and
+are not interpreted as null directions.
 """
 
 import concurrent.futures
@@ -46,21 +46,26 @@ _SIGNATURE_PROBE_ROTOR_INIT_STD = 0.01
 
 @dataclass
 class SignatureProbeResult:
-    """Candidate (p, q) for a nondegenerate algebra and measured probe scores.
+    """Heuristic active (p, q) evidence, unresolved features, and probe scores.
 
-    ``pca_output_width`` is the actual PCA width, or None without reduction.
+    ``unresolved_features`` is the probe feature width minus p+q, after any PCA.
+    It includes inactive/unassigned features, not null directions. Discarded PCA
+    coordinates are outside this count. ``pca_output_width`` is the actual PCA
+    width, or None without reduction.
     ``bivector_parameter_summary`` contains channel-mean squared bivector parameters,
     normalized by their maximum, and counts of active coordinates dominated by
     elliptic or hyperbolic bivector contributions. These are weight
     classifications, not generator signs. Per-probe ``best_training_loss`` is
     the lowest recorded training objective; neighborhood scores are evaluated
-    after restoring the selected parameters.
+    after restoring the selected parameters. Each probe record includes its
+    ``init_mode``; list order identifies repeated modes.
     """
 
-    candidate_pq: tuple[int, int]
+    candidate_active_pq: tuple[int, int]
     neighbor_bivector_alignment: float
     neighbor_bivector_dissimilarity: float
     bivector_parameter_summary: dict
+    unresolved_features: int
     pca_output_width: int | None = None
     per_probe_results: list[dict] = field(default_factory=list)
 
@@ -273,11 +278,11 @@ class SignatureProbeAnalyzer:
         for _ in range(n_bootstrap):
             indices = torch.randint(len(data), (min(len(data), max_samples),), generator=generator).to(data.device)
             results.append(self.analyze(data[indices]))
-        votes = Counter(result.candidate_pq for result in results)
+        votes = Counter(result.candidate_active_pq for result in results)
         signature, count = votes.most_common(1)[0]
-        representative = next(result for result in results if result.candidate_pq == signature)
+        representative = next(result for result in results if result.candidate_active_pq == signature)
         return representative, {
-            "candidate_pq_counts": dict(votes),
+            "candidate_active_pq_counts": dict(votes),
             "modal_fraction": count / n_bootstrap,
             "n_bootstrap": n_bootstrap,
         }
@@ -357,6 +362,7 @@ class SignatureProbeAnalyzer:
             "neighbor_bivector_alignment": alignment,
             "neighbor_bivector_dissimilarity": dissimilarity,
             "probe": probe,
+            "init_mode": init_mode,
         }
 
     def _map_bivector_parameters(
@@ -365,7 +371,7 @@ class SignatureProbeAnalyzer:
         algebra: AlgebraContext,
         original_dim: int,
     ) -> Tuple[Tuple[int, int], Dict]:
-        """Map bivector parameter energies to a nondegenerate candidate ``(p, q)``."""
+        """Map bivector parameter energies to heuristic active counts ``(p, q)``."""
         bv_sq = algebra._planner.bivector_squared_signs(device=self.device, dtype=algebra.dtype)
         bv_indices = algebra.layout((2,)).indices_tensor(device=self.device)
 
@@ -409,7 +415,11 @@ class SignatureProbeAnalyzer:
         hyperbolic_dominant_count = 0
 
         for b_idx in range(n):
-            if b_idx not in base_active or base_active[b_idx] < self.bivector_parameter_energy_threshold:
+            if (
+                b_idx not in base_active
+                or base_active[b_idx] <= 0
+                or base_active[b_idx] < self.bivector_parameter_energy_threshold
+            ):
                 continue
             type_energy = base_type_energy[b_idx]
             dominant = max(type_energy, key=type_energy.get)
@@ -424,15 +434,13 @@ class SignatureProbeAnalyzer:
         total = p + q
         if total > original_dim:
             scale = original_dim / max(total, 1)
-            p = max(1, round(p * scale))
+            p = round(p * scale)
             q = round(q * scale)
             while p + q > original_dim:
                 if q > 0:
                     q -= 1
                 else:
                     p -= 1
-        elif total == 0:
-            p = original_dim
 
         bivector_parameter_summary = {
             "normalized_bivector_parameter_energy": normalized_energy.tolist(),
@@ -450,7 +458,7 @@ class SignatureProbeAnalyzer:
             data (torch.Tensor): Input data [N, D].
 
         Returns:
-            Diagnostics with ``candidate_pq``, neighborhood bivector
+            Diagnostics with ``candidate_active_pq``, neighborhood bivector
             scores, bivector parameter summary, and per-probe results.
         """
         data = data.to(self.device)
@@ -477,15 +485,17 @@ class SignatureProbeAnalyzer:
         best_idx = min(range(len(probe_results)), key=lambda i: probe_results[i]["best_training_loss"])
         best = probe_results[best_idx]
 
-        candidate_pq, bivector_parameter_summary = self._map_bivector_parameters(best["probe"], algebra, X)
+        candidate_active_pq, bivector_parameter_summary = self._map_bivector_parameters(best["probe"], algebra, X)
 
         return {
-            "candidate_pq": candidate_pq,
+            "candidate_active_pq": candidate_active_pq,
+            "unresolved_features": X - sum(candidate_active_pq),
             "neighbor_bivector_alignment": best["neighbor_bivector_alignment"],
             "neighbor_bivector_dissimilarity": best["neighbor_bivector_dissimilarity"],
             "bivector_parameter_summary": bivector_parameter_summary,
             "per_probe_results": [
                 {
+                    "init_mode": r["init_mode"],
                     "best_training_loss": r["best_training_loss"],
                     "neighbor_bivector_alignment": r["neighbor_bivector_alignment"],
                     "neighbor_bivector_dissimilarity": r["neighbor_bivector_dissimilarity"],

@@ -90,11 +90,11 @@ def test_reflections_use_product_cost_not_an_arbitrary_dimension_cutoff():
     assert scores is not None and len(scores) == 9
 
 
-def test_spectrum_skip_records_actual_input_dtype(monkeypatch):
+def test_spectrum_skip_records_algebra_normalized_dtype(monkeypatch):
     algebra = make_algebra(3, dtype=torch.float32)
     monkeypatch.setattr(spectral, "_LEFT_MULTIPLICATION_LIMITS", ResourceLimits(max_pairs=1))
     data = torch.randn(4, algebra.dim, dtype=torch.float64)
     result = SpectralAnalyzer(algebra).analyze(data)
     details = result.skipped["left_multiplication_eigenvalue_magnitudes"]["checks"]["eigensolver_matrix"]["details"]
-    assert details["dtype"] == "float64"
-    assert details["estimated_bytes"] == algebra.dim**2 * data.element_size()
+    assert details["dtype"] == "float32"
+    assert details["estimated_bytes"] == algebra.dim**2 * torch.empty((), dtype=algebra.dtype).element_size()

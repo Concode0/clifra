@@ -13,27 +13,40 @@ pytestmark = pytest.mark.unit
 
 def estimate_for_width(data):
     return {
-        "candidate_pq": (data.shape[1], 0),
+        "candidate_active_pq": (data.shape[1], 0),
+        "unresolved_features": 0,
         "neighbor_bivector_alignment": 0.7,
         "neighbor_bivector_dissimilarity": 0.2,
         "bivector_parameter_summary": {},
         "per_probe_results": [
-            {"best_training_loss": -0.5, "neighbor_bivector_alignment": 0.7, "neighbor_bivector_dissimilarity": 0.2}
+            {
+                "init_mode": "normal",
+                "best_training_loss": -0.5,
+                "neighbor_bivector_alignment": 0.7,
+                "neighbor_bivector_dissimilarity": 0.2,
+            }
         ],
     }
 
 
-@pytest.mark.parametrize("num_probes", [1, 3])
+@pytest.mark.parametrize("num_probes", [1, 4])
 def test_probe_training_smoke_and_public_output(num_probes):
     torch.manual_seed(31)
     analyzer = SignatureProbeAnalyzer(num_probes=num_probes, probe_epochs=2, k=3)
     result = analyzer.analyze(torch.randn(9, 2))
     assert isinstance(result, SignatureProbeResult)
-    p, q = result.candidate_pq
+    p, q = result.candidate_active_pq
     assert all(isinstance(value, int) and value >= 0 for value in (p, q))
     assert p + q <= 2
+    assert result.unresolved_features == 2 - p - q
     assert result.pca_output_width is None
     assert len(result.per_probe_results) == num_probes
+    assert [entry["init_mode"] for entry in result.per_probe_results] == [
+        "elliptic_weighted",
+        "non_null_weighted",
+        "uniform",
+        "normal",
+    ][:num_probes]
     assert torch.isfinite(torch.tensor([entry["best_training_loss"] for entry in result.per_probe_results])).all()
     assert result.bivector_parameter_summary["bivector_square_signs"]
 
@@ -103,14 +116,14 @@ def test_bootstrap_votes_representative_and_seeded_sampling(monkeypatch):
 
     def fake(sample):
         seen.append(sample.clone())
-        result = SignatureProbeResult(tuples[(len(seen) - 1) % 3], 0.5, 0.4, {})
+        result = SignatureProbeResult(tuples[(len(seen) - 1) % 3], 0.5, 0.4, {}, unresolved_features=0)
         produced.append(result)
         return result
 
     monkeypatch.setattr(analyzer, "analyze", fake)
     winner, votes = analyzer.analyze_bootstrap(data, n_bootstrap=3, max_samples=5, seed=7)
     assert winner is produced[1]
-    assert votes == {"candidate_pq_counts": {(2, 0): 1, (1, 1): 2}, "modal_fraction": 2 / 3, "n_bootstrap": 3}
+    assert votes == {"candidate_active_pq_counts": {(2, 0): 1, (1, 1): 2}, "modal_fraction": 2 / 3, "n_bootstrap": 3}
     analyzer.analyze_bootstrap(data, n_bootstrap=3, max_samples=5, seed=7)
     for first, second in zip(seen[:3], seen[3:]):
         assert first.shape == (5, 2)
@@ -130,12 +143,15 @@ def test_probe_budget_is_checked_before_constructing_host(monkeypatch):
 def test_bootstrap_mode_need_not_be_a_majority(monkeypatch):
     analyzer = SignatureProbeAnalyzer()
     candidates = [(2, 0), (1, 1), (1, 0)]
-    results = [SignatureProbeResult(candidate, 0.5, 0.4, {}) for candidate in candidates]
+    results = [
+        SignatureProbeResult(candidate, 0.5, 0.4, {}, unresolved_features=2 - sum(candidate))
+        for candidate in candidates
+    ]
     remaining = iter(results)
     monkeypatch.setattr(analyzer, "analyze", lambda data: next(remaining))
     representative, votes = analyzer.analyze_bootstrap(torch.ones(4, 2), n_bootstrap=3)
     assert representative is results[0]
-    assert votes["candidate_pq_counts"] == dict.fromkeys(candidates, 1)
+    assert votes["candidate_active_pq_counts"] == dict.fromkeys(candidates, 1)
     assert votes["modal_fraction"] == 1 / 3
 
 
@@ -201,6 +217,48 @@ def test_probe_training_does_not_backpropagate_into_caller_representation():
     analyzer = SignatureProbeAnalyzer(max_probe_features=2, num_probes=1, probe_epochs=2, k=3)
     result = analyzer.analyze(representation)
     assert result.pca_output_width == 2
+    assert result.unresolved_features + sum(result.candidate_active_pq) == 2
     assert source.grad is None
     representation.sum().backward()
     torch.testing.assert_close(source.grad, 2 * source.detach())
+
+
+@pytest.mark.parametrize("threshold", [0.0, 0.05])
+@pytest.mark.parametrize("active", [False, True])
+def test_inactive_parameter_evidence_remains_unresolved(monkeypatch, threshold, active):
+    analyzer = SignatureProbeAnalyzer(num_probes=1, bivector_parameter_energy_threshold=threshold)
+
+    def zero_probe(data, algebra, init_mode):
+        probe = _SignatureProbe(algebra)
+        with torch.no_grad():
+            probe.rotor.bivector_parameters.zero_()
+            if active:
+                probe.rotor.bivector_parameters[:, 0] = 1.0
+        return {
+            "probe": probe,
+            "init_mode": init_mode,
+            "best_training_loss": 0.0,
+            "neighbor_bivector_alignment": 0.0,
+            "neighbor_bivector_dissimilarity": 0.0,
+        }
+
+    monkeypatch.setattr(analyzer, "_train_probe", zero_probe)
+    result = analyzer.analyze(torch.randn(6, 3))
+    assert result.candidate_active_pq == (int(active), 0)
+    assert result.unresolved_features == 3 - int(active)
+    assert result.bivector_parameter_summary["elliptic_dominant_count"] == 2 * int(active)
+    assert result.bivector_parameter_summary["hyperbolic_dominant_count"] == 0
+    assert "null_dominant_count" not in result.bivector_parameter_summary
+
+
+def test_count_cap_does_not_invent_positive_evidence():
+    analyzer = SignatureProbeAnalyzer()
+    algebra = make_algebra(4, 1)
+    probe = _SignatureProbe(algebra)
+    squares = algebra._planner.bivector_squared_signs(device=algebra.device, dtype=algebra.dtype)
+    with torch.no_grad():
+        probe.rotor.bivector_parameters.copy_((squares > 0).expand_as(probe.rotor.bivector_parameters))
+    candidate, summary = analyzer._map_bivector_parameters(probe, algebra, original_dim=3)
+    assert summary["elliptic_dominant_count"] == 0
+    assert summary["hyperbolic_dominant_count"] == 5
+    assert candidate == (0, 3)

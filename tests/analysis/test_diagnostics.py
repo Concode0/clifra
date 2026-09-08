@@ -1,6 +1,8 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import fields
+
 import pytest
 import torch
 
@@ -8,6 +10,43 @@ from clifra.analysis import CommutatorAnalyzer, SpectralAnalyzer, Transformation
 from clifra.core.config import make_algebra
 
 pytestmark = pytest.mark.unit
+
+_DEVICES = (
+    ["cpu"] + (["cuda"] if torch.cuda.is_available() else []) + (["mps"] if torch.backends.mps.is_available() else [])
+)
+
+
+@pytest.mark.parametrize("device", _DEVICES)
+@pytest.mark.parametrize("analyzer_type", [SpectralAnalyzer, CommutatorAnalyzer, TransformationDiagnosticsAnalyzer])
+def test_observations_use_algebra_dtype_and_device(device, analyzer_type):
+    algebra = make_algebra(3, device=device, dtype=torch.float32)
+    data = torch.randn(7, algebra.dim, dtype=torch.float64)
+    analyzer = analyzer_type(algebra)
+    result = analyzer.analyze(data)
+    normalized = data.to(device=algebra.device, dtype=algebra.dtype)
+    expected = analyzer.analyze(normalized)
+    for item in fields(result):
+        actual_value = getattr(result, item.name)
+        expected_value = getattr(expected, item.name)
+        if isinstance(actual_value, torch.Tensor):
+            assert actual_value.dtype == algebra.dtype
+            assert actual_value.device == normalized.device
+            torch.testing.assert_close(actual_value, expected_value)
+        else:
+            assert actual_value == expected_value
+        if hasattr(analyzer, item.name):
+            direct = getattr(analyzer, item.name)(data)
+            if isinstance(direct, torch.Tensor):
+                torch.testing.assert_close(direct, expected_value)
+            else:
+                assert direct == expected_value
+
+
+def test_observation_dtype_conversion_preserves_gradients():
+    algebra = make_algebra(3, dtype=torch.float64)
+    data = torch.randn(5, algebra.dim, requires_grad=True)
+    SpectralAnalyzer(algebra).grade_coefficient_energy(data).sum().backward()
+    torch.testing.assert_close(data.grad, 2 * data.detach() / len(data))
 
 
 @pytest.fixture(params=[(3, 0, 0), (2, 1, 0), (2, 0, 1)])

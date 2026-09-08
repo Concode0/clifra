@@ -9,6 +9,46 @@ from clifra.core.config import make_algebra
 
 pytestmark = pytest.mark.unit
 
+_DEVICES = (
+    ["cpu"] + (["cuda"] if torch.cuda.is_available() else []) + (["mps"] if torch.backends.mps.is_available() else [])
+)
+
+
+@pytest.mark.parametrize("device", _DEVICES)
+@pytest.mark.parametrize("n,count", [(3, 8), (3, 1), (1, 5)])
+def test_neighborhood_normalizes_to_algebra_including_small_inputs(device, n, count):
+    algebra = make_algebra(n, device=device, dtype=torch.float32)
+    data = torch.randn(count, algebra.dim, dtype=torch.float64)
+    analyzer = NeighborhoodBivectorAnalyzer(algebra, k=3)
+    normalized = data.to(device=algebra.device, dtype=algebra.dtype)
+    for name in (
+        "mean_neighbor_bivectors",
+        "per_point_bivector_alignment",
+        "_bivector_alignment_tensor",
+        "_bivector_dissimilarity_tensor",
+    ):
+        actual = getattr(analyzer, name)(data)
+        assert actual.device == normalized.device
+        assert actual.dtype == algebra.dtype
+        torch.testing.assert_close(actual, getattr(analyzer, name)(normalized))
+
+
+def test_neighborhood_normalization_preserves_gradients():
+    torch.manual_seed(18)
+    algebra = make_algebra(3, dtype=torch.float64)
+    data = torch.randn(8, algebra.dim, requires_grad=True)
+    score = NeighborhoodBivectorAnalyzer(algebra, k=3)._bivector_alignment_tensor(data)
+    assert score.dtype == algebra.dtype
+    score.backward()
+    assert data.grad is not None and torch.isfinite(data.grad).all()
+    assert data.grad.abs().sum() > 0
+
+
+@pytest.mark.parametrize("data", [torch.zeros(2, 1, 8), torch.zeros(0, 8), torch.ones(3, 8, dtype=torch.int64)])
+def test_neighborhood_normalization_does_not_relax_input_contract(data):
+    with pytest.raises((ValueError, TypeError)):
+        NeighborhoodBivectorAnalyzer(make_algebra(3)).mean_neighbor_bivectors(data)
+
 
 def circle():
     angles = torch.arange(32, dtype=torch.float64) * (2 * torch.pi / 32)
@@ -86,7 +126,7 @@ def test_lift_comparison_matches_explicit_embeddings(positive, negative):
     for key, p, q, fill in [
         ("original", positive, negative, None),
         ("positive_count_extension", positive + 1, negative, 1.0),
-        ("negative_count_extension", positive, negative + 1, 0.0),
+        ("negative_count_extension", positive, negative + 1, 1.0),
     ]:
         algebra = make_algebra(p, q, dtype=data.dtype, device=data.device)
         if fill is None:
@@ -94,7 +134,7 @@ def test_lift_comparison_matches_explicit_embeddings(positive, negative):
         elif key == "positive_count_extension":
             coordinates = torch.cat([data[:, :positive], data.new_ones(len(data), 1), data[:, positive:]], dim=1)
         else:
-            coordinates = torch.cat([data, data.new_zeros(len(data), 1)], dim=1)
+            coordinates = torch.cat([data, data.new_ones(len(data), 1)], dim=1)
         flow = NeighborhoodBivectorAnalyzer(algebra, k=4)
         mv = algebra.layout((1,)).full(coordinates)
         assert results[key] == {
@@ -112,7 +152,8 @@ def test_invalid_lift_input(data):
         compare_coordinate_lifts(data, 3, 0)
 
 
-def test_coordinate_lifts_preserve_original_quadratic_form(monkeypatch):
+@pytest.mark.parametrize("appended_value", [1.0, 0.0, -2.5])
+def test_coordinate_lifts_preserve_original_quadratic_form(monkeypatch, appended_value):
     data = torch.tensor([[2.0, 3.0, 5.0], [1.0, 4.0, 6.0]], dtype=torch.float64)
     squares = []
 
@@ -123,11 +164,11 @@ def test_coordinate_lifts_preserve_original_quadratic_form(monkeypatch):
 
     monkeypatch.setattr(NeighborhoodBivectorAnalyzer, "neighbor_bivector_alignment", record_square)
     monkeypatch.setattr(NeighborhoodBivectorAnalyzer, "neighbor_bivector_dissimilarity", lambda self, mv: 0.0)
-    compare_coordinate_lifts(data, 1, 2)
+    compare_coordinate_lifts(data, 1, 2, appended_value=appended_value)
     expected = data[:, 0].square() - data[:, 1:].square().sum(dim=1)
     torch.testing.assert_close(squares[0], expected)
-    torch.testing.assert_close(squares[1], expected + 1)
-    torch.testing.assert_close(squares[2], expected)
+    torch.testing.assert_close(squares[1], expected + appended_value**2)
+    torch.testing.assert_close(squares[2], expected - appended_value**2)
 
 
 def test_removed_neighborhood_conveniences():
