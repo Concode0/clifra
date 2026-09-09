@@ -82,7 +82,7 @@ class GradePlanner:
             from clifra.core._kernel.providers import product_execution_request
 
             executor = self.router.execute_plan(
-                product_execution_request(self.algebra, request),
+                product_execution_request(request),
                 self.policy,
                 self.limits,
             )

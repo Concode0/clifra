@@ -1,19 +1,23 @@
 """Selection retains the exact assessed request, provider, and preparation."""
 
-from dataclasses import dataclass, replace
+import warnings
+from dataclasses import dataclass
 
 import torch
 from torch import nn
 
 from clifra.core._kernel.planning.policy import (
+    ActionFacts,
+    BivectorExpFacts,
     NoAvailableRouteError,
     PlanCandidate,
-    PlanFacts,
-    environment_extensions,
+    ProductFacts,
     select_policy_route,
 )
 from clifra.core._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS, ResourceRequirements
 from clifra.core.executors import Assessment, ExecutorProvider, ExecutorRequest, Rejected
+
+PlanningFacts = ProductFacts | ActionFacts | BivectorExpFacts | None
 
 
 @dataclass(frozen=True)
@@ -21,7 +25,7 @@ class Selection:
     provider: ExecutorProvider
     request: ExecutorRequest
     assessment: Assessment
-    facts: PlanFacts
+    facts: PlanningFacts = None
 
     @property
     def family(self):
@@ -59,7 +63,7 @@ class ExecutorMetadata:
     output: object
     dtype: torch.dtype
     device: torch.device
-    facts: PlanFacts
+    facts: PlanningFacts
 
 
 @dataclass(frozen=True)
@@ -77,10 +81,11 @@ class ExecutorRouter:
         if len(keys) != len(set(keys)):
             raise ValueError("duplicate executor family/route")
 
-    def select(self, request, policy, limits=DEFAULT_RESOURCE_LIMITS):
+    def select(self, request, policy, limits=DEFAULT_RESOURCE_LIMITS, *, warn_selected=True):
         from .providers import BuiltinPreparation, BuiltinProvider
 
         candidates, selections, rejected = [], [], []
+        requirements_by_route = {}
         for provider in self.providers:
             family, route = provider.identity
             if family != request.family:
@@ -113,7 +118,7 @@ class ExecutorRouter:
                     raise TypeError("built-in assessment requires private planning facts")
                 facts = assessment.preparation.facts
             else:
-                facts = PlanFacts()
+                facts = None
             contract_lanes = max(
                 (
                     request.output.layout.dim,
@@ -121,33 +126,38 @@ class ExecutorRouter:
                 )
             )
             resources = ResourceRequirements(
-                max(contract_lanes, assessment.lanes, facts.resources.lanes),
-                max(assessment.pairs, facts.resources.pairs),
+                max(contract_lanes, assessment.lanes),
+                assessment.pairs,
             )
-            extensions = {
-                **environment_extensions(request.output.spec, request.device.type, request.dtype.itemsize),
-                "layout.output_lanes": request.output.layout.dim,
-                "layout.left_lanes": request.inputs[0].layout.dim
-                if request.inputs and request.inputs[0] is not None
-                else 0,
-                "layout.right_lanes": request.inputs[1].layout.dim
-                if len(request.inputs) > 1 and request.inputs[1] is not None
-                else 0,
-            }
-            facts = replace(facts, resources=resources, extensions={**extensions, **dict(facts.extensions)})
-            reason = facts.resources.rejection_reason(limits)
+            reason = resources.rejection_reason(limits)
             if reason:
                 rejected.append((route, reason))
                 continue
             selection = Selection(provider, provider_request, assessment, facts)
             if not builtin:
+                if warn_selected:
+                    self._warn_requirements(request, route, resources, limits)
                 return selection
-            candidates.append(PlanCandidate(family, route, facts))
+            candidates.append(PlanCandidate(family, route, request, facts))
             selections.append(selection)
+            requirements_by_route[route] = resources
         if not candidates:
             raise NoAvailableRouteError(f"No implemented {request.family} route is available: {rejected!r}")
         decision = select_policy_route(policy, tuple(candidates))
-        return next(selection for selection in selections if selection.route == decision.route)
+        selected = next(selection for selection in selections if selection.route == decision.route)
+        if warn_selected:
+            self._warn_requirements(request, selected.route, requirements_by_route[selected.route], limits)
+        return selected
+
+    @staticmethod
+    def _warn_requirements(request, route, requirements, limits):
+        reason = requirements.warning_reason(limits)
+        if reason:
+            warnings.warn(
+                f"Static {request.family} route {route} is large: {reason}.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
 
     def construct(self, request, selection):
         if selection.request is not request:

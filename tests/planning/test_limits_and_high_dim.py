@@ -18,7 +18,7 @@ def test_context_static_product_cost_limits_raise_before_executor_build():
     left = torch.zeros(1, layout.dim)
     right = torch.zeros(1, layout.dim)
 
-    with pytest.raises(ValueError, match="basis interactions"):
+    with pytest.raises(ValueError, match="pair/interaction footprint"):
         algebra.geometric_product(left, right, left=layout, right=layout)
 
 
@@ -68,13 +68,13 @@ def test_high_dimensional_product_plan_reports_int64_bitmask_boundary():
 
 
 def test_context_static_product_cost_warns_near_configured_limits():
-    limits = ResourceLimits(warn_lanes=512, max_lanes=512, warn_pairs=128, max_pairs=2048)
+    limits = ResourceLimits(warn_lanes=512, max_lanes=512, warn_pairs=128, max_pairs=4096)
     algebra = configured_algebra(10, 4, 2, device=DEVICE, dtype=torch.float32, resource_limits=limits)
     layout = algebra.layout((1,))
     left = torch.zeros(1, layout.dim)
     right = torch.zeros(1, layout.dim)
 
-    with pytest.warns(RuntimeWarning, match="basis interactions"):
+    with pytest.warns(RuntimeWarning, match="pair/interaction footprint"):
         values = algebra.geometric_product(left, right, left=layout, right=layout)
 
     assert values.shape[-1] == algebra.layout((0, 2)).dim

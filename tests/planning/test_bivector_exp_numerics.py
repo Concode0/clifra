@@ -3,8 +3,10 @@
 import pytest
 import torch
 
+from clifra.core._kernel.configuration import configured_algebra
 from clifra.core.algebra import AlgebraContext
 from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
+from tests.helpers.policy import PreferRoute
 
 pytestmark = pytest.mark.unit
 DEVICE = "cpu"
@@ -321,7 +323,12 @@ def test_closed_large_elliptic_angle_has_correct_finite_vjp(n, dtype, angle):
 @pytest.mark.skipif(not _mps_available(), reason="MPS unavailable")
 @pytest.mark.parametrize("signature", [(6, 0, 0), (3, 3, 0), (3, 1, 3)])
 def test_small_mps_matrix_execution_and_compiled_vjp(signature):
-    a = AlgebraContext(*signature, device="mps", dtype=torch.float32)
+    a = configured_algebra(
+        *signature,
+        device="mps",
+        dtype=torch.float32,
+        planning_policy=PreferRoute("bivector_exp", "left_matrix_exp"),
+    )
     layout = a.layout((2,))
     output = a.layout((0, 2))
     f = a._planner.bivector_exp_executor(input_layout=layout, output_layout=output)

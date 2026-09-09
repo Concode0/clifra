@@ -12,7 +12,7 @@ import torch
 
 from clifra.core._kernel.basis import operation_coefficient
 from clifra.core._kernel.contracts import _check_contract_spec
-from clifra.core._kernel.planning.policy import PlanFacts, environment_extensions
+from clifra.core._kernel.planning.policy import ActionFacts
 from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import TensorContract
@@ -175,20 +175,6 @@ def _graded_action_plan_tensors(
     )
 
 
-def _action_extensions(algebra, *, input_layout, output_layout, parameter_layout, intermediate_lanes: int = 0):
-    device_type = getattr(getattr(algebra, "device", None), "type", str(getattr(algebra, "device", "cpu")))
-    dtype = getattr(algebra, "dtype", None)
-    dtype_bytes = 4 if dtype is None else torch.finfo(dtype).bits // 8
-    return {
-        **environment_extensions(algebra, device_type, dtype_bytes),
-        "layout.input_lanes": input_layout.dim,
-        "layout.output_lanes": output_layout.dim,
-        "action.parameter_lanes": parameter_layout.dim,
-        "action.intermediate_lanes": intermediate_lanes,
-        "action.full_lanes": algebra.dim,
-    }
-
-
 def build_bivector_vector_generator_buffers(bivector_layout, *, dtype, device):
     lane_positions: list[int] = []
     flat_positions: list[int] = []
@@ -242,8 +228,17 @@ def build_full_sandwich_action_buffers(layout, *, device=None, dtype=torch.float
     return cayley_indices, left_sign_t, geometric_product_signs.T.contiguous()
 
 
-def _linear_action_facts(input_layout, output_layout, *, dtype_bytes, generator=False):
-    """Bound dense lifted coefficients and the largest determinant temporary.
+def _bivector_generator_term_count(bivector_layout) -> int:
+    if bivector_layout.grades != (2,):
+        raise ValueError("vector-generator facts require a grade-2 parameter layout")
+    spec = bivector_layout.spec
+    # Each non-null basis direction contributes in both bivectors containing
+    # it and the corresponding generator row; null overlaps vanish.
+    return (spec.p + spec.q) * max(spec.n - 1, 0)
+
+
+def _linear_action_structure(input_layout, output_layout, *, generator_layout=None):
+    """Describe lifted coefficients and bound determinant allocations.
 
     These are per broadcast item, like other static resource estimates. Count
     grade blocks without constructing their Cartesian-product index buffers.
@@ -255,15 +250,19 @@ def _linear_action_facts(input_layout, output_layout, *, dtype_bytes, generator=
     dense = input_layout.dim * output_layout.dim
     minors = max((count * g * g for g, count in blocks.items()), default=0)
     indices = sum(count * (1 + 2 * g) for g, count in blocks.items())
-    work = dense + sum(count * g**3 for g, count in blocks.items()) + (n**3 if generator else 0)
-    backward_work = 2 * dense + sum(count * (g**5 if g >= 4 else 2 * g**3) for g, count in blocks.items())
-    backward_work += 2 * n**3 if generator else 0
+    scalar = int(0 in input_layout.grades and 0 in output_layout.grades)
+    lifted = scalar + sum(blocks.values())
+    minor_entries = sum(count * g * g for g, count in blocks.items() if g >= 4)
+    determinant_work = sum(count * (2 if g == 2 else 9 if g == 3 else g**3) for g, count in blocks.items() if g >= 2)
+    generator_terms = 0 if generator_layout is None else _bivector_generator_term_count(generator_layout)
     pairs = max(n * n, dense, minors)
-    lanes = max(n, input_layout.dim, output_layout.dim, comb(n, 2) if generator else 0)
-    return PlanFacts(
-        work,
-        backward_work,
-        (2 * dense + minors + (3 * n * n if generator else 0)) * dtype_bytes + indices * 8,
-        indices + n * n,
-        resources=ResourceRequirements(lanes, pairs),
+    lanes = max(n, input_layout.dim, output_layout.dim, 0 if generator_layout is None else generator_layout.dim)
+    return (
+        ActionFacts(
+            generator_terms=generator_terms,
+            lifted_coefficients=lifted,
+            minor_entries=minor_entries,
+            determinant_work=determinant_work,
+        ),
+        ResourceRequirements(lanes, max(pairs, indices + n * n)),
     )

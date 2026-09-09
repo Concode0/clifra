@@ -12,27 +12,45 @@ and all basis interactions are expanded once. Hot tensor execution lives in
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable, Optional
 
 import torch
 
 from clifra.core._kernel.basis import (
     GradeProductOp,
+    _grade_product_interaction_count,
     basis_index_tuple_for_grades,
     basis_indices_tensor,
     normalize_grade_product_op,
     operation_coefficient,
 )
 from clifra.core._kernel.planning.layouts import ProductRequest
-from clifra.core._kernel.planning.policy import (
-    RouteDecision,
-)
+from clifra.core._kernel.planning.policy import ProductFacts, RouteDecision
+from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core._kernel.planning.tree import GradePlanTree, build_grade_plan_tree
 from clifra.core.layout import AlgebraSpec
 from clifra.core.tensors import TensorContract
 
 # Bound temporary Cartesian-product rows during buffer construction.
 _PRODUCT_CHUNK_PAIRS = 262_144
+
+
+def count_grade_product_interactions(tree: GradePlanTree) -> int:
+    """Count exact sparse interactions from grade and overlap combinatorics."""
+    spec = tree.spec
+    return sum(
+        _grade_product_interaction_count(
+            spec.p,
+            spec.q,
+            spec.r,
+            path.left_grade,
+            path.right_grade,
+            path.output_grades,
+            tree.op,
+        )
+        for path in tree.paths
+    )
 
 
 def select_product_route(
@@ -68,7 +86,7 @@ def select_product_route(
         device=device,
     )
     return algebra._planner.router.select(
-        product_execution_request(algebra, request),
+        product_execution_request(request),
         algebra._planner.policy if policy is None else policy,
         algebra._planner.limits,
     )
@@ -606,19 +624,25 @@ def request_is_full_layout_product(request: ProductRequest) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class ProductRouteAssessment:
+    """Capability, requirements, facts, and retained tree for one product route."""
+
+    route: str
+    facts: ProductFacts
+    resources: ResourceRequirements
+    tree: GradePlanTree | None = None
+    unavailable_reason: str | None = None
+
+
 def assess_product_routes(
-    algebra,
     *,
     op: str,
     left_layout,
     right_layout,
     output_layout,
-    dtype: torch.dtype,
-    device,
 ):
-    """Declare product capabilities and conservative costs without execution buffers."""
-    from clifra.core._kernel.planning.policy import PlanCandidate, PlanFacts, environment_extensions
-    from clifra.core._kernel.planning.resources import ResourceRequirements
+    """Declare product capabilities and exact structural costs without Torch buffers."""
     from clifra.core._kernel.planning.tree import build_grade_plan_tree
 
     tree = build_grade_plan_tree(
@@ -628,56 +652,31 @@ def assess_product_routes(
         right_grades=right_layout.grades,
         output_grades=output_layout.grades,
     )
-    backend = _device_backend(device)
-    dtype_bytes = torch.finfo(dtype).bits // 8
     full_table_pairs = left_layout.dim * right_layout.dim
-    sparse_pairs = tree.estimated_pairs
-    full_table_bytes = full_table_pairs * (8 + dtype_bytes)
-    sparse_bytes = sparse_pairs * (24 + dtype_bytes)
+    sparse_pairs = count_grade_product_interactions(tree)
     full_grades = tuple(range(left_layout.spec.n + 1))
     full_table_supported = (
         left_layout.grades == full_grades and right_layout.grades == full_grades and output_layout.grades == full_grades
     )
 
-    def candidate(route: str, pair_count: int, peak_bytes: int, unavailable_reason=None) -> PlanCandidate:
-        extensions = {
-            **environment_extensions(left_layout.spec, backend, dtype_bytes),
-            "layout.left_lanes": left_layout.dim,
-            "layout.right_lanes": right_layout.dim,
-            "layout.output_lanes": output_layout.dim,
-        }
-        return PlanCandidate(
-            "product",
-            route,
-            PlanFacts(
-                forward_work=pair_count,
-                backward_work=pair_count * 2,
-                peak_bytes=peak_bytes,
-                compile_work=tree.path_count,
-                extensions=extensions,
-                resources=ResourceRequirements(
-                    max(left_layout.dim, right_layout.dim, output_layout.dim),
-                    max(pair_count, min(left_layout.dim, right_layout.dim) * output_layout.dim)
-                    if route == "sparse"
-                    else pair_count,
-                ),
-            ),
-            unavailable_reason,
-        )
-
+    lanes = max(left_layout.dim, right_layout.dim, output_layout.dim)
+    sparse_lookup = min(left_layout.dim, right_layout.dim) * output_layout.dim
     return (
-        candidate(
+        ProductRouteAssessment(
             "full_table",
-            full_table_pairs,
-            full_table_bytes,
-            None if full_table_supported else "requires_canonical_full_layouts",
+            ProductFacts(full_table_pairs),
+            ResourceRequirements(lanes, full_table_pairs),
+            unavailable_reason=None if full_table_supported else "requires_canonical_full_layouts",
         ),
-        candidate("sparse", sparse_pairs, sparse_bytes),
+        ProductRouteAssessment(
+            "sparse",
+            ProductFacts(
+                sparse_pairs,
+                sparse_pairs if output_layout.dim > 1 and sparse_pairs > 0 else 0,
+            ),
+            # Interaction buffers and the pairwise lookup remain resident
+            # together after construction, so both count toward the route bound.
+            ResourceRequirements(lanes, sparse_pairs + sparse_lookup),
+            tree,
+        ),
     )
-
-
-def _device_backend(device) -> str:
-    if device is None:
-        return "cpu"
-    device_type = torch.device(device).type
-    return device_type if device_type in {"cpu", "mps"} else "other"

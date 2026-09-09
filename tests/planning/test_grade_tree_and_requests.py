@@ -34,19 +34,18 @@ def test_grade_plan_tree_groups_routes_without_runtime_partition_backend():
 def test_product_lowering_chunks_temporary_pairs_without_changing_buffers(monkeypatch):
     tree = build_grade_plan_tree(AlgebraSpec(4, 1, 1), left_grades=(2,), right_grades=(2,))
     expected = product.build_grade_product_plan_from_tree(tree, dtype=torch.float64)
-    original = product._operation_coefficients
-    temporary_pairs = []
+    original = product._cat_long_chunks
+    chunk_sizes = []
 
-    def record(left, right, output_indices, **kwargs):
-        temporary_pairs.append(output_indices.numel())
-        return original(left, right, output_indices, **kwargs)
+    def record(chunks):
+        chunk_sizes.extend(chunk.numel() for chunk in chunks)
+        return original(chunks)
 
     monkeypatch.setattr(product, "_PRODUCT_CHUNK_PAIRS", 30)
-    monkeypatch.setattr(product, "_operation_coefficients", record)
+    monkeypatch.setattr(product, "_cat_long_chunks", record)
     actual = product.build_grade_product_plan_from_tree(tree, dtype=torch.float64)
-    assert len(temporary_pairs) > 1
-    assert max(temporary_pairs) <= 30
-    assert sum(temporary_pairs) == tree.estimated_pairs
+    assert len(chunk_sizes) > 1
+    assert max(chunk_sizes) <= 30
     for name, value in vars(expected).items():
         if isinstance(value, torch.Tensor):
             torch.testing.assert_close(getattr(actual, name), value)

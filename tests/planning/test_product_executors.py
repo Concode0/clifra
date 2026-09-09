@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from clifra.core._kernel.planning.layouts import ProductRequest
+from clifra.core._kernel.planning.product import assess_product_routes, count_grade_product_interactions
+from clifra.core._kernel.planning.tree import build_grade_plan_tree
 from clifra.core.tensors import TensorContract
 from tests.planning._grade_plan_helpers import (
     DEVICE,
@@ -35,6 +37,96 @@ def _compact_product_request(algebra, *, op, left_layout, right_layout, output_l
         dtype=algebra.dtype,
         device=algebra.device,
     )
+
+
+@pytest.mark.parametrize(
+    "signature",
+    [(4, 0, 0), (0, 4, 0), (2, 2, 0), (3, 0, 1), (1, 1, 2), (0, 0, 4)],
+)
+@pytest.mark.parametrize(
+    "op",
+    [
+        "geometric_product",
+        "wedge",
+        "left_contraction",
+        "right_contraction",
+        "symmetric_product",
+        "commutator_product",
+        "anti_commutator_product",
+    ],
+)
+def test_combinatorial_interaction_count_matches_lowered_plan(signature, op):
+    context = AlgebraContext(*signature, dtype=torch.float64)
+    tree = build_grade_plan_tree(
+        context.spec,
+        op=op,
+        left_grades=range(5),
+        right_grades=range(5),
+        output_grades=(0, 1, 2, 3, 4),
+    )
+    plan = build_grade_product_plan(
+        *signature,
+        op=op,
+        left_grades=tree.left_grades,
+        right_grades=tree.right_grades,
+        output_grades=tree.output_grades,
+        dtype=torch.float64,
+    )
+    assert count_grade_product_interactions(tree) == plan.pair_count
+
+
+def test_product_route_assessment_does_not_enumerate_or_allocate(monkeypatch):
+    context = AlgebraContext(16, dtype=torch.float64)
+    left, right, output = context.layout((1,)), context.layout((2,)), context.layout((1, 3))
+
+    def fail(*args, **kwargs):
+        raise AssertionError("assessment must use grade combinatorics only")
+
+    monkeypatch.setattr("clifra.core._kernel.planning.product.operation_coefficient", fail)
+    for name in ("arange", "empty", "eye", "ones", "tensor", "zeros"):
+        monkeypatch.setattr(torch, name, fail)
+
+    assessments = assess_product_routes(
+        op="geometric_product",
+        left_layout=left,
+        right_layout=right,
+        output_layout=output,
+    )
+
+    sparse = next(item for item in assessments if item.route == "sparse")
+    assert sparse.facts.interactions > 0
+    assert sparse.tree is not None
+
+
+@pytest.mark.parametrize(
+    "op,selected,forbidden_builder",
+    [
+        ("geometric_product", "full_table", "build_grade_product_plan_from_tree"),
+        ("wedge", "sparse", "build_full_table_product_plan_from_request"),
+    ],
+)
+def test_only_selected_product_route_materializes(op, selected, forbidden_builder, monkeypatch):
+    context = AlgebraContext(4, dtype=torch.float64)
+
+    def fail(*args, **kwargs):
+        raise AssertionError("unselected route must not construct plan buffers")
+
+    monkeypatch.setattr(f"clifra.core._kernel.planning.product.{forbidden_builder}", fail)
+    executor = context.plan_product(op=op)._kernel
+
+    assert executor.metadata.route == selected
+
+
+def test_sparse_route_is_assessed_before_dense_cartesian_limit():
+    limits = ResourceLimits(max_lanes=100, max_pairs=2_200)
+    context = configured_algebra(8, dtype=torch.float64, resource_limits=limits)
+    trivector, grade6 = context.layout((3,)), context.layout((6,))
+
+    executor = context.plan_product(op="wedge", left=trivector, right=trivector, output=grade6)._kernel
+
+    assert trivector.dim**2 > limits.max_pairs
+    assert isinstance(executor, GradeProductExecutor)
+    assert executor.pair_count < limits.max_pairs
 
 
 @pytest.mark.parametrize("warm_cache", [False, True])
@@ -287,9 +379,16 @@ def test_product_executor_pairwise_uses_factorized_smaller_lane_contraction():
 
 
 @pytest.mark.parametrize(
-    "op", ["geometric_product", "wedge", "symmetric_product", "commutator_product", "anti_commutator_product"]
+    "op,executor_type",
+    [
+        ("geometric_product", FullTableProductExecutor),
+        ("wedge", GradeProductExecutor),
+        ("symmetric_product", FullTableProductExecutor),
+        ("commutator_product", GradeProductExecutor),
+        ("anti_commutator_product", FullTableProductExecutor),
+    ],
 )
-def test_planner_full_table_executor_matches_small_oracle_full_layout_product(op):
+def test_structural_product_policy_matches_small_oracle(op, executor_type):
     context = AlgebraContext(4, 1, 0, device=DEVICE, dtype=torch.float64)
     oracle = _oracle_for(context)
     full_layout = context.layout()
@@ -309,8 +408,7 @@ def test_planner_full_table_executor_matches_small_oracle_full_layout_product(op
     actual = getattr(context, _product_method_name(op))(left, right)
     expected = oracle.product(left, right, op=op)
 
-    assert isinstance(executor, FullTableProductExecutor)
-    assert executor.route == "full_table"
+    assert isinstance(executor, executor_type)
     assert actual.shape[-1] == context.dim
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
@@ -375,7 +473,7 @@ def test_product_executor_policy_override_can_force_full_table_full_layout_wedge
     assert isinstance(executor, FullTableProductExecutor)
 
 
-def test_product_executor_policy_uses_backend_coefficients_without_benchmark_rows():
+def test_product_executor_policy_is_device_independent():
     context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float32)
     full_layout = context.layout()
 
@@ -399,14 +497,14 @@ def test_product_executor_policy_uses_backend_coefficients_without_benchmark_row
     )
 
     assert cpu_decision.route == "full_table"
-    assert mps_decision.route == "sparse"
+    assert mps_decision.route == cpu_decision.route
 
 
 def test_direct_product_executor_obeys_static_pair_limits():
     limits = ResourceLimits(warn_lanes=512, max_lanes=512, warn_pairs=512, max_pairs=64)
     algebra = configured_algebra(16, 0, 0, device=DEVICE, dtype=torch.float32, resource_limits=limits)
 
-    with pytest.raises(ValueError, match="basis interactions"):
+    with pytest.raises(ValueError, match="pair/interaction footprint"):
         algebra.plan_product(
             op="geometric_product", left=algebra.layout((1,)), right=algebra.layout((1,)), output=algebra.layout((0, 2))
         )

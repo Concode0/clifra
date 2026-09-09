@@ -1,6 +1,9 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
+from clifra.core._kernel.providers import action_execution_request
 from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
@@ -57,6 +60,42 @@ def test_high_dimensional_action_route_selection_uses_only_static_layout_facts(m
     )
 
     assert plan.route == "vector_matrix"
+
+
+def test_default_full_layout_action_is_not_forced_to_full_matrix_route():
+    algebra = AlgebraContext(3, device=DEVICE, dtype=torch.float32)
+    full = algebra.layout()
+    operation = algebra.plan_versor_action(
+        grade=2,
+        input=full,
+        output=full,
+        parameter=algebra.layout((2,)),
+    )
+
+    assert operation._kernel.metadata.route in {"vector_matrix", "rotor_product"}
+
+
+def test_default_action_policy_is_device_independent():
+    algebra = AlgebraContext(4, device=DEVICE, dtype=torch.float32)
+    layout = algebra.layout((0, 2, 4))
+    request = action_execution_request(
+        algebra,
+        "versor",
+        grade=2,
+        input_layout=layout,
+        output_layout=layout,
+        parameter_layout=algebra.layout((2,)),
+    )
+    routes = {
+        algebra._planner.router.select(
+            replace(request, device=torch.device(device)),
+            algebra._planner.policy,
+            algebra._planner.limits,
+        ).route
+        for device in ("cpu", "mps", "cuda")
+    }
+
+    assert len(routes) == 1
 
 
 @pytest.mark.parametrize("foreign_side", ["input", "output", "parameter"])

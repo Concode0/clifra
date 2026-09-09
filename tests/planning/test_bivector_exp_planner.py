@@ -34,22 +34,21 @@ def test_bivector_square_preparation_matches_independent_products(signature):
 
 
 @pytest.mark.parametrize(
-    "n,device,route",
+    "n,device",
     [
-        (3, "cpu", "closed"),
-        (5, "mps", "closed"),
-        (6, "cpu", "left_matrix_exp"),
-        (6, "mps", "left_matrix_exp"),
-        (7, "mps", "left_matrix_exp"),
-        (7, "cpu", "taylor"),
-        (8, "mps", "taylor"),
-        (6, "cuda", "taylor"),
-        (10, "cpu", "taylor"),
-        (12, "cuda", "taylor"),
+        (3, "cpu"),
+        (5, "mps"),
     ],
 )
-def test_exp_route_domains(n, device, route):
-    assert select_bivector_exp_executor_family(AlgebraSpec(n), device) == route
+def test_closed_exp_route_is_preferred_throughout_its_domain(n, device):
+    assert select_bivector_exp_executor_family(AlgebraSpec(n), device) == "closed"
+
+
+@pytest.mark.parametrize("n", [6, 8, 12])
+def test_general_exp_default_is_device_independent(n):
+    routes = {select_bivector_exp_executor_family(AlgebraSpec(n), device) for device in ("cpu", "mps", "cuda")}
+    assert len(routes) == 1
+    assert routes <= {"taylor", "left_matrix_exp"}
 
 
 def test_exp_rejects_dimension_before_product_allocation():
@@ -59,7 +58,7 @@ def test_exp_rejects_dimension_before_product_allocation():
 
 def test_exp_respects_intermediate_resource_limit():
     a = configured_algebra(8, resource_limits=ResourceLimits(max_pairs=1000))
-    with pytest.raises(ValueError, match="intermediate interactions"):
+    with pytest.raises(ValueError, match="pair/interaction footprint"):
         a._planner.bivector_exp_executor(input_layout=a.layout((2,)), output_layout=a.layout((0,)))
 
 
@@ -131,8 +130,8 @@ def test_matrix_column_materialization_is_guarded_before_allocation(monkeypatch)
     candidates = assess_bivector_exp_routes(spec, "cpu", dtype=torch.float64, output_layout=spec.layout((0,)))
     matrix = next(candidate for candidate in candidates if candidate.route == "left_matrix_exp")
     assert matrix.unavailable_reason is None
-    assert matrix.facts.resources.pairs == 45 * 512 * 512
-    assert matrix.facts.resources.rejection_reason(ResourceLimits()) is not None
+    assert matrix.resources.pairs == 45 * 512 * 512
+    assert matrix.resources.rejection_reason(ResourceLimits()) is not None
 
     def fail(*args, **kwargs):
         raise AssertionError("route selection must not allocate execution tensors")

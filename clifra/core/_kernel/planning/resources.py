@@ -36,7 +36,12 @@ DEFAULT_RESOURCE_LIMITS = ResourceLimits()
 
 @dataclass(frozen=True)
 class ResourceRequirements:
-    """Conservative peak coefficient width and interaction/table-entry proxies."""
+    """Conservative width and static pair/interaction footprint.
+
+    ``pairs`` adds route-owned resident structures and child footprints that
+    coexist. A route may also include its larger known fixed-shape temporary.
+    Caller-controlled batch dimensions are excluded.
+    """
 
     lanes: int = 0
     pairs: int = 0
@@ -50,8 +55,16 @@ class ResourceRequirements:
         if self.lanes > limits.max_lanes:
             return f"intermediate lanes {self.lanes} exceed max_lanes={limits.max_lanes}"
         if self.pairs > limits.max_pairs:
-            return f"intermediate interactions {self.pairs} exceed max_pairs={limits.max_pairs}"
+            return f"static pair/interaction footprint {self.pairs} exceeds max_pairs={limits.max_pairs}"
         return None
+
+    def warning_reason(self, limits: ResourceLimits) -> str | None:
+        warnings = []
+        if self.lanes >= limits.warn_lanes:
+            warnings.append(f"intermediate lanes {self.lanes} are near max_lanes={limits.max_lanes}")
+        if self.pairs >= limits.warn_pairs:
+            warnings.append(f"static pair/interaction footprint {self.pairs} is near max_pairs={limits.max_pairs}")
+        return "; ".join(warnings) or None
 
 
 @dataclass(frozen=True)
@@ -119,7 +132,6 @@ def validate_product_grades_cost(
             left_lanes=left_lanes,
             right_lanes=right_lanes,
             output_lanes=output_lanes,
-            pair_count=left_lanes * right_lanes,
             left_grades=left,
             right_grades=right,
             output_grades=output,
@@ -136,7 +148,6 @@ def product_plan_cost(request) -> _PlanCost:
         left_lanes=request.left_layout.dim,
         right_lanes=request.right_layout.dim,
         output_lanes=request.output_layout.dim,
-        pair_count=request.left_layout.dim * request.right_layout.dim,
         left_grades=request.left_grades,
         right_grades=request.right_grades,
         output_grades=request.output_grades,

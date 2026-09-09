@@ -11,7 +11,8 @@ import torch
 
 from clifra.core._kernel.basis import build_bivector_squared_signs
 from clifra.core._kernel.contracts import _check_contract_spec
-from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY
+from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY, BivectorExpFacts, ProductFacts
+from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import TensorContract
 
@@ -132,45 +133,106 @@ def select_bivector_exp_executor_family(
 
 
 def assess_bivector_exp_routes(spec, device, *, dtype, output_layout):
-    """Declare conservative materialization costs before allocating product plans."""
-    from clifra.core._kernel.planning.policy import PlanCandidate, PlanFacts, environment_extensions
-    from clifra.core._kernel.planning.resources import ResourceRequirements
+    """Declare route capabilities, resources, and family-owned structural facts."""
+    return tuple(
+        assess_bivector_exp_route(spec, device, dtype=dtype, output_layout=output_layout, route=route)
+        for route in ("closed", "taylor", "left_matrix_exp")
+    )
 
+
+@dataclass(frozen=True)
+class BivectorExpRouteAssessment:
+    route: str
+    facts: BivectorExpFacts
+    resources: ResourceRequirements
+    unavailable_reason: str | None = None
+
+
+def _product_facts(spec, left, right, output, op="geometric_product"):
+    from clifra.core._kernel.planning.product import count_grade_product_interactions
+    from clifra.core._kernel.planning.tree import build_grade_plan_tree
+
+    tree = build_grade_plan_tree(
+        spec,
+        op=op,
+        left_grades=left.grades,
+        right_grades=right.grades,
+        output_grades=output.grades,
+    )
+    interactions = count_grade_product_interactions(tree)
+    reductions = interactions if output.dim > 1 and interactions > 0 else 0
+    return ProductFacts(interactions, reductions)
+
+
+def _sum_product_facts(parts):
+    parts = tuple(parts)
+    return (
+        sum(part.interactions for part in parts),
+        sum(part.indexed_reduction_terms for part in parts),
+    )
+
+
+def assess_bivector_exp_route(spec, device, *, dtype, output_layout, route):
+    """Assess one exponential route without constructing Torch plan buffers."""
     even = 1 << max(spec.n - 1, 0)
     bivector_lanes = spec.n * (spec.n - 1) // 2
     width = output_layout.dim if output_layout is not None else 1
-    size = torch.finfo(dtype).bits // 8
-    shared = {**environment_extensions(spec, torch.device(device).type, size), "layout.output_lanes": width}
-    candidates = []
-    for route, reason, work, pairs in (
-        ("closed", None if 2 <= spec.n <= 5 else "closed_requires_n_2_through_5", 32, max(width, spec.n**4)),
-        (
-            "taylor",
-            None if 2 <= spec.n <= 12 else "materialized_exp_requires_n_2_through_12",
-            18 * even * spec.n**2,
-            even**2,
-        ),
-        (
-            "left_matrix_exp",
-            None if 2 <= spec.n <= 12 else "materialized_exp_requires_n_2_through_12",
-            even**3,
-            # Constructing all left-multiplication columns broadcasts a planned
-            # bivector/even product over `even` fixed columns. Guard this known
-            # expansion, not just the resulting dense matrix.
-            max(bivector_lanes, 1) * even**2,
-        ),
-    ):
-        if route != "closed" and dtype not in (torch.float32, torch.float64):
-            reason = "general_exp_requires_float32_or_float64"
-        if torch.device(device).type == "mps" and dtype == torch.float64:
-            reason = "mps_does_not_support_float64_output"
-        facts = PlanFacts(
-            work,
-            work * 2,
-            pairs * size,
-            work,
-            extensions=shared,
-            resources=ResourceRequirements(max(width, even), pairs),
+    output = spec.layout((0,)) if output_layout is None else output_layout
+    inputs = spec.layout((2,)) if spec.n >= 2 else spec.layout(())
+    even_layout = spec.layout(range(0, spec.n + 1, 2))
+    reason = None
+    if route == "closed":
+        reason = None if 2 <= spec.n <= 5 else "closed_requires_n_2_through_5"
+        pairs = max(width, spec.n**4)
+        products = []
+        if reason is None and spec.n >= 4:
+            grade4 = spec.layout((4,))
+            products = [
+                _product_facts(spec, inputs, inputs, grade4, "wedge"),
+                _product_facts(spec, grade4, grade4, spec.layout((0,))),
+                _product_facts(spec, inputs, grade4, output),
+            ]
+        fixed, reductions = _sum_product_facts(products)
+        facts = BivectorExpFacts(fixed, reductions)
+    elif route == "taylor":
+        reason = None if 2 <= spec.n <= 12 else "materialized_exp_requires_n_2_through_12"
+        pairs = even**2
+
+        def polynomial_facts(target):
+            layouts = taylor_layouts(spec, target, taylor_degree(dtype))
+            return _sum_product_facts(
+                _product_facts(spec, inputs, left, right) for left, right in zip(layouts, layouts[1:])
+            )
+
+        polynomial, polynomial_reductions = polynomial_facts(output) if reason is None else (0, 0)
+        scaled, scaled_reductions = (
+            ((polynomial, polynomial_reductions) if output == even_layout else polynomial_facts(even_layout))
+            if reason is None
+            else (0, 0)
         )
-        candidates.append(PlanCandidate("bivector_exp", route, facts, reason))
-    return tuple(candidates)
+        facts = BivectorExpFacts(
+            polynomial_interactions=polynomial,
+            polynomial_reduction_terms=polynomial_reductions,
+            scaled_polynomial_interactions=scaled,
+            scaled_polynomial_reduction_terms=scaled_reductions,
+        )
+    elif route == "left_matrix_exp":
+        reason = None if 2 <= spec.n <= 12 else "materialized_exp_requires_n_2_through_12"
+        pairs = max(bivector_lanes, 1) * even**2
+        product = _product_facts(spec, inputs, even_layout, even_layout) if reason is None else None
+        facts = BivectorExpFacts(
+            fixed_product_interactions=0 if product is None else product.interactions,
+            fixed_reduction_terms=0 if product is None else product.indexed_reduction_terms,
+        )
+    else:
+        raise ValueError(f"unknown bivector exponential route {route!r}")
+    if route != "closed" and dtype not in (torch.float32, torch.float64):
+        reason = "general_exp_requires_float32_or_float64"
+    if torch.device(device).type == "mps" and dtype == torch.float64:
+        reason = "mps_does_not_support_float64_output"
+    return BivectorExpRouteAssessment(
+        route,
+        facts,
+        ResourceRequirements(max(width, even), pairs),
+        reason,
+    )

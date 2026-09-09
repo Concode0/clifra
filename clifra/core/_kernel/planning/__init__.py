@@ -20,11 +20,13 @@ from .permutation import PseudoscalarProductPlan, build_pseudoscalar_product_pla
 from .planner import GradePlanner
 from .policy import (
     DEFAULT_PLANNING_POLICY,
+    ActionFacts,
+    BivectorExpFacts,
     PlanCandidate,
-    PlanFacts,
     PlanningPolicy,
     PolicyCoverageError,
     PolicyEvaluation,
+    ProductFacts,
 )
 from .product import (
     FullTableProductPlan,
@@ -46,7 +48,9 @@ __all__ = [
     "ResourceLimits",
     "PlanningPolicy",
     "PlanCandidate",
-    "PlanFacts",
+    "ProductFacts",
+    "ActionFacts",
+    "BivectorExpFacts",
     "PolicyEvaluation",
     "SignatureNormSquaredPlan",
     "PseudoscalarProductPlan",

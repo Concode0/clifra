@@ -1,157 +1,111 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Static route facts and the minimal injected planning-policy boundary."""
+"""Family-owned route facts and the private planning-policy boundary."""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Protocol
+from typing import Mapping, Protocol
 
-from .resources import ResourceRequirements
-
-_COMMON_FACT_NAMES = frozenset(
-    {
-        "forward_work",
-        "backward_work",
-        "peak_bytes",
-        "compile_work",
-    }
-)
-_COMMON_FACT_ORDER = tuple(sorted(_COMMON_FACT_NAMES))
+from clifra.core.executors import ExecutorRequest
 
 
-def _finite(value, name: str) -> float:
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"planning fact {name!r} must be finite, got {result}")
-    return result
-
-
-def _qualified(name: str) -> str:
-    name = str(name)
-    parts = name.split(".")
-    if len(parts) < 2 or any(not part.isidentifier() for part in parts):
-        raise ValueError(
-            f"extension attribute {name!r} must be a dot-qualified identifier, for example 'vendor.machine_score'"
-        )
-    return name
-
-
-def _normalize_extensions(values) -> tuple[tuple[str, float], ...]:
-    source = values.items() if isinstance(values, Mapping) else values
-    normalized: dict[str, float] = {}
-    for raw_name, raw_value in source:
-        name = _qualified(raw_name)
-        if name in normalized:
-            raise ValueError(f"duplicate extension attribute {name!r}")
-        normalized[name] = _finite(raw_value, name)
-    return tuple(sorted(normalized.items()))
+def _count(value, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"planning fact {name!r} must be a non-negative integer")
+    return value
 
 
 @dataclass(frozen=True)
-class PlanFacts(Mapping[str, float]):
-    """Private built-in costs, resources, and operation-owned coordinates.
+class ProductFacts:
+    """Structural execution counts for one product route."""
 
-    These estimates are not part of the external provider contract. All accepted
-    routes implement their declared operation; there is no approximation-quality
-    flag. Input-dependent work (such as Taylor scaling) does not change semantics.
-    """
-
-    forward_work: float = 0.0
-    backward_work: float = 0.0
-    peak_bytes: int = 0
-    compile_work: float = 0.0
-    extensions: Mapping[str, float] | Iterable[tuple[str, float]] = ()
-    resources: ResourceRequirements | None = None
+    interactions: int
+    indexed_reduction_terms: int = 0
 
     def __post_init__(self) -> None:
-        if self.resources is None:
-            object.__setattr__(self, "resources", ResourceRequirements())
-        elif not isinstance(self.resources, ResourceRequirements):
-            raise TypeError("route resources must use ResourceRequirements")
-        for name in ("forward_work", "backward_work", "compile_work"):
-            value = _finite(getattr(self, name), name)
-            if value < 0.0:
-                raise ValueError(f"planning fact {name!r} must be non-negative")
-            object.__setattr__(self, name, value)
-        peak_bytes = int(self.peak_bytes)
-        if peak_bytes < 0:
-            raise ValueError("planning fact 'peak_bytes' must be non-negative")
-        object.__setattr__(self, "peak_bytes", peak_bytes)
-        object.__setattr__(self, "extensions", _normalize_extensions(self.extensions))
-
-    def __getitem__(self, name: str) -> float:
-        if name == "forward_work":
-            return self.forward_work
-        if name == "backward_work":
-            return self.backward_work
-        if name == "peak_bytes":
-            return float(self.peak_bytes)
-        if name == "compile_work":
-            return self.compile_work
-        for key, value in self.extensions:
-            if key == name:
-                return value
-        raise KeyError(name)
-
-    def __iter__(self) -> Iterator[str]:
-        return iter((*_COMMON_FACT_ORDER, *(name for name, _ in self.extensions)))
-
-    def __len__(self) -> int:
-        return len(_COMMON_FACT_NAMES) + len(self.extensions)
+        for name in ("interactions", "indexed_reduction_terms"):
+            object.__setattr__(self, name, _count(getattr(self, name), name))
 
 
-def environment_extensions(spec, backend: str, dtype_bytes: int) -> dict[str, float]:
-    """Return the shared static environment coordinates for a route."""
-    return {
-        "algebra.p": spec.p,
-        "algebra.q": spec.q,
-        "algebra.r": spec.r,
-        "algebra.n": spec.n,
-        "backend.cpu": backend == "cpu",
-        "backend.mps": backend == "mps",
-        "backend.other": backend not in {"cpu", "mps"},
-        "dtype.bytes": dtype_bytes,
-    }
+@dataclass(frozen=True)
+class BivectorExpFacts:
+    """Product structure used by one bivector-exponential regime."""
+
+    fixed_product_interactions: int = 0
+    fixed_reduction_terms: int = 0
+    polynomial_interactions: int = 0
+    polynomial_reduction_terms: int = 0
+    scaled_polynomial_interactions: int = 0
+    scaled_polynomial_reduction_terms: int = 0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "fixed_product_interactions",
+            "fixed_reduction_terms",
+            "polynomial_interactions",
+            "polynomial_reduction_terms",
+            "scaled_polynomial_interactions",
+            "scaled_polynomial_reduction_terms",
+        ):
+            object.__setattr__(self, name, _count(getattr(self, name), name))
 
 
-def compose_plan_facts(
-    *parts: PlanFacts,
-    peak_bytes: int = 0,
-    extensions: Mapping[str, float] | Iterable[tuple[str, float]] = (),
-) -> PlanFacts:
-    """Compose sequential facts without guessing storage or error propagation."""
-    return PlanFacts(
-        forward_work=sum(part.forward_work for part in parts),
-        backward_work=sum(part.backward_work for part in parts),
-        peak_bytes=max(peak_bytes, *(part.peak_bytes for part in parts)),
-        compile_work=sum(part.compile_work for part in parts),
-        extensions=extensions,
-        resources=ResourceRequirements(
-            max((part.resources.lanes for part in parts), default=0),
-            max((part.resources.pairs for part in parts), default=0),
-        ),
-    )
+@dataclass(frozen=True)
+class ActionFacts:
+    """Representation and child-product structure for one action route."""
+
+    generator_terms: int = 0
+    lifted_coefficients: int = 0
+    minor_entries: int = 0
+    determinant_work: int = 0
+    product_interactions: int = 0
+    indexed_reduction_terms: int = 0
+    exponential_route: str | None = None
+    exponential_facts: BivectorExpFacts | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "generator_terms",
+            "lifted_coefficients",
+            "minor_entries",
+            "determinant_work",
+            "product_interactions",
+            "indexed_reduction_terms",
+        ):
+            object.__setattr__(self, name, _count(getattr(self, name), name))
+        if (self.exponential_route is None) != (self.exponential_facts is None):
+            raise ValueError("action exponential route and facts must be provided together")
+        if self.exponential_route is not None and not self.exponential_route:
+            raise ValueError("action exponential route must be non-empty")
+
+
+PlanningFacts = ProductFacts | ActionFacts | BivectorExpFacts | None
 
 
 @dataclass(frozen=True)
 class PlanCandidate:
-    """One operation-owned route offered to the policy selector."""
+    """One feasible built-in route offered to the policy selector."""
 
     family: str
     route: str
-    facts: PlanFacts
-    unavailable_reason: str | None = None
+    request: ExecutorRequest
+    facts: PlanningFacts = None
 
     def __post_init__(self) -> None:
         if not self.family or not self.route:
             raise ValueError("candidate family and route must be non-empty")
-        if not isinstance(self.facts, PlanFacts):
-            raise TypeError("candidate facts must use PlanFacts")
+        expected = {"product": ProductFacts, "bivector_exp": BivectorExpFacts}.get(self.family)
+        if expected is not None and not isinstance(self.facts, expected):
+            raise TypeError(f"{self.family} candidates require {expected.__name__}")
+        if self.family == "action" and self.request.operation == "versor":
+            if not isinstance(self.facts, ActionFacts):
+                raise TypeError("versor action candidates require ActionFacts")
+        elif self.family not in {"product", "bivector_exp"} and self.facts is not None:
+            raise TypeError(f"{self.family} candidates do not use route facts")
 
 
 @dataclass(frozen=True)
@@ -176,49 +130,70 @@ class PlanningPolicy(Protocol):
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation: ...
 
 
+def _exp_work(route: str, request, facts: BivectorExpFacts) -> int:
+    """Return one deliberately coarse structural comparison within exp routes."""
+    if route == "closed":
+        return facts.fixed_product_interactions + facts.fixed_reduction_terms
+    if route == "left_matrix_exp":
+        order = 1 << max(request.output.spec.n - 1, 0)
+        return facts.fixed_product_interactions + facts.fixed_reduction_terms + order**3
+    if route == "taylor":
+        # Scaling is input-dependent. Its fixed 16-step envelope is a safety
+        # bound, not an assumption that every call performs sixteen squarings.
+        return max(
+            facts.polynomial_interactions + facts.polynomial_reduction_terms,
+            facts.scaled_polynomial_interactions + facts.scaled_polynomial_reduction_terms,
+        )
+    raise ValueError(f"unknown bivector exponential route {route!r}")
+
+
 @dataclass(frozen=True)
 class DefaultPolicy:
-    """Lightweight regime selector; constants preserve the established routing."""
+    """Small device-independent structural heuristics for built-in routes."""
 
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation:
-        family, route, facts = candidate.family, candidate.route, candidate.facts
+        family, route, request, facts = candidate.family, candidate.route, candidate.request, candidate.facts
+        if family == "product":
+            score = facts.interactions + facts.indexed_reduction_terms
+            return PolicyEvaluation(score, "structural_product_work")
         if family == "bivector_exp":
             if route == "closed":
                 return PolicyEvaluation(0.0, "closed_domain")
-            if route == "taylor":
-                return PolicyEvaluation(1.0, "general_clifford_execution")
-            if route == "left_matrix_exp":
-                n = facts["algebra.n"]
-                preferred = (facts["backend.cpu"] and n == 6) or (facts["backend.mps"] and 6 <= n <= 7)
-                return PolicyEvaluation(0.0 if preferred else 2.0, "measured_matrix_crossover")
-        if family == "product" and route in {"full_table", "sparse"}:
-            backend = "mps" if facts["backend.mps"] else ("cpu" if facts["backend.cpu"] else "other")
-            if route == "full_table":
-                work, compile_weight, lanes = (1.2, 0.0, 0.03) if backend == "mps" else (1.0, 0.0, 0.05)
-            else:
-                work, compile_weight, lanes = {
-                    "cpu": (1.5, 5.0, 0.05),
-                    "mps": (0.9, 1.0, 0.03),
-                    "other": (1.25, 3.0, 0.05),
-                }[backend]
-            score = (
-                work * facts.forward_work
-                + compile_weight * facts.compile_work
-                + lanes * facts["layout.output_lanes"]
-                + facts.peak_bytes / 4096.0
+            return PolicyEvaluation(1.0 + _exp_work(route, request, facts), "structural_exp_work")
+        if family == "action" and request.operation == "versor":
+            spec = request.output.spec
+            inputs, output = request.inputs[0].layout, request.output.layout
+            exp_work = (
+                0
+                if facts.exponential_facts is None
+                else _exp_work(facts.exponential_route, request, facts.exponential_facts)
             )
-            return PolicyEvaluation(score, "eligible")
+            if route == "vector_matrix":
+                matrix_work = spec.n**3 if request.grade == 2 else spec.n**2
+                score = (
+                    facts.generator_terms
+                    + matrix_work
+                    + facts.lifted_coefficients
+                    + facts.minor_entries
+                    + facts.determinant_work
+                    + inputs.dim * output.dim
+                )
+            elif route == "rotor_product":
+                score = exp_work + facts.product_interactions + facts.indexed_reduction_terms
+            elif route == "full_action_matrix":
+                score = exp_work + spec.dim**3 + 3 * spec.dim**2
+            else:
+                return PolicyEvaluation(None, "unknown_builtin_route")
+            return PolicyEvaluation(score, "structural_action_work")
         scores = {
-            ("action", "vector_matrix"): -1.0,
-            ("action", "rotor_product"): 0.0,
-            ("action", "full_action_matrix"): -2.0,
             ("action", "graded_linear"): 0.0,
+            ("action", "full_action_matrix"): 0.0,
             ("unary", "grade_map"): 0.0,
             ("metric", "diagonal"): 0.0,
             ("permutation", "pseudoscalar"): 0.0,
         }
         score = scores.get((family, route))
-        return PolicyEvaluation(score, "unknown_builtin_route" if score is None else "eligible")
+        return PolicyEvaluation(score, "unknown_builtin_route" if score is None else "only_builtin_route")
 
 
 DEFAULT_PLANNING_POLICY = DefaultPolicy()
@@ -226,10 +201,10 @@ DEFAULT_PLANNING_POLICY = DefaultPolicy()
 
 @dataclass(frozen=True)
 class RouteDecision:
-    """Selected route and the facts needed by composed planners."""
+    """Selected route and its family-owned facts."""
 
     route: str
-    facts: PlanFacts
+    facts: PlanningFacts
     family: str = ""
 
 
@@ -241,40 +216,34 @@ class PolicyCoverageError(ValueError):
     """Raised when executable candidates fall outside every policy region."""
 
 
-def select_policy_route(
-    policy: PlanningPolicy,
-    candidates: tuple[PlanCandidate, ...],
-) -> RouteDecision:
-    """Select the minimum-score executable candidate accepted by ``policy``."""
+def _finite(value, name: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"planning score {name!r} must be finite, got {result}")
+    return result
+
+
+def select_policy_route(policy: PlanningPolicy, candidates: tuple[PlanCandidate, ...]) -> RouteDecision:
+    """Select the minimum-score feasible built-in candidate."""
     keys = [(candidate.family, candidate.route) for candidate in candidates]
     if len(keys) != len(set(keys)):
         raise ValueError("route candidates may contain only one candidate per family and route")
     diagnostics: list[Mapping[str, object]] = []
     matches: list[tuple[float, int, PlanCandidate]] = []
-
     for order, candidate in enumerate(candidates):
-        if candidate.unavailable_reason is not None:
-            diagnostics.append(
-                {"route": candidate.route, "status": "unavailable", "reason": candidate.unavailable_reason}
-            )
-            continue
         evaluation = policy.evaluate(candidate)
         if not evaluation.accepted:
             diagnostics.append({"route": candidate.route, "status": evaluation.reason, **dict(evaluation.details)})
             continue
         score = _finite(evaluation.score, f"score.{candidate.family}.{candidate.route}")
         matches.append((score, order, candidate))
-
     if not matches:
-        executable = [candidate.route for candidate in candidates if candidate.unavailable_reason is None]
-        if executable:
+        if candidates:
             raise PolicyCoverageError(
-                f"Planning policy does not cover candidates {executable!r}; diagnostics={diagnostics!r}"
+                f"Planning policy does not cover candidates {[candidate.route for candidate in candidates]!r}; "
+                f"diagnostics={diagnostics!r}"
             )
-        reasons = {candidate.route: candidate.unavailable_reason for candidate in candidates}
-        family = candidates[0].family if candidates else "operation"
-        raise NoAvailableRouteError(f"No implemented {family} route is available: {reasons!r}")
-
+        raise NoAvailableRouteError("No implemented operation route is available")
     best = matches[0]
     for item in matches[1:]:
         if item[:2] < best[:2]:

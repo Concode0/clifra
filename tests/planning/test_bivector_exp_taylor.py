@@ -6,6 +6,7 @@ import torch
 
 from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.planning.layouts import ProductRequest
+from clifra.core._kernel.planning.resources import ResourceLimits
 from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
 from tests.helpers.policy import PreferRoute
 
@@ -167,7 +168,14 @@ def test_taylor_scalar_inductor_forward_backward_and_envelope():
 
 
 def test_taylor_dimension_twelve_keeps_all_six_planes():
-    _, f = executor((12, 0, 0), torch.float32)
+    a = configured_algebra(
+        12,
+        dtype=torch.float32,
+        planning_policy=PreferRoute("bivector_exp", "taylor"),
+        resource_limits=ResourceLimits(max_pairs=12_000_000),
+    )
+    layout = a.layout((2,))
+    f = a._planner.bivector_exp_executor(input_layout=layout, output_layout=a.layout(range(0, 13, 2)))
     angles = torch.linspace(0.03, 0.08, 6, requires_grad=True)
     embedding = torch.zeros(6, f.input_layout.dim)
     for plane in range(6):

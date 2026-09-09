@@ -153,31 +153,82 @@ def product_output_grades(
     op = normalize_grade_product_op(op)
     left_grade = int(left_grade)
     right_grade = int(right_grade)
-    if op == "left_contraction":
-        return (right_grade - left_grade,) if left_grade <= right_grade else ()
-    if op == "right_contraction":
-        return (left_grade - right_grade,) if left_grade >= right_grade else ()
     if op == "wedge":
         grade = left_grade + right_grade
         return (grade,) if grade <= n else ()
 
     outputs = geometric_product_output_grades(left_grade, right_grade, n)
-    if op == "geometric_product":
-        return outputs
-    if op not in {"symmetric_product", "commutator_product", "anti_commutator_product"}:
-        raise ValueError(f"Unsupported grade product op {op!r}")
+    return tuple(
+        output_grade
+        for output_grade in outputs
+        if _operation_allows_overlap(
+            left_grade,
+            right_grade,
+            (left_grade + right_grade - output_grade) // 2,
+            op,
+        )
+    )
 
-    filtered = []
-    for output_grade in outputs:
-        overlap = (left_grade + right_grade - output_grade) // 2
-        parity_odd = ((left_grade * right_grade - overlap) % 2) == 1
-        if op == "commutator_product":
-            keep = parity_odd
-        else:
-            keep = not parity_odd
-        if keep:
-            filtered.append(output_grade)
-    return tuple(filtered)
+
+def _grade_product_interaction_count(
+    p: int,
+    q: int,
+    r: int,
+    left_grade: int,
+    right_grade: int,
+    output_grades: Iterable[int],
+    op: GradeProductOp,
+) -> int:
+    """Count nonzero ordered basis pairs using canonical grade semantics."""
+    op = normalize_grade_product_op(op)
+    n = p + q + r
+    left_grade, right_grade = int(left_grade), int(right_grade)
+    non_null = p + q
+    count = 0
+    for output_grade in set(int(grade) for grade in output_grades):
+        if output_grade < 0 or output_grade > n:
+            continue
+        difference = left_grade + right_grade - output_grade
+        if difference < 0 or difference % 2:
+            continue
+        overlap = difference // 2
+        if not _operation_allows_overlap(left_grade, right_grade, overlap, op):
+            continue
+        intersection_choices = n if op == "wedge" else non_null
+        count += (
+            _comb_or_zero(intersection_choices, overlap)
+            * _comb_or_zero(n - overlap, left_grade - overlap)
+            * _comb_or_zero(n - left_grade, right_grade - overlap)
+        )
+    return count
+
+
+def _comb_or_zero(total: int, selected: int) -> int:
+    return 0 if total < 0 or selected < 0 or selected > total else comb(total, selected)
+
+
+def _operation_allows_overlap(
+    left_grade: int,
+    right_grade: int,
+    overlap: int,
+    op: GradeProductOp,
+) -> bool:
+    if overlap < 0 or overlap > min(left_grade, right_grade):
+        return False
+    if op == "wedge":
+        return overlap == 0
+    if op == "left_contraction":
+        return left_grade <= right_grade and overlap == left_grade
+    if op == "right_contraction":
+        return left_grade >= right_grade and overlap == right_grade
+    if op == "geometric_product":
+        return True
+    parity_odd = (left_grade * right_grade - overlap) % 2 == 1
+    if op == "commutator_product":
+        return parity_odd
+    if op in {"symmetric_product", "anti_commutator_product"}:
+        return not parity_odd
+    raise ValueError(f"Unsupported grade product op {op!r}")
 
 
 def basis_product(index_a: int, index_b: int, p: int, q: int, r: int) -> tuple[int, float]:
@@ -256,39 +307,14 @@ def operation_may_be_nonzero(
     """Return whether an operator can have a non-zero coefficient for a basis pair."""
     op = normalize_grade_product_op(op)
     overlap_mask = int(index_a) & int(index_b)
-    if op == "wedge":
-        return overlap_mask == 0
-
-    if r > 0:
+    if op != "wedge" and r > 0:
         null_mask = ((1 << r) - 1) << (p + q)
         if overlap_mask & null_mask:
             return False
-    if op == "left_contraction":
-        left_grade = int(index_a).bit_count()
-        right_grade = int(index_b).bit_count()
-        output_grade = (int(index_a) ^ int(index_b)).bit_count()
-        return left_grade <= right_grade and output_grade == right_grade - left_grade
-    if op == "right_contraction":
-        left_grade = int(index_a).bit_count()
-        right_grade = int(index_b).bit_count()
-        output_grade = (int(index_a) ^ int(index_b)).bit_count()
-        return left_grade >= right_grade and output_grade == left_grade - right_grade
-    if op == "geometric_product":
-        return True
-
-    parity_odd = _swap_parity_between_orders(index_a, index_b) == 1
-    if op == "commutator_product":
-        return parity_odd
-    if op in {"symmetric_product", "anti_commutator_product"}:
-        return not parity_odd
-    raise ValueError(f"Unsupported grade product op {op!r}")
-
-
-def _swap_parity_between_orders(index_a: int, index_b: int) -> int:
     left_grade = int(index_a).bit_count()
     right_grade = int(index_b).bit_count()
-    overlap = (int(index_a) & int(index_b)).bit_count()
-    return (left_grade * right_grade - overlap) % 2
+    overlap = overlap_mask.bit_count()
+    return _operation_allows_overlap(left_grade, right_grade, overlap, op)
 
 
 def build_bivector_squared_signs(input_layout: GradeLayout, *, dtype, device):

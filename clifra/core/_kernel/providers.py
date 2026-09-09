@@ -24,11 +24,12 @@ if TYPE_CHECKING:
 
 
 from clifra.core._kernel.planning.policy import (
+    ActionFacts,
+    BivectorExpFacts,
     NoAvailableRouteError,
-    PlanFacts,
     PolicyCoverageError,
+    ProductFacts,
     RouteDecision,
-    compose_plan_facts,
 )
 from clifra.core._kernel.planning.resources import ResourceLimitError, ResourceRequirements
 from clifra.core.executors import Assessment, ExecutorRequest, Rejected
@@ -38,7 +39,6 @@ from clifra.core.tensors import TensorContract
 @dataclass(frozen=True)
 class ProductExecutionRequest(ExecutorRequest):
     declaration: ProductRequest
-    algebra: AlgebraContext
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ class UnaryExecutionRequest(ExecutorRequest):
 
 @dataclass(frozen=True)
 class BuiltinPreparation:
-    facts: PlanFacts
+    facts: ProductFacts | ActionFacts | BivectorExpFacts | None
 
 
 @dataclass(frozen=True)
@@ -92,7 +92,7 @@ class ActionPreparation(BuiltinPreparation):
     involution: Selection | None = None
 
 
-def product_execution_request(algebra, request):
+def product_execution_request(request):
     return ProductExecutionRequest(
         "product",
         request.op,
@@ -101,7 +101,6 @@ def product_execution_request(algebra, request):
         request.dtype,
         request.device,
         request,
-        algebra,
     )
 
 
@@ -146,10 +145,10 @@ def action_execution_request(
     )
 
 
-def _accepted(facts, preparation):
+def _accepted(preparation, resources):
     return Assessment(
-        lanes=facts.resources.lanes,
-        pairs=facts.resources.pairs,
+        lanes=resources.lanes,
+        pairs=resources.pairs,
         preparation=preparation,
     )
 
@@ -168,8 +167,8 @@ def _product_child(planner, left, right, output, dtype, device, op="geometric_pr
         device=device,
     )
     validate_product_request(planner.algebra, declaration)
-    request = product_execution_request(planner.algebra, declaration)
-    return planner.router.select(request, planner.policy, planner.limits)
+    request = product_execution_request(declaration)
+    return planner.router.select(request, planner.policy, planner.limits, warn_selected=False)
 
 
 def _unary_child(planner, layout, op, dtype, device):
@@ -189,19 +188,30 @@ def _unary_child(planner, layout, op, dtype, device):
         device,
         declaration,
     )
-    return planner.router.select(request, planner.policy, planner.limits)
+    return planner.router.select(request, planner.policy, planner.limits, warn_selected=False)
 
 
 def _exp_child(planner, inputs, output, dtype, device):
     request = exp_execution_request(planner.spec, device, dtype, output, planner=planner)
-    return planner.router.select(request, planner.policy, planner.limits)
+    return planner.router.select(request, planner.policy, planner.limits, warn_selected=False)
 
 
-def _simple_facts(request, pairs=None):
+def _simple_requirements(request, pairs=None):
     lanes = max(request.output.layout.dim, *(item.layout.dim for item in request.inputs if item is not None))
     pairs = lanes if pairs is None else pairs
-    return PlanFacts(
-        pairs, 2 * pairs, pairs * request.dtype.itemsize, pairs, resources=ResourceRequirements(lanes, pairs)
+    return ResourceRequirements(lanes, pairs)
+
+
+def _combined_requirements(base, children):
+    # Child plan buffers coexist in the constructed parent. Match build-time
+    # module reuse so repeated Horner contracts contribute resident storage once.
+    unique = {}
+    for child in children:
+        key = (child.family, child.route, child.request.operation, child.request.inputs, child.request.output)
+        unique.setdefault(key, child)
+    return ResourceRequirements(
+        max((base.lanes, *(child.assessment.lanes for child in unique.values()))),
+        base.pairs + sum(child.assessment.pairs for child in unique.values()),
     )
 
 
@@ -223,38 +233,23 @@ class BuiltinProvider:
             from .planning.product import assess_product_routes
 
             candidates = assess_product_routes(
-                request.algebra,
                 op=request.operation,
                 left_layout=request.inputs[0].layout,
                 right_layout=request.inputs[1].layout,
                 output_layout=request.output.layout,
-                dtype=request.dtype,
-                device=request.device,
             )
             candidate = next(item for item in candidates if item.route == route)
             if candidate.unavailable_reason:
                 return Rejected(candidate.unavailable_reason)
-            from clifra.core._kernel.planning.tree import build_grade_plan_tree
-
             declaration = request.declaration
-            tree = (
-                build_grade_plan_tree(
-                    declaration.spec,
-                    op=declaration.op,
-                    left_grades=declaration.left_grades,
-                    right_grades=declaration.right_grades,
-                    output_grades=declaration.output_grades,
-                )
-                if route == "sparse"
-                else None
-            )
-            return _accepted(candidate.facts, ProductPreparation(candidate.facts, declaration, tree))
+            preparation = ProductPreparation(candidate.facts, declaration, candidate.tree)
+            return _accepted(preparation, candidate.resources)
         if family == "bivector_exp":
             return _assess_exp(request, route)
         if family == "action":
             return _assess_action(request, route)
-        facts = _simple_facts(request)
-        return _accepted(facts, BuiltinPreparation(facts))
+        preparation = BuiltinPreparation(None)
+        return _accepted(preparation, _simple_requirements(request))
 
     def build(self, request, assessment):
         family, route = self.identity
@@ -313,25 +308,18 @@ class BuiltinProvider:
 def _assess_exp(request, route):
     from clifra.core._kernel.planning.exp import taylor_degree, taylor_layouts
 
-    from .planning.exp import assess_bivector_exp_routes
+    from .planning.exp import assess_bivector_exp_route
 
-    candidate = next(
-        item
-        for item in assess_bivector_exp_routes(
-            request.spec,
-            request.device,
-            dtype=request.dtype,
-            output_layout=request.output.layout,
-        )
-        if item.route == route
+    candidate = assess_bivector_exp_route(
+        request.spec,
+        request.device,
+        dtype=request.dtype,
+        output_layout=request.output.layout,
+        route=route,
     )
     if candidate.unavailable_reason:
         return Rejected(candidate.unavailable_reason)
     facts = candidate.facts
-    if request.planner is not None:
-        reason = facts.resources.rejection_reason(request.planner.limits)
-        if reason:
-            return Rejected(reason)
     left_product = wedge = square4 = mixed = square = None
     polynomial = full_polynomial = ()
     if request.planner is not None:
@@ -362,15 +350,12 @@ def _assess_exp(request, route):
             # removes anticommuting basis pairs before allocating intermediates.
             square = child(even, even, even, "symmetric_product")
         children = tuple(
-            c.facts
-            for c in (left_product, wedge, square4, mixed, square, *polynomial, *full_polynomial)
-            if c is not None
+            c for c in (left_product, wedge, square4, mixed, square, *polynomial, *full_polynomial) if c is not None
         )
-        if children:
-            facts = compose_plan_facts(facts, *children, peak_bytes=facts.peak_bytes, extensions=facts.extensions)
-    return _accepted(
-        facts, ExpPreparation(facts, left_product, wedge, square4, mixed, polynomial, full_polynomial, square)
-    )
+    else:
+        children = ()
+    preparation = ExpPreparation(facts, left_product, wedge, square4, mixed, polynomial, full_polynomial, square)
+    return _accepted(preparation, _combined_requirements(candidate.resources, children))
 
 
 def _build_exp(request, route, preparation):
@@ -422,7 +407,7 @@ def _build_exp(request, route, preparation):
 def _assess_action(request, route):
     from clifra.core._kernel.basis import expand_output_grades
 
-    from .planning.action import _action_extensions, _linear_action_facts
+    from .planning.action import _linear_action_structure
 
     algebra, spec = request.algebra, request.inputs[0].spec
     planner = algebra._planner
@@ -439,13 +424,14 @@ def _assess_action(request, route):
     if operation == "linear":
         if route != "graded_linear":
             return Rejected("requires_linear_action")
-        facts = _linear_action_facts(inputs, output, dtype_bytes=request.dtype.itemsize)
-        return _accepted(facts, ActionPreparation(facts))
+        _, resources = _linear_action_structure(inputs, output)
+        preparation = ActionPreparation(None)
+        return _accepted(preparation, resources)
     if operation == "sandwich":
         if route != "full_action_matrix" or not full:
             return Rejected("requires_full_sandwich")
-        facts = _simple_facts(request, spec.dim**2)
-        return _accepted(facts, ActionPreparation(facts))
+        preparation = ActionPreparation(None)
+        return _accepted(preparation, _simple_requirements(request, spec.dim**2))
     if operation != "versor":
         return Rejected("unsupported_action_operation")
     if grade not in (1, 2) or parameter is None or parameter.grades != (grade,):
@@ -457,9 +443,7 @@ def _assess_action(request, route):
         return Rejected("unsupported_action_domain")
     pairs = spec.n**2 if route == "vector_matrix" else (spec.dim**2 if route == "full_action_matrix" else 0)
     lanes = spec.dim if route == "full_action_matrix" else max(inputs.dim, output.dim, parameter.dim)
-    reason = ResourceRequirements(lanes, pairs).rejection_reason(planner.limits)
-    if reason:
-        return Rejected(reason)
+    resources = ResourceRequirements(lanes, pairs)
     rotor = middle = exponential = reverse = left = right = norm = involution = None
     if route != "vector_matrix":
         if grade == 2:
@@ -479,34 +463,33 @@ def _assess_action(request, route):
                 request.dtype,
                 request.device,
             )
-            norm = planner.router.select(norm_request, planner.policy, planner.limits)
+            norm = planner.router.select(norm_request, planner.policy, planner.limits, warn_selected=False)
             involution = _unary_child(planner, inputs, "grade_involution", request.dtype, request.device)
             reverse = _unary_child(planner, parameter, "reverse", request.dtype, request.device)
-    work = spec.n**3 + inputs.dim * output.dim if route == "vector_matrix" else pairs
-    facts = (
-        _linear_action_facts(inputs, output, dtype_bytes=request.dtype.itemsize, generator=grade == 2)
-        if route == "vector_matrix"
-        else PlanFacts(
-            work, 2 * work, pairs * request.dtype.itemsize, pairs, resources=ResourceRequirements(lanes, pairs)
+    if route == "vector_matrix":
+        facts, resources = _linear_action_structure(
+            inputs,
+            output,
+            generator_layout=parameter if grade == 2 else None,
         )
+    else:
+        product_facts = [
+            child.facts for child in (left, right) if child is not None and isinstance(child.facts, ProductFacts)
+        ]
+        facts = ActionFacts(
+            product_interactions=sum(item.interactions for item in product_facts),
+            indexed_reduction_terms=sum(item.indexed_reduction_terms for item in product_facts),
+            exponential_route=None if exponential is None else exponential.route,
+            exponential_facts=None if exponential is None else exponential.facts,
+        )
+    children = tuple(child for child in (exponential, reverse, left, right, norm, involution) if child is not None)
+    resources = ResourceRequirements(
+        max(resources.lanes, 0 if rotor is None else rotor.dim, 0 if middle is None else middle.dim),
+        resources.pairs,
     )
-    children = [child.facts for child in (exponential, reverse, left, right, norm, involution) if child is not None]
-    intermediate = (2 * rotor.dim if rotor is not None else 0) + (middle.dim if middle is not None else 0) + output.dim
-    facts = compose_plan_facts(
-        facts,
-        *children,
-        peak_bytes=max(facts.peak_bytes, (pairs + intermediate) * request.dtype.itemsize),
-        extensions=_action_extensions(
-            algebra,
-            input_layout=inputs,
-            output_layout=output,
-            parameter_layout=parameter,
-            intermediate_lanes=middle.dim if middle is not None else lanes,
-        ),
-    )
-    return _accepted(
-        facts, ActionPreparation(facts, rotor, middle, exponential, reverse, left, right, norm, involution)
-    )
+    resources = _combined_requirements(resources, children)
+    preparation = ActionPreparation(facts, rotor, middle, exponential, reverse, left, right, norm, involution)
+    return _accepted(preparation, resources)
 
 
 def _operation(child):

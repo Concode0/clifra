@@ -7,7 +7,7 @@ from torch import nn
 from clifra.core import AlgebraContext, TensorContract
 from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.planning.layouts import ProductRequest
-from clifra.core._kernel.planning.policy import PolicyEvaluation
+from clifra.core._kernel.planning.policy import BivectorExpFacts, PolicyEvaluation
 from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core._kernel.providers import (
     _exp_child,
@@ -109,8 +109,9 @@ def test_zero_assessment_counts_do_not_bypass_declared_lane_limits():
 def test_builtin_private_facts_are_not_reconstructed_from_public_assessment():
     a = AlgebraContext(4)
     selection = _exp_child(a._planner, a.layout((2,)), a.layout((0, 2, 4)), a.dtype, a.device)
-    assert selection.facts.forward_work == selection.assessment.preparation.facts.forward_work
-    assert selection.facts.forward_work > 0
+    assert selection.facts is selection.assessment.preparation.facts
+    assert isinstance(selection.facts, BivectorExpFacts)
+    assert not hasattr(selection, "requirements")
     for name in (
         "forward_work",
         "backward_work",
@@ -119,6 +120,7 @@ def test_builtin_private_facts_are_not_reconstructed_from_public_assessment():
         "exact",
         "truncated",
         "value_dependent",
+        "facts",
     ):
         assert not hasattr(selection.assessment, name)
 
@@ -148,7 +150,7 @@ def test_assess_allocates_no_execution_buffers_and_build_never_selects(monkeypat
                     dtype=algebra.dtype,
                     device=algebra.device,
                 )
-                declaration = product_execution_request(algebra, declaration)
+                declaration = product_execution_request(declaration)
             else:
                 declaration = action_execution_request(
                     algebra,
@@ -185,7 +187,7 @@ def test_pairwise_lookup_requirement_rejected_before_sparse_buffer_build(monkeyp
         "clifra.core._kernel.planning.product.build_grade_product_plan_from_tree",
         fail,
     )
-    with pytest.raises(ValueError, match="intermediate interactions 232"):
+    with pytest.raises(ValueError, match="pair/interaction footprint 296"):
         algebra.plan_product(left=vector, right=vector, output=output)
 
 

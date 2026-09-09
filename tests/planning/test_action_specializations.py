@@ -75,10 +75,7 @@ def test_induced_grade4_action_gradcheck_and_gradgradcheck():
         output_layout=layout,
     )
 
-    matrix = (
-        torch.eye(5, dtype=torch.float64)
-        + 0.1 * torch.randn(5, 5, dtype=torch.float64)
-    ).requires_grad_()
+    matrix = (torch.eye(5, dtype=torch.float64) + 0.1 * torch.randn(5, 5, dtype=torch.float64)).requires_grad_()
 
     fn = executor.coefficients
 

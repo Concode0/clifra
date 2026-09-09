@@ -6,7 +6,6 @@ from clifra.core._kernel.planning.unary import UnaryRequest
 from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
-    FullTableProductExecutor,
     GradePlanner,
     GradeProductExecutor,
     PlannedOperation,
@@ -497,7 +496,7 @@ def test_planned_contractions_match_small_oracle_for_full_and_compact_layouts():
         output_indices=vector_layout.basis_indices,
     )
 
-    assert isinstance(full_executor, FullTableProductExecutor)
+    assert isinstance(full_executor, GradeProductExecutor)
     assert isinstance(compact_executor, GradeProductExecutor)
     assert torch.allclose(
         context.left_contraction(full_left, full_right),

@@ -44,8 +44,10 @@ class Assessment:
 
     No deliberate truncation or approximation of the operation is implied by
     acceptance. Ordinary numerical roundoff is permitted. Providers must report
-    conservative maximum coefficient-lane and interaction/table-entry counts
-    for their intermediates, excluding caller-controlled batch dimensions.
+    conservative maximum coefficient-lane count and static pair/interaction
+    footprint, including child plans that coexist in the constructed module
+    and any larger known fixed-shape temporary. Caller-controlled batch
+    dimensions are excluded.
     Zero declares no additional requirement; input/output widths are guarded
     independently. Assessment must not allocate execution buffers.
 
