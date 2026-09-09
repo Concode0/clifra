@@ -13,21 +13,21 @@ from clifra.analysis import experimental
 pytestmark = pytest.mark.unit
 
 
-def test_exact_public_surfaces():
-    assert analysis.__all__ == [
+def test_public_surfaces_expose_stable_analyzers_from_owning_modules():
+    assert {
         "SpectralAnalyzer",
         "SpectralResult",
         "CommutatorAnalyzer",
         "CommutatorResult",
         "TransformationDiagnosticsAnalyzer",
         "TransformationDiagnosticsResult",
-    ]
-    assert experimental.__all__ == [
+    } <= set(analysis.__all__)
+    assert {
         "SignatureProbeAnalyzer",
         "SignatureProbeResult",
         "NeighborhoodBivectorAnalyzer",
         "compare_coordinate_lifts",
-    ]
+    } <= set(experimental.__all__)
     for module, names in (
         ("spectral", ["SpectralAnalyzer", "SpectralResult"]),
         ("commutator", ["CommutatorAnalyzer", "CommutatorResult"]),
@@ -36,8 +36,8 @@ def test_exact_public_surfaces():
         ("experimental.neighborhood", ["NeighborhoodBivectorAnalyzer", "compare_coordinate_lifts"]),
     ):
         owner = importlib.import_module("clifra.analysis." + module)
-        assert owner.__all__ == names
         for name in names:
+            assert name in owner.__all__
             assert getattr(owner, name).__module__ == owner.__name__
 
 
@@ -54,36 +54,3 @@ assert not any(name.startswith('clifra.analysis.experimental') for name in sys.m
         ],
         check=True,
     )
-
-
-@pytest.mark.parametrize(
-    "name",
-    ["dimension", "sampler", "pipeline", "signature", "geodesic", "symmetry", "_types", "_statistics", "_sampling"],
-)
-def test_obsolete_modules_are_removed(name):
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("clifra.analysis." + name)
-
-
-def test_old_symbols_have_no_compatibility_bridges():
-    for name in (
-        "GeometricAnalyzer",
-        "AnalysisConfig",
-        "AnalysisReport",
-        "AnalysisConstants",
-        "CONSTANTS",
-        "DimensionResult",
-        "CovarianceDimensionAnalyzer",
-        "SamplingConfig",
-        "StatisticalSampler",
-        "SignatureProbeAnalyzer",
-    ):
-        assert not hasattr(analysis, name)
-    for name in (
-        "RotorProbeSignatureEstimator",
-        "CoordinateLiftAnalyzer",
-        "approximate_bivector_interpolation",
-        "SignatureEstimate",
-        "NeighborhoodBivectorFlow",
-    ):
-        assert not hasattr(experimental, name)

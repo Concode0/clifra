@@ -67,7 +67,7 @@ def test_prepared_forward_and_backward_do_not_reenter_planning(monkeypatch, fami
         layout = algebra.layout((1,)) if route == "vector_matrix" else full
         operation = algebra.plan_versor_action(grade=2, input=layout, output=layout, parameter=bivector)
         widths = (layout.dim, bivector.dim)
-    assert operation._kernel.metadata.route == route
+    assert operation._kernel.route == route
     values = tuple((0.1 * torch.randn(2, 2, width, dtype=torch.float64)).requires_grad_() for width in widths)
     if family == "action":
         values = (values[0], values[1][0].detach().requires_grad_())

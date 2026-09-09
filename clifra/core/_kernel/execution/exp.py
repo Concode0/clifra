@@ -8,55 +8,26 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from clifra.core._kernel.planning.exp import BivectorExpPlan, taylor_degree
-
 
 class TaylorPolynomial(nn.Module):
     """Horner evaluation with statically pruned intermediate grade contracts."""
 
-    def __init__(self, products, output_layouts, *, dtype, device):
+    def __init__(self, products, schedules, output_layouts, *, dtype, device):
         super().__init__()
         self.products = nn.ModuleList(products)
-        self.output_layouts = tuple(output_layouts)
-        self.degree = len(products)
-        for step, layout in enumerate(output_layouts):
-            mask = torch.tensor([float(i == 0) for i in layout.basis_indices], dtype=dtype, device=device)
-            self.register_buffer(f"scalar_{step}", mask, persistent=False)
+        self.schedules = {name: tuple(positions) for name, positions in schedules.items()}
+        for name, layouts in output_layouts.items():
+            for step, layout in enumerate(layouts):
+                mask = torch.tensor([float(i == 0) for i in layout.basis_indices], dtype=dtype, device=device)
+                self.register_buffer(f"scalar_{name}_{step}", mask, persistent=False)
 
-    def set_degree(self, degree, full_product, full_layout):
-        """Change precision by inserting/removing repeated full-even stages.
-
-        All supported dimensions reach the full even layout before the middle
-        six stages that distinguish degrees 12 and 18. The pruned suffix is
-        unchanged, so movement needs no new product planning or provider lookup.
-        """
-        if degree == self.degree:
-            return
-        pivot = full_layout.spec.n // 2
-        products, layouts = list(self.products), list(self.output_layouts)
-        if degree > self.degree:
-            count = degree - self.degree
-            products[pivot:pivot] = [full_product] * count
-            layouts[pivot:pivot] = [full_layout] * count
-        else:
-            del products[pivot : pivot + self.degree - degree]
-            del layouts[pivot : pivot + self.degree - degree]
-        prototype = self.scalar_0
-        for step in range(self.degree):
-            delattr(self, f"scalar_{step}")
-        self.products = nn.ModuleList(products)
-        self.output_layouts = tuple(layouts)
-        self.degree = degree
-        for step, layout in enumerate(layouts):
-            self.register_buffer(
-                f"scalar_{step}", prototype.new_tensor([float(i == 0) for i in layout.basis_indices]), persistent=False
-            )
-
-    def forward(self, values):
+    def forward(self, values, schedule):
+        positions = self.schedules[schedule]
+        degree = len(positions)
         result = torch.ones_like(values[..., :1])
-        for step, product in enumerate(self.products):
-            result = product.forward_compact(values, result) / (self.degree - step)
-            result = result + getattr(self, f"scalar_{step}")
+        for step, position in enumerate(positions):
+            result = self.products[position].forward_compact(values, result) / (degree - step)
+            result = result + getattr(self, f"scalar_{schedule}_{step}")
         return result
 
 
@@ -67,14 +38,13 @@ class BivectorExpExecutor(nn.Module):
 
     def __init__(
         self,
-        plan: BivectorExpPlan,
+        plan,
         left_product=None,
         *,
         bivector_wedge=None,
         grade4_square=None,
         bivector_grade4_product=None,
         polynomial=None,
-        full_polynomial=None,
         square=None,
     ):
         super().__init__()
@@ -93,7 +63,6 @@ class BivectorExpExecutor(nn.Module):
         self.grade4_square = grade4_square
         self.bivector_grade4_product = bivector_grade4_product
         self.polynomial = polynomial
-        self.full_polynomial = full_polynomial
         self.square = square
         for name in (
             "bivector_squared_signs",
@@ -115,22 +84,26 @@ class BivectorExpExecutor(nn.Module):
         self.sinhc_divided_difference_limit = min(0.5, (eps * 39_916_800.0) ** 0.2)
 
     def _apply(self, fn, recurse=True):
-        super()._apply(fn, recurse=recurse)
-        dtype = self.output_scalar_mask.dtype
-        if self.route != "closed" and dtype not in (torch.float32, torch.float64):
+        probe = fn(torch.empty((), device=self.output_scalar_mask.device, dtype=self.output_scalar_mask.dtype))
+        if probe.device.type == "mps" and probe.dtype == torch.float64:
+            raise ValueError("MPS does not support float64 bivector_exp output")
+        if self.route != "closed" and probe.dtype not in (torch.float32, torch.float64):
             raise ValueError("general bivector_exp requires float32 or float64")
-        self._set_tolerances(torch.finfo(dtype).eps)
-        if self.route == "left_matrix_exp" or (
-            self.route == "closed" and self.spec.n >= 4 and self.output_scalar_mask.device.type == "mps"
+        target_device = probe.device
+        if (
+            self.route == "left_matrix_exp"
+            or self.route == "closed"
+            and self.spec.n >= 4
+            and target_device.type == "mps"
         ):
-            # Preserve CPU execution for unsupported matrix exponentials and
-            # MPS compiled biquadratic derivatives that disagree with eager.
-            super()._apply(lambda tensor: tensor.cpu(), recurse=recurse)
-        elif self.route == "taylor":
-            full_product = self.full_polynomial.products[self.spec.n // 2]
-            degree = taylor_degree(dtype)
-            self.polynomial.set_degree(degree, full_product, self.operator_layout)
-            self.full_polynomial.set_degree(degree, full_product, self.operator_layout)
+            target_device = torch.device("cpu")
+
+        def convert(tensor):
+            dtype = probe.dtype if tensor.is_floating_point() or tensor.is_complex() else tensor.dtype
+            return tensor.to(device=target_device, dtype=dtype)
+
+        super()._apply(convert if target_device != probe.device else fn, recurse=recurse)
+        self._set_tolerances(torch.finfo(probe.dtype).eps)
         return self
 
     def forward(self, values):
@@ -158,14 +131,19 @@ class BivectorExpExecutor(nn.Module):
             valid = valid.cpu()
         torch._assert_async(valid, "bivector_exp Taylor requires coefficient L1 norm <= 65536")
         if torch.compiler.is_compiling():
-            return torch.cond((norm > 1).any(), self._scaled_taylor, self.polynomial, (values,))
+            return torch.cond((norm > 1).any(), self._scaled_taylor, self._plain_taylor, (values,))
         if bool((norm > 1).any()):
             return self._scaled_taylor(values)
-        return self.polynomial(values)
+        return self._plain_taylor(values)
+
+    def _plain_taylor(self, values):
+        degree = 18 if values.dtype == torch.float64 else 12
+        return self.polynomial(values, f"output_{degree}")
 
     def _scaled_taylor(self, values):
         scaling = torch.ceil(torch.log2(values.detach().abs().sum(-1, keepdim=True).clamp_min(1)))
-        result = self.full_polynomial(values * torch.exp2(-scaling))
+        degree = 18 if values.dtype == torch.float64 else 12
+        result = self.polynomial(values * torch.exp2(-scaling), f"full_{degree}")
         for step in range(16):
             active = scaling > step
             if torch.compiler.is_compiling():

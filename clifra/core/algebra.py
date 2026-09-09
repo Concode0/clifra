@@ -74,8 +74,19 @@ class AlgebraContext:
         return self
 
     def _apply(self, fn):
-        probe = fn(torch.empty((), device=self.device, dtype=self.dtype))
+        probe = fn(self._placement_probe())
         return self.to(probe.device, probe.dtype)
+
+    def _placement_probe(self):
+        return torch.empty((), device=self.device, dtype=self.dtype)
+
+    def _copy_with_placement(self, device, dtype):
+        copied = AlgebraContext(self.p, self.q, self.r, device=device, dtype=dtype, registry=self.registry)
+        copied._planning_policy = self._planning_policy
+        copied._resource_limits = self._resource_limits
+        copied._planner.policy = copied._planning_policy
+        copied._planner.limits = copied._resource_limits
+        return copied
 
     def _sync_eps(self):
         self.eps = float(torch.finfo(self.dtype).eps)
@@ -372,14 +383,19 @@ class AlgebraContext:
         return self._on(operation, device, dtype)(values, a)
 
     def plan_reflect(self, *, input=None, normal=None, output=None):
-        return self._build_geometry("versor", input=input, right=normal, output=output)
+        """Plan reflection in a declared grade-one normal."""
+        normal = self.layout((1,)) if normal is None else normal
+        return self._build_geometry("reflect", input=input, right=normal, output=output)
 
     def reflect(self, values, a, *, input=None, normal=None, output=None):
+        """Reflect a multivector in a declared grade-one normal."""
         device, dtype = self._placement(values, a)
         return self._on(self.plan_reflect(input=input, normal=normal, output=output), device, dtype)(values, a)
 
     def plan_strict_reflect(self, *, input=None, normal=None, output=None):
-        return self._build_strict_geometry("versor", input=input, right=normal, output=output)
+        """Plan exact-denominator reflection in a declared grade-one normal."""
+        normal = self.layout((1,)) if normal is None else normal
+        return self._build_strict_geometry("reflect", input=input, right=normal, output=output)
 
     def strict_reflect(self, values, a, *, input=None, normal=None, output=None):
         """Reflect using an exact normal inverse, raising for a zero denominator."""
@@ -418,7 +434,6 @@ class AlgebraContext:
 
         input = self._contract(input)
         output = self._contract(output, default=input.layout)
-        self._planner.linear_action_plan(input_layout=input.layout, output_layout=output.layout)
         kernel = self._planner.action_executor(
             "linear",
             input_layout=input.layout,

@@ -76,21 +76,6 @@ class TransformationRollout:
         return self.inverse_coordinates
 
     @property
-    def backward(self) -> torch.Tensor:
-        """Compatibility alias for the inverse coordinate trajectory."""
-        return self.inverse_coordinates
-
-    @property
-    def backward_coordinates(self) -> torch.Tensor:
-        """Compatibility alias for the inverse coordinate trajectory."""
-        return self.inverse_coordinates
-
-    @property
-    def backward_multivectors(self) -> torch.Tensor:
-        """Compatibility alias for the inverse multivector trajectory."""
-        return self.inverse_multivectors
-
-    @property
     def coordinates(self) -> torch.Tensor:
         """Return the complete forward-then-inverse round-trip trajectory."""
         inverse_start = 1 if self.includes_initial else 0

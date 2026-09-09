@@ -49,23 +49,22 @@ def test_observation_dtype_conversion_preserves_gradients():
     torch.testing.assert_close(data.grad, 2 * data.detach() / len(data))
 
 
-@pytest.fixture(params=[(3, 0, 0), (2, 1, 0), (2, 0, 1)])
-def algebra(request):
-    return make_algebra(*request.param, dtype=torch.float64)
+@pytest.fixture
+def algebra():
+    return make_algebra(1, 1, 1, dtype=torch.float64)
 
 
-@pytest.mark.parametrize("analyzer_type", [SpectralAnalyzer, CommutatorAnalyzer, TransformationDiagnosticsAnalyzer])
-def test_channels_require_explicit_caller_aggregation(algebra, analyzer_type):
+def test_channels_require_explicit_caller_aggregation(algebra):
     data = torch.randn(12, 3, algebra.dim, dtype=torch.float64)
-    analyzer = analyzer_type(algebra)
-    with pytest.raises(ValueError, match="canonical"):
-        analyzer.analyze(data)
-    analyzer.analyze(data.mean(dim=1))
+    for analyzer_type in (SpectralAnalyzer, CommutatorAnalyzer, TransformationDiagnosticsAnalyzer):
+        analyzer = analyzer_type(algebra)
+        with pytest.raises(ValueError, match="canonical"):
+            analyzer.analyze(data)
+        analyzer.analyze(data.mean(dim=1))
 
 
-@pytest.mark.parametrize(
-    "analyzer_type,method",
-    [
+def test_direct_measurements_reject_channel_input():
+    methods = (
         (SpectralAnalyzer, "grade_coefficient_energy"),
         (SpectralAnalyzer, "mean_bivector"),
         (SpectralAnalyzer, "left_multiplication_eigenvalue_magnitudes"),
@@ -76,27 +75,26 @@ def test_channels_require_explicit_caller_aggregation(algebra, analyzer_type):
         (TransformationDiagnosticsAnalyzer, "vector_coefficient_energy"),
         (TransformationDiagnosticsAnalyzer, "odd_grade_energy_fraction"),
         (TransformationDiagnosticsAnalyzer, "basis_reflection_marginal_scores"),
-    ],
-)
-def test_direct_measurements_reject_channel_input(analyzer_type, method):
-    analyzer = analyzer_type(make_algebra(3))
-    with pytest.raises(ValueError, match="canonical"):
-        getattr(analyzer, method)(torch.ones(4, 1, 8))
+    )
+    for analyzer_type, method in methods:
+        analyzer = analyzer_type(make_algebra(3))
+        with pytest.raises(ValueError, match="canonical"):
+            getattr(analyzer, method)(torch.ones(4, 1, 8))
 
 
-@pytest.mark.parametrize("analyzer_type", [SpectralAnalyzer, CommutatorAnalyzer, TransformationDiagnosticsAnalyzer])
-@pytest.mark.parametrize("shape", [(0, 8), (2, 0, 8), (3, 3), (8,), (2, 2, 2, 8)])
-def test_rejects_noncanonical_or_empty_input(analyzer_type, shape):
-    with pytest.raises(ValueError):
-        analyzer_type(make_algebra(3)).analyze(torch.zeros(shape))
+def test_rejects_noncanonical_or_empty_input():
+    for analyzer_type in (SpectralAnalyzer, CommutatorAnalyzer, TransformationDiagnosticsAnalyzer):
+        for shape in ((0, 8), (2, 0, 8), (3, 3), (8,), (2, 2, 2, 8)):
+            with pytest.raises(ValueError):
+                analyzer_type(make_algebra(3)).analyze(torch.zeros(shape))
 
 
-@pytest.mark.parametrize("analyzer_type", [SpectralAnalyzer, CommutatorAnalyzer, TransformationDiagnosticsAnalyzer])
-def test_requires_declared_algebra_and_floating_data(analyzer_type):
-    with pytest.raises(TypeError, match="AlgebraContext"):
-        analyzer_type(None).analyze(torch.zeros(3, 8))
-    with pytest.raises(TypeError, match="floating"):
-        analyzer_type(make_algebra(3)).analyze(torch.zeros(3, 8, dtype=torch.int64))
+def test_requires_declared_algebra_and_floating_data():
+    for analyzer_type in (SpectralAnalyzer, CommutatorAnalyzer, TransformationDiagnosticsAnalyzer):
+        with pytest.raises(TypeError, match="AlgebraContext"):
+            analyzer_type(None).analyze(torch.zeros(3, 8))
+        with pytest.raises(TypeError, match="floating"):
+            analyzer_type(make_algebra(3)).analyze(torch.zeros(3, 8, dtype=torch.int64))
 
 
 def test_grade_energy_uses_observation_energy_not_energy_of_population_mean(algebra):

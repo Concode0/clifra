@@ -5,8 +5,6 @@ import pytest
 import torch
 
 from clifra.core import AlgebraContext
-from clifra.core._kernel.contracts import resolve_contract
-from clifra.core._kernel.planning.unary import UnaryRequest
 from clifra.core.layout import AlgebraSpec
 from clifra.core.tensors import LaneStorage, TensorContract
 
@@ -51,13 +49,6 @@ def test_equal_width_layouts_keep_distinct_algebraic_meanings():
         algebra.reverse(values)
 
 
-def test_contract_resolution_ignores_obsolete_grade_defaults():
-    algebra = AlgebraContext(3)
-    algebra._default_grades = (1,)
-    algebra.default_layout = algebra.layout((2,))
-    assert resolve_contract(algebra).layout == algebra.layout()
-
-
 def test_tensor_contract_records_declared_layout_and_storage():
     spec = AlgebraSpec(5, 0, 0)
     vector_layout = spec.layout((1,))
@@ -70,32 +61,6 @@ def test_tensor_contract_records_declared_layout_and_storage():
     assert canonical.layout is vector_layout
     assert canonical.storage is LaneStorage.CANONICAL
     assert canonical.lane_dim == spec.dim
-
-
-def test_resolve_contract_reports_role_and_grade_disagreement():
-    spec = AlgebraSpec(3, 0, 0)
-    foreign_spec = AlgebraSpec(0, 3, 0)
-
-    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
-        resolve_contract(spec, layout=foreign_spec.layout((1,)), name="input_layout")
-    with pytest.raises(ValueError, match="input_layout and input_grades disagree"):
-        resolve_contract(spec, layout=spec.layout((1,)), grades=(2,), name="input_layout")
-
-
-def test_unary_request_rejects_inconsistent_contracts_at_construction():
-    spec = AlgebraSpec(3, 0, 0)
-    foreign_spec = AlgebraSpec(0, 3, 0)
-    foreign = TensorContract.compact(foreign_spec.layout((1,)))
-
-    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
-        UnaryRequest(
-            spec=spec,
-            op="reverse",
-            input=foreign,
-            output=foreign,
-            dtype=torch.float32,
-            device=torch.device("cpu"),
-        )
 
 
 def test_tensor_contract_converts_between_compact_and_canonical():
@@ -120,3 +85,27 @@ def test_grade_layout_returns_compact_positions_for_grades():
     assert scalar_positions.tolist() == [0]
     assert len(bivector_positions) == 6
     assert set(bivector_positions.tolist()).isdisjoint(scalar_positions.tolist())
+
+
+def test_canonical_output_storage_is_consistent_across_operation_families():
+    algebra = AlgebraContext(4, dtype=torch.float64)
+    vector, bivector = algebra.layout((1,)), algebra.layout((2,))
+    vectors = torch.randn(3, vector.dim, dtype=torch.float64)
+    bivectors = torch.randn(3, bivector.dim, dtype=torch.float64) * 0.1
+    cases = (
+        (
+            lambda output: algebra.wedge(vectors, vectors, left=vector, right=vector, output=output),
+            bivector,
+        ),
+        (lambda output: algebra.reverse(vectors, input=vector, output=output), vector),
+        (
+            lambda output: algebra.pseudoscalar_product(vectors, input=vector, output=output),
+            algebra.layout((3,)),
+        ),
+        (lambda output: algebra.bivector_exp(bivectors, input=bivector, output=output), algebra.layout()),
+    )
+    for operation, layout in cases:
+        compact = operation(layout)
+        canonical = operation(TensorContract.canonical(layout))
+        assert canonical.shape[-1] == algebra.dim
+        torch.testing.assert_close(canonical, layout.full(compact))

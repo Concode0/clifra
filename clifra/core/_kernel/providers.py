@@ -29,9 +29,8 @@ from clifra.core._kernel.planning.policy import (
     NoAvailableRouteError,
     PolicyCoverageError,
     ProductFacts,
-    RouteDecision,
 )
-from clifra.core._kernel.planning.resources import ResourceLimitError, ResourceRequirements
+from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core.executors import Assessment, ExecutorRequest, Rejected
 from clifra.core.tensors import TensorContract
 
@@ -75,8 +74,10 @@ class ExpPreparation(BuiltinPreparation):
     bivector_wedge: Selection | None = None
     grade4_square: Selection | None = None
     bivector_grade4_product: Selection | None = None
-    polynomial: tuple = ()
-    full_polynomial: tuple = ()
+    polynomial_12: tuple = ()
+    polynomial_18: tuple = ()
+    full_polynomial_12: tuple = ()
+    full_polynomial_18: tuple = ()
     square: Selection | None = None
 
 
@@ -155,7 +156,6 @@ def _accepted(preparation, resources):
 
 def _product_child(planner, left, right, output, dtype, device, op="geometric_product"):
     from clifra.core._kernel.planning.layouts import ProductRequest
-    from clifra.core._kernel.planning.resources import validate_product_request
 
     declaration = ProductRequest.compact(
         planner.spec,
@@ -166,19 +166,16 @@ def _product_child(planner, left, right, output, dtype, device, op="geometric_pr
         dtype=dtype,
         device=device,
     )
-    validate_product_request(planner.algebra, declaration)
     request = product_execution_request(declaration)
     return planner.router.select(request, planner.policy, planner.limits, warn_selected=False)
 
 
 def _unary_child(planner, layout, op, dtype, device):
-    from clifra.core._kernel.planning.resources import validate_unary_request
     from clifra.core._kernel.planning.unary import UnaryRequest
 
     declaration = UnaryRequest.compact(
         planner.spec, op=op, input_layout=layout, output_layout=layout, dtype=dtype, device=device
     )
-    validate_unary_request(planner.algebra, declaration)
     request = UnaryExecutionRequest(
         "unary",
         op,
@@ -222,7 +219,7 @@ class BuiltinProvider:
     def assess(self, request):
         try:
             return self._assess(request)
-        except (NoAvailableRouteError, PolicyCoverageError, ResourceLimitError) as error:
+        except (NoAvailableRouteError, PolicyCoverageError) as error:
             return Rejected(f"required_child_unavailable: {error}")
 
     def _assess(self, request):
@@ -306,7 +303,7 @@ class BuiltinProvider:
 
 
 def _assess_exp(request, route):
-    from clifra.core._kernel.planning.exp import taylor_degree, taylor_layouts
+    from clifra.core._kernel.planning.exp import taylor_layouts
 
     from .planning.exp import assess_bivector_exp_route
 
@@ -321,14 +318,15 @@ def _assess_exp(request, route):
         return Rejected(candidate.unavailable_reason)
     facts = candidate.facts
     left_product = wedge = square4 = mixed = square = None
-    polynomial = full_polynomial = ()
+    polynomial_12 = polynomial_18 = full_polynomial_12 = full_polynomial_18 = ()
     if request.planner is not None:
         spec, planner = request.spec, request.planner
         inputs, output = request.inputs[0].layout, request.output.layout
         even = spec.layout(range(0, spec.n + 1, 2))
+        route_device = "cpu" if route == "closed" and spec.n >= 4 and request.device.type == "mps" else request.device
 
         def child(left, right, out, op="geometric_product"):
-            return _product_child(planner, left, right, out, request.dtype, request.device, op)
+            return _product_child(planner, left, right, out, request.dtype, route_device, op)
 
         if route == "left_matrix_exp":
             # The measured matrix regime uses CPU, including small MPS inputs.
@@ -340,21 +338,46 @@ def _assess_exp(request, route):
             mixed = child(inputs, grade4, output)
         elif route == "taylor":
 
-            def polynomial_children(out):
-                layouts = taylor_layouts(spec, out, taylor_degree(request.dtype))
+            def polynomial_children(out, degree):
+                layouts = taylor_layouts(spec, out, degree)
                 return tuple(child(inputs, left, right) for left, right in zip(layouts, layouts[1:]))
 
-            polynomial = polynomial_children(output)
-            full_polynomial = polynomial if output == even else polynomial_children(even)
+            polynomial_12 = polynomial_children(output, 12)
+            polynomial_18 = polynomial_children(output, 18)
+            full_polynomial_12 = polynomial_12 if output == even else polynomial_children(even, 12)
+            full_polynomial_18 = polynomial_18 if output == even else polynomial_children(even, 18)
             # x*x equals the symmetric Clifford product. The shared planner
             # removes anticommuting basis pairs before allocating intermediates.
             square = child(even, even, even, "symmetric_product")
         children = tuple(
-            c for c in (left_product, wedge, square4, mixed, square, *polynomial, *full_polynomial) if c is not None
+            c
+            for c in (
+                left_product,
+                wedge,
+                square4,
+                mixed,
+                square,
+                *polynomial_12,
+                *polynomial_18,
+                *full_polynomial_12,
+                *full_polynomial_18,
+            )
+            if c is not None
         )
     else:
         children = ()
-    preparation = ExpPreparation(facts, left_product, wedge, square4, mixed, polynomial, full_polynomial, square)
+    preparation = ExpPreparation(
+        facts,
+        left_product,
+        wedge,
+        square4,
+        mixed,
+        polynomial_12,
+        polynomial_18,
+        full_polynomial_12,
+        full_polynomial_18,
+        square,
+    )
     return _accepted(preparation, _combined_requirements(candidate.resources, children))
 
 
@@ -369,7 +392,7 @@ def _build_exp(request, route, preparation):
         output_layout=request.output.layout,
         dtype=request.dtype,
         device=request.device,
-        route_decision=RouteDecision(route, preparation.facts, "bivector_exp"),
+        route=route,
     )
     cache = {}
 
@@ -382,12 +405,34 @@ def _build_exp(request, route, preparation):
             cache[key] = child.build()
         return cache[key]
 
-    def polynomial(children):
-        if not children:
-            return None
-        return TaylorPolynomial(
-            [build(c) for c in children],
-            [c.request.output.layout for c in children],
+    taylor = None
+    schedules = {
+        "output_12": preparation.polynomial_12,
+        "output_18": preparation.polynomial_18,
+        "full_12": preparation.full_polynomial_12,
+        "full_18": preparation.full_polynomial_18,
+    }
+    if any(schedules.values()):
+        unique_children = []
+        child_positions = {}
+        schedule_positions = {}
+        schedule_layouts = {}
+        for name, children in schedules.items():
+            positions = []
+            layouts = []
+            for child in children:
+                key = (child.route, child.request.operation, child.request.inputs, child.request.output)
+                if key not in child_positions:
+                    child_positions[key] = len(unique_children)
+                    unique_children.append(child)
+                positions.append(child_positions[key])
+                layouts.append(child.request.output.layout)
+            schedule_positions[name] = tuple(positions)
+            schedule_layouts[name] = tuple(layouts)
+        taylor = TaylorPolynomial(
+            [build(child) for child in unique_children],
+            schedule_positions,
+            schedule_layouts,
             dtype=request.dtype,
             device=request.device,
         )
@@ -398,10 +443,9 @@ def _build_exp(request, route, preparation):
         bivector_wedge=build(preparation.bivector_wedge),
         grade4_square=build(preparation.grade4_square),
         bivector_grade4_product=build(preparation.bivector_grade4_product),
-        polynomial=polynomial(preparation.polynomial),
-        full_polynomial=polynomial(preparation.full_polynomial),
+        polynomial=taylor,
         square=build(preparation.square),
-    ).to(device=plan.output_scalar_mask.device)
+    )
 
 
 def _assess_action(request, route):
@@ -431,7 +475,7 @@ def _assess_action(request, route):
         if route != "full_action_matrix" or not full:
             return Rejected("requires_full_sandwich")
         preparation = ActionPreparation(None)
-        return _accepted(preparation, _simple_requirements(request, spec.dim**2))
+        return _accepted(preparation, _simple_requirements(request, 6 * spec.dim**2))
     if operation != "versor":
         return Rejected("unsupported_action_operation")
     if grade not in (1, 2) or parameter is None or parameter.grades != (grade,):
@@ -441,7 +485,9 @@ def _assess_action(request, route):
     )
     if not allowed:
         return Rejected("unsupported_action_domain")
-    pairs = spec.n**2 if route == "vector_matrix" else (spec.dim**2 if route == "full_action_matrix" else 0)
+    pairs = 2 * spec.n**2 + spec.n if route == "vector_matrix" and grade == 1 else 0
+    if route == "full_action_matrix":
+        pairs = 6 * spec.dim**2
     lanes = spec.dim if route == "full_action_matrix" else max(inputs.dim, output.dim, parameter.dim)
     resources = ResourceRequirements(lanes, pairs)
     rotor = middle = exponential = reverse = left = right = norm = involution = None
@@ -472,6 +518,8 @@ def _assess_action(request, route):
             output,
             generator_layout=parameter if grade == 2 else None,
         )
+        if grade == 1:
+            resources = ResourceRequirements(resources.lanes, resources.pairs + 2 * spec.n**2 + spec.n)
     else:
         product_facts = [
             child.facts for child in (left, right) if child is not None and isinstance(child.facts, ProductFacts)
@@ -504,16 +552,49 @@ def _operation(child):
 def _build_action(request, route, preparation):
     from .execution.action import (
         ActionComponents,
+        BivectorVectorGeneratorExecutor,
         FullSandwichActionExecutor,
         GradedLinearActionExecutor,
         VersorActionExecutor,
+        VersorVectorMatrixExecutor,
+    )
+    from .planning.action import (
+        _graded_action_plan_tensors,
+        _scalar_action_positions,
+        build_full_sandwich_action_buffers,
+        build_versor_vector_buffers,
     )
 
     inputs, output = request.inputs[0].layout, request.output.layout
+
+    def graded_action():
+        grades = tuple(grade for grade in inputs.grades if grade > 0 and grade in output.grades)
+        grade_buffers = tuple(
+            (grade, *_graded_action_plan_tensors(inputs, output, grade=grade))
+            for grade in (() if inputs.grades == output.grades == (1,) else grades)
+        )
+        return GradedLinearActionExecutor(
+            input_layout=inputs,
+            output_layout=output,
+            scalar_flat_positions=_scalar_action_positions(inputs, output).to(request.device),
+            grade_buffers=tuple(
+                (grade, *(buffer.to(request.device) for buffer in buffers)) for grade, *buffers in grade_buffers
+            ),
+        )
+
+    def full_action():
+        buffers = build_full_sandwich_action_buffers(inputs, device=request.device, dtype=request.dtype)
+        return FullSandwichActionExecutor(
+            layout=inputs,
+            cayley_indices=buffers[0],
+            left_sign_t=buffers[1],
+            geometric_product_sign_t=buffers[2],
+        )
+
     if request.operation == "linear":
-        return GradedLinearActionExecutor(input_layout=inputs, output_layout=output).to(device=request.device)
+        return graded_action()
     if request.operation == "sandwich":
-        return FullSandwichActionExecutor.from_layout(inputs, device=request.device, dtype=request.dtype)
+        return full_action()
     components = ActionComponents(
         preparation.rotor_layout,
         preparation.middle_layout,
@@ -524,14 +605,52 @@ def _build_action(request, route, preparation):
         _operation(preparation.norm),
         _operation(preparation.involution),
     )
+    action = vector_matrix = selected_full_action = None
+    if route == "vector_matrix":
+        action = graded_action()
+        generator_buffers, metric_signs, eye = build_versor_vector_buffers(
+            request.inputs[1].layout,
+            grade=request.grade,
+            dtype=request.dtype,
+            device=request.device,
+        )
+        generator = None
+        if generator_buffers is not None:
+            generator = BivectorVectorGeneratorExecutor(
+                bivector_layout=request.inputs[1].layout,
+                lane_positions=generator_buffers[0],
+                flat_positions=generator_buffers[1],
+                coefficients=generator_buffers[2],
+            )
+        vector_matrix = VersorVectorMatrixExecutor(
+            grade=request.grade,
+            parameter_layout=request.inputs[1].layout,
+            eps=request.algebra.eps_sq,
+            generator=generator,
+            metric_signs=metric_signs,
+            eye=eye,
+        )
+    elif route == "full_action_matrix":
+        selected_full_action = full_action()
+
+    rotor_indices = (
+        preparation.rotor_layout.indices_tensor(device=request.device)
+        if preparation.rotor_layout is not None
+        else torch.empty(0, dtype=torch.long, device=request.device)
+    )
     return VersorActionExecutor(
-        request.algebra,
         grade=request.grade,
         input_layout=inputs,
         output_layout=output,
         parameter_layout=request.inputs[1].layout,
         route=route,
         components=components,
+        action=action,
+        vector_matrix=vector_matrix,
+        full_action=selected_full_action,
+        rotor_full_indices=rotor_indices,
+        parameter_full_indices=request.inputs[1].layout.indices_tensor(device=request.device),
+        eps_sq=request.algebra.eps_sq,
     )
 
 

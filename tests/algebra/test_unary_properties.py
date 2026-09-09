@@ -9,6 +9,7 @@ from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from clifra.core.algebra import AlgebraContext
+from clifra.core.tensors import TensorContract
 from tests.helpers.hypothesis_cases import (
     CORE_PROPERTY_SETTINGS,
     compact_multivector_cases,
@@ -151,6 +152,53 @@ def test_vector_reflection_matches_small_oracle_sandwich(signature, data):
     )
 
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "signature,grades,strict",
+    [
+        ((3, 0, 0), (0,), False),
+        ((2, 1, 0), (2,), False),
+        ((2, 0, 1), (1, 3), False),
+        ((3, 0, 0), (0, 1, 2, 3), False),
+        ((2, 1, 0), (0,), True),
+        ((2, 0, 1), (2,), True),
+        ((3, 0, 0), (1, 3), True),
+        ((2, 1, 0), (0, 1, 2, 3), True),
+    ],
+)
+def test_reflection_applies_grade_involution_to_arbitrary_multivectors(signature, grades, strict):
+    algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
+    oracle = SmallCliffordOracle(*signature)
+    layout = algebra.layout(grades)
+    vector = algebra.layout((1,))
+    values = torch.randn(2, layout.dim, dtype=torch.float64, requires_grad=True)
+    normal = torch.tensor([1.25, 0.0, 0.0], dtype=torch.float64, requires_grad=True)
+    full_values = layout.full(values)
+    full_normal = vector.full(normal)
+    involuted = oracle.grade_involution(full_values, tuple(range(algebra.dim)))
+    inverse = oracle.blade_inverse(normal, vector.basis_indices)
+    expected = layout.compact(oracle.product(oracle.product(full_normal, involuted), vector.full(inverse)))
+    operation = algebra.strict_reflect if strict else algebra.reflect
+
+    actual = operation(values, normal, input=layout, normal=vector, output=layout)
+
+    torch.testing.assert_close(actual, expected, atol=1e-12, rtol=1e-12)
+    seed = torch.randn_like(actual)
+    actual_grad = torch.autograd.grad(actual, (values, normal), seed)
+    expected_grad = torch.autograd.grad(expected, (values, normal), seed)
+    for observed, reference in zip(actual_grad, expected_grad):
+        torch.testing.assert_close(observed, reference, atol=1e-12, rtol=1e-12)
+
+
+def test_reflection_requires_a_grade_one_normal_and_defaults_to_compact_vectors():
+    algebra = AlgebraContext(2)
+    operation = algebra.plan_reflect(input=algebra.layout((0, 1, 2)))
+    assert operation.inputs[1] == TensorContract.compact(algebra.layout((1,)))
+    with pytest.raises(ValueError, match="grade-one"):
+        algebra.plan_reflect(normal=algebra.layout((0, 1)))
+    with pytest.raises(ValueError, match="grade-one"):
+        algebra.plan_strict_reflect(normal=algebra.layout((2,)))
 
 
 @CORE_PROPERTY_SETTINGS

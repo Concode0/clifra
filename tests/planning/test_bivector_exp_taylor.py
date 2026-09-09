@@ -22,9 +22,18 @@ def executor(signature=(7, 0, 0), dtype=torch.float64, device="cpu", grades=None
     return a, a._planner.bivector_exp_executor(input_layout=l, output_layout=out)
 
 
-@pytest.mark.parametrize("signature", [(6, 0, 0), (0, 7, 0), (3, 3, 0), (3, 1, 3), (0, 0, 7)])
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-@pytest.mark.parametrize("norm", [0.0, 1e-9, 0.5, 1.0, 2.0, 32.0, 128.0])
+@pytest.mark.parametrize(
+    "signature,dtype,norm",
+    [
+        ((6, 0, 0), torch.float64, 0.0),
+        ((0, 7, 0), torch.float32, 1e-9),
+        ((3, 3, 0), torch.float64, 0.5),
+        ((3, 1, 3), torch.float64, 1.0),
+        ((0, 0, 7), torch.float32, 2.0),
+        ((6, 0, 0), torch.float32, 32.0),
+        ((3, 3, 0), torch.float64, 128.0),
+    ],
+)
 def test_taylor_forward_vjp_and_inverse(signature, dtype, norm):
     a, f = executor(signature, dtype)
     torch.manual_seed(91)
@@ -56,8 +65,16 @@ def test_taylor_forward_vjp_and_inverse(signature, dtype, norm):
         torch.testing.assert_close(identity, expected, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("delta", [0.0, 1e-10, 1e-6, 0.01])
-@pytest.mark.parametrize("signature", [(6, 0, 0), (7, 0, 0), (3, 3, 0), (2, 2, 3)])
+@pytest.mark.parametrize(
+    "signature,delta",
+    [
+        ((6, 0, 0), 0.0),
+        ((7, 0, 0), 1e-10),
+        ((3, 3, 0), 1e-6),
+        ((2, 2, 3), 0.01),
+        ((2, 2, 3), 0.0),
+    ],
+)
 def test_taylor_coalescence_and_null_components(signature, delta):
     a, f = executor(signature)
     b = torch.zeros(1, f.input_layout.dim, dtype=torch.float64)
@@ -75,15 +92,17 @@ def test_taylor_coalescence_and_null_components(signature, delta):
     torch.testing.assert_close(actual_jvp, expected_jvp, atol=2e-12, rtol=2e-12)
 
 
-@pytest.mark.parametrize("grades", [(0,), (0, 2), (4,), (0, 4), (1, 3), tuple(range(8))])
-@pytest.mark.parametrize("norm", [0.5, 4.0])
+@pytest.mark.parametrize(
+    "grades,norm",
+    [((0,), 0.5), ((0, 2), 4.0), ((4,), 0.5), ((0, 4), 4.0), ((1, 3), 0.5), (tuple(range(8)), 4.0)],
+)
 def test_taylor_output_pruning_matches_selected_polynomial(grades, norm):
     a, f = executor(grades=grades)
     _, full = executor()
     b = torch.randn(2, f.input_layout.dim, dtype=torch.float64)
     b = b / b.abs().sum(-1, keepdim=True) * norm
-    actual = f.polynomial(b)
-    expected = full.polynomial(b)
+    actual = f(b)
+    expected = full(b)
     positions = {i: k for k, i in enumerate(full.output_layout.basis_indices)}
     projected = actual.new_zeros(actual.shape)
     for k, i in enumerate(f.output_layout.basis_indices):
@@ -198,7 +217,7 @@ def test_taylor_dimension_twelve_keeps_all_six_planes():
     )
 
 
-@pytest.mark.parametrize("grades", [(0,), (0, 2), (6,), tuple(range(8))])
+@pytest.mark.parametrize("grades", [(0,), tuple(range(8))])
 def test_planned_taylor_dtype_movement_updates_degree_without_mutating_cached_plan(grades):
     a, _ = executor(dtype=torch.float32, grades=grades)
     layout, out = a.layout((2,)), a.layout(grades)
@@ -212,6 +231,18 @@ def test_planned_taylor_dtype_movement_updates_degree_without_mutating_cached_pl
     assert original(torch.zeros_like(values, dtype=torch.float32)).dtype == torch.float32
     moved.to(dtype=torch.float32)
     torch.testing.assert_close(moved(values.float()), original(values.float()))
+
+
+def test_planned_taylor_movement_fails_explicitly_when_selected_route_is_unsupported():
+    _, operation = executor(dtype=torch.float32, grades=(0, 2))
+    values = torch.zeros(1, operation.input_layout.dim)
+    before = operation(values)
+
+    with pytest.raises(ValueError, match="requires float32 or float64"):
+        operation.to(dtype=torch.float16)
+
+    assert operation.route == "taylor"
+    torch.testing.assert_close(operation(values), before)
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")

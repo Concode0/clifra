@@ -13,9 +13,9 @@ from clifra.core._kernel.planning.policy import (
     ProductFacts,
     select_policy_route,
 )
-from clifra.core._kernel.planning.product import select_product_route
 from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core.executors import ExecutorRequest
+from tests.planning._grade_plan_helpers import select_product_route
 
 
 @dataclass(frozen=True)
@@ -64,8 +64,8 @@ def test_dtype_replanning_uses_request_context():
     first = algebra.plan_product()._kernel
     algebra.to(dtype=torch.float64)
     second = algebra.plan_product()._kernel
-    assert first.metadata.route == "full_table"
-    assert second.metadata.route == "sparse"
+    assert first.route == "full_table"
+    assert second.route == "sparse"
 
 
 def test_default_product_policy_prefers_pruning_and_is_device_independent():
@@ -95,7 +95,7 @@ def test_unselected_large_route_does_not_warn():
         warnings.simplefilter("error")
         executor = algebra.plan_product()._kernel
 
-    assert executor.metadata.route == "full_table"
+    assert executor.route == "full_table"
 
 
 def test_resource_rejection_precedes_builtin_policy_ranking():
@@ -113,5 +113,5 @@ def test_resource_rejection_precedes_builtin_policy_ranking():
     )
     executor = algebra.plan_product()._kernel
 
-    assert executor.metadata.route == "full_table"
+    assert executor.route == "full_table"
     assert seen == ["full_table"]

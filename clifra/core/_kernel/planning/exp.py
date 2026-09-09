@@ -11,7 +11,7 @@ import torch
 
 from clifra.core._kernel.basis import build_bivector_squared_signs
 from clifra.core._kernel.contracts import _check_contract_spec
-from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY, BivectorExpFacts, ProductFacts
+from clifra.core._kernel.planning.policy import BivectorExpFacts, ProductFacts
 from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import TensorContract
@@ -66,22 +66,15 @@ def taylor_layouts(spec, output_layout, degree):
     return tuple(layouts)
 
 
-def build_bivector_exp_plan(
-    spec, *, input_layout, output_layout, dtype, device, planning_policy=DEFAULT_PLANNING_POLICY, route_decision=None
-):
+def build_bivector_exp_plan(spec, *, input_layout, output_layout, dtype, device, route):
     _check_contract_spec(spec, TensorContract.compact(input_layout), "input_layout")
     _check_contract_spec(spec, TensorContract.compact(output_layout), "output_layout")
     if input_layout.grades != (2,):
         raise ValueError(f"bivector exp requires grade-2 input layout, got {input_layout.grades}")
-    decision = route_decision or select_bivector_exp_route(
-        spec, device, dtype=dtype, output_layout=output_layout, policy=planning_policy
-    )
-    if decision.route == "left_matrix_exp" or (
-        decision.route == "closed" and spec.n >= 4 and torch.device(device).type == "mps"
-    ):
+    if route == "left_matrix_exp" or (route == "closed" and spec.n >= 4 and torch.device(device).type == "mps"):
         device = torch.device("cpu")
     even = spec.layout(range(0, spec.n + 1, 2))
-    grade4 = spec.layout((4,)) if decision.route == "closed" and spec.n >= 4 else None
+    grade4 = spec.layout((4,)) if route == "closed" and spec.n >= 4 else None
     positions = {index: pos for pos, index in enumerate(even.basis_indices)}
     return BivectorExpPlan(
         spec,
@@ -89,7 +82,7 @@ def build_bivector_exp_plan(
         output_layout,
         even,
         grade4,
-        decision.route,
+        route,
         torch.finfo(dtype).eps,
         build_bivector_squared_signs(input_layout, dtype=dtype, device=device),
         torch.tensor([float(i == 0) for i in output_layout.basis_indices], dtype=dtype, device=device),
@@ -98,7 +91,7 @@ def build_bivector_exp_plan(
         torch.tensor([positions.get(i, 0) for i in output_layout.basis_indices], dtype=torch.long, device=device),
         torch.tensor([float(i in positions) for i in output_layout.basis_indices], dtype=dtype, device=device),
         torch.eye(even.dim, dtype=dtype, device=device)
-        if decision.route == "left_matrix_exp"
+        if route == "left_matrix_exp"
         else torch.empty(0, dtype=dtype, device=device),
     )
 
@@ -111,33 +104,6 @@ def _layout_map(source, target, *, dtype, device):
             if index in positions:
                 result[pos, positions[index]] = 1
     return result
-
-
-def select_bivector_exp_route(spec, device, *, dtype, output_layout, policy, router=None, limits=None):
-    from clifra.core._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS
-    from clifra.core._kernel.providers import exp_execution_request
-    from clifra.core._kernel.routing import default_router
-
-    request = exp_execution_request(spec, device, dtype, output_layout)
-    return (default_router() if router is None else router).select(
-        request, policy, DEFAULT_RESOURCE_LIMITS if limits is None else limits
-    )
-
-
-def select_bivector_exp_executor_family(
-    spec, device, *, dtype=torch.float32, output_layout=None, planning_policy=DEFAULT_PLANNING_POLICY
-):
-    return select_bivector_exp_route(
-        spec, device, dtype=dtype, output_layout=output_layout, policy=planning_policy
-    ).route
-
-
-def assess_bivector_exp_routes(spec, device, *, dtype, output_layout):
-    """Declare route capabilities, resources, and family-owned structural facts."""
-    return tuple(
-        assess_bivector_exp_route(spec, device, dtype=dtype, output_layout=output_layout, route=route)
-        for route in ("closed", "taylor", "left_matrix_exp")
-    )
 
 
 @dataclass(frozen=True)

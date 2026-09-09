@@ -3,7 +3,6 @@
 import warnings
 from dataclasses import dataclass
 
-import torch
 from torch import nn
 
 from clifra.core._kernel.planning.policy import (
@@ -42,28 +41,8 @@ class Selection:
         from .providers import BuiltinProvider
 
         if not isinstance(self.provider, BuiltinProvider) and self.family in {"product", "unary"}:
-            executor = CompactExecutorAdapter(executor, self.request)
-        executor.metadata = ExecutorMetadata(
-            self.family,
-            self.route,
-            self.request.inputs,
-            self.request.output,
-            self.request.dtype,
-            self.request.device,
-            self.facts,
-        )
+            executor = CompactExecutorAdapter(executor)
         return executor
-
-
-@dataclass(frozen=True)
-class ExecutorMetadata:
-    family: str
-    route: str
-    inputs: tuple
-    output: object
-    dtype: torch.dtype
-    device: torch.device
-    facts: PlanningFacts
 
 
 @dataclass(frozen=True)
@@ -159,29 +138,16 @@ class ExecutorRouter:
                 stacklevel=3,
             )
 
-    def construct(self, request, selection):
-        if selection.request is not request:
-            raise ValueError("construction requires the original assessed request")
-        return selection.build()
-
     def execute_plan(self, request, policy, limits=DEFAULT_RESOURCE_LIMITS):
         return self.select(request, policy, limits).build()
-
-
-def default_router():
-    from .providers import builtin_providers
-
-    return ExecutorRouter(builtin_providers())
 
 
 class CompactExecutorAdapter(nn.Module):
     """Keep historical built-in entrypoints out of the public provider protocol."""
 
-    def __init__(self, executor, request):
+    def __init__(self, executor):
         super().__init__()
         self.executor = executor
-        self.inputs = request.inputs
-        self.output = request.output
 
     def forward(self, *values):
         return self.executor(*values)
@@ -191,10 +157,3 @@ class CompactExecutorAdapter(nn.Module):
 
     def forward_pairwise_compact(self, left, right):
         return self.executor(left.unsqueeze(-2), right.unsqueeze(-3))
-
-    def forward_pairwise_compact_right_signed(self, left, right, signs):
-        return self.forward_pairwise_compact(left, right * signs)
-
-    def forward_full(self, *values):
-        compact = tuple(contract.layout.compact(value) for contract, value in zip(self.inputs, values))
-        return self.output.layout.full(self.executor(*compact))

@@ -29,6 +29,7 @@ class PlannedOperation(nn.Module):
         self._inputs = tuple(inputs)
         self._output = output
         self._method = method
+        self._owns_kernel_state = False
 
     @property
     def inputs(self) -> tuple[TensorContract | None, ...]:
@@ -61,8 +62,9 @@ class PlannedOperation(nn.Module):
     def _apply(self, fn):
         # Cached kernels may be shared by multiple independently owned plans.
         # Detach before movement so moving one plan cannot mutate another.
-        if any(
-            fn(buffer).device != buffer.device or fn(buffer).dtype != buffer.dtype for buffer in self._kernel.buffers()
+        if not self._owns_kernel_state and (
+            any(True for _ in self._kernel.parameters()) or any(True for _ in self._kernel.buffers())
         ):
             self._kernel = copy.deepcopy(self._kernel)
+            self._owns_kernel_state = True
         return super()._apply(fn)

@@ -157,4 +157,18 @@ def test_full_product_routes_match_the_independent_oracle(case):
         assert torch.allclose(product(left, right), expected, atol=1e-10, rtol=1e-10)
 
 
+def test_null_vector_contractions_ignore_nonfinite_null_coefficients():
+    for signature in ((2, 1, 1), (0, 0, 4)):
+        algebra = AlgebraContext(*signature)
+        vector, scalar = algebra.layout((1,)), algebra.layout((0,))
+        values = torch.ones(3, vector.dim)
+        values[..., sum(signature[:2]) :] = float("inf")
+        values.requires_grad_()
+        output = algebra.left_contraction(values, values, left=vector, right=vector, output=scalar)
+        assert torch.isfinite(output).all()
+        (gradient,) = torch.autograd.grad(output.sum(), values)
+        assert torch.isfinite(gradient).all()
+        assert torch.count_nonzero(gradient[..., sum(signature[:2]) :]) == 0
+
+
 from clifra.core._kernel.configuration import configured_algebra

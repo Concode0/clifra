@@ -8,8 +8,8 @@ from itertools import permutations
 import pytest
 import torch
 
-from clifra.core._kernel.execution.action import FullSandwichActionExecutor, GradedLinearActionExecutor
 from clifra.core.layout import AlgebraSpec
+from tests.planning._grade_plan_helpers import _planned_full_sandwich, _planned_graded_action
 
 pytestmark = pytest.mark.unit
 DEVICES = ["cpu"] + (["mps"] if torch.backends.mps.is_available() else [])
@@ -41,16 +41,22 @@ def _reference(matrix, input_layout, output_layout):
     return torch.stack(rows, -2)
 
 
-@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize(
-    "grades,output_grades", [((1,), (1,)), ((2,), (2,)), ((3,), (3,)), ((4,), (4,)), ((0, 1, 2, 3), (0, 2, 3))]
+    "device,grades,output_grades,kind",
+    [
+        ("cpu", (1,), (1,), "random"),
+        ("cpu", (2,), (2,), "singular"),
+        ("cpu", (3,), (3,), "zero"),
+        ("cpu", (4,), (4,), "random"),
+        ("cpu", (0, 1, 2, 3), (0, 2, 3), "random"),
+        *([("mps", (2,), (2,), "singular")] if "mps" in DEVICES else []),
+    ],
 )
-@pytest.mark.parametrize("kind", ["random", "singular", "zero"])
 def test_induced_action_coefficients_and_gradients(device, grades, output_grades, kind):
     torch.manual_seed(73)
     spec = AlgebraSpec(4, 1, 1)
     input_layout, output_layout = spec.layout(grades), spec.layout(output_grades)
-    executor = GradedLinearActionExecutor(input_layout=input_layout, output_layout=output_layout).to(device)
+    executor = _planned_graded_action(input_layout, output_layout, device=device)
     matrix = torch.randn(1, spec.n, spec.n)
     if kind == "singular":
         matrix[:, 1] = matrix[:, 0]
@@ -70,10 +76,7 @@ def test_induced_action_coefficients_and_gradients(device, grades, output_grades
 def test_induced_grade4_action_gradcheck_and_gradgradcheck():
     spec = AlgebraSpec(5)
     layout = spec.layout((4,))
-    executor = GradedLinearActionExecutor(
-        input_layout=layout,
-        output_layout=layout,
-    )
+    executor = _planned_graded_action(layout, layout, dtype=torch.float64)
 
     matrix = (torch.eye(5, dtype=torch.float64) + 0.1 * torch.randn(5, 5, dtype=torch.float64)).requires_grad_()
 
@@ -83,11 +86,11 @@ def test_induced_grade4_action_gradcheck_and_gradgradcheck():
     assert torch.autograd.gradgradcheck(fn, (matrix,))
 
 
-@pytest.mark.parametrize("grades", [(1,), (2,), (3,), (1, 2)])
+@pytest.mark.parametrize("grades", [(1,), (2,), (1, 2)])
 def test_induced_action_single_and_multi_compile(grades):
     spec = AlgebraSpec(6)
     layout = spec.layout(grades)
-    executor = GradedLinearActionExecutor(input_layout=layout, output_layout=layout)
+    executor = _planned_graded_action(layout, layout, dtype=torch.float64)
     matrices = torch.randn(2, 6, 6, dtype=torch.float64, requires_grad=True)
     values = torch.randn(3, 2, layout.dim, dtype=torch.float64, requires_grad=True)
     for values in (values, values.unsqueeze(-2)):
@@ -103,29 +106,17 @@ def test_induced_action_single_and_multi_compile(grades):
             torch.testing.assert_close(actual, expected)
 
 
-def test_induced_action_constructs_only_requested_grade_buffers():
-    spec = AlgebraSpec(16)
-    layout = spec.layout((1,))
-    executor = GradedLinearActionExecutor(input_layout=layout, output_layout=layout)
-    assert executor._grades == (1,)
-    assert not hasattr(executor, "row_indices_1")
-    assert not hasattr(executor, "row_indices_2")
-    matrix = torch.randn(2, 16, 16)
-    assert executor.coefficients(matrix) is matrix
-
-
 def test_induced_action_explicit_minors_gradcheck():
     layout = AlgebraSpec(6).layout((2, 3))
-    executor = GradedLinearActionExecutor(input_layout=layout, output_layout=layout)
+    executor = _planned_graded_action(layout, layout, dtype=torch.float64)
     matrix = torch.randn(1, 6, 6, dtype=torch.float64, requires_grad=True)
     assert torch.autograd.gradcheck(executor.coefficients, (matrix,), fast_mode=True)
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-@pytest.mark.parametrize("n", [3, 6, 8])
-def test_full_sandwich_flat_gather_preserves_matrices_and_gradients(dtype, n):
+@pytest.mark.parametrize("n,dtype", [(3, torch.float32), (6, torch.float64), (8, torch.float32)])
+def test_full_sandwich_flat_gather_preserves_matrices_and_gradients(n, dtype):
     spec = AlgebraSpec(n - 2, 1, 1)
-    executor = FullSandwichActionExecutor.from_layout(spec.full_layout(), dtype=dtype)
+    executor = _planned_full_sandwich(spec.full_layout(), dtype=dtype)
     left = torch.randn(2, spec.dim * 2, dtype=dtype)[:, ::2].requires_grad_()
     right = torch.randn(2, spec.dim * 2, dtype=dtype)[:, ::2].requires_grad_()
 

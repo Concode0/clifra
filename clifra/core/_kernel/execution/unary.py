@@ -60,10 +60,5 @@ class GradeUnaryExecutor(nn.Module):
             return -values
         return values * self.signs
 
-    def forward_full(self, values: torch.Tensor) -> torch.Tensor:
-        """Return full-layout output coefficients for full-layout input coefficients."""
-        compact = self.forward(values)
-        return self.output_layout.full(compact)
-
 
 __all__ = ["GradeUnaryExecutor"]

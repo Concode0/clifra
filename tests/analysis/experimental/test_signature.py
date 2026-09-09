@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from clifra.analysis.experimental import SignatureProbeAnalyzer, SignatureProbeResult, signature
-from clifra.analysis.experimental.signature import _initialize_bivector_parameters, _pca_reduce, _SignatureProbe
+from clifra.analysis.experimental.signature import _pca_reduce, _SignatureProbe
 from clifra.core._kernel.basis import build_bivector_squared_signs
 from clifra.core.config import make_algebra
 
@@ -132,13 +132,14 @@ def test_bootstrap_votes_representative_and_seeded_sampling(monkeypatch):
         assert torch.equal(first, second)
 
 
-def test_probe_budget_is_checked_before_constructing_host(monkeypatch):
-    def no_host(*args, **kwargs):
-        pytest.fail("oversized probe must be rejected before constructing the algebra")
+def test_probe_action_uses_core_resource_assessment_before_buffer_construction(monkeypatch):
+    def no_buffers(*args, **kwargs):
+        pytest.fail("oversized probe must be rejected before action buffer construction")
 
-    monkeypatch.setattr(signature, "make_algebra", no_host)
-    with pytest.raises(ValueError, match="action matrix"):
-        SignatureProbeAnalyzer(max_probe_features=11)._quadratic_lift(torch.randn(2, 11))
+    monkeypatch.setattr("clifra.core._kernel.planning.action.build_full_sandwich_action_buffers", no_buffers)
+    _, algebra = SignatureProbeAnalyzer(max_probe_features=11)._quadratic_lift(torch.randn(2, 11))
+    with pytest.raises(ValueError, match="intermediate lanes"):
+        signature._ProbeRotor(algebra, 1)
 
 
 def test_bootstrap_mode_need_not_be_a_majority(monkeypatch):
@@ -165,22 +166,6 @@ def test_quadratic_lift_uses_declared_layout_and_dtype():
     torch.testing.assert_close(algebra.layout((1,)).compact(mv[:, 0]), expected)
 
 
-def test_private_probe_forward_and_biased_initialization():
-    torch.manual_seed(12)
-    algebra = make_algebra(3, 1)
-    probe = _SignatureProbe(algebra, channels=2)
-    assert all(not hasattr(parameter, "_manifold") for parameter in probe.parameters())
-    data = torch.randn(5, 1, algebra.dim)
-    assert probe(data).shape == data.shape
-    _initialize_bivector_parameters(probe, algebra, "elliptic_weighted")
-    squares = build_bivector_squared_signs(algebra.layout((2,)), device=algebra.device, dtype=algebra.dtype)
-    energies = probe.rotor.bivector_parameters.detach().abs().mean(dim=0)
-    assert energies[squares < 0].mean() > energies[squares > 0].mean()
-    for bias in ("non_null_weighted", "uniform", "normal"):
-        _initialize_bivector_parameters(probe, algebra, bias)
-        assert torch.isfinite(probe.rotor.bivector_parameters).all()
-
-
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -201,15 +186,6 @@ def test_invalid_probe_controls(kwargs):
 def test_invalid_bootstrap_counts(kwargs):
     with pytest.raises(ValueError):
         SignatureProbeAnalyzer().analyze_bootstrap(torch.ones(3, 2), **kwargs)
-
-
-def test_no_lower_level_estimator_or_generic_dimension_api():
-    assert not hasattr(signature, "RotorProbeSignatureEstimator")
-    analyzer = SignatureProbeAnalyzer()
-    for name in ("estimate", "estimate_detailed", "analyze_with_confidence"):
-        assert not hasattr(analyzer, name)
-    with pytest.raises(TypeError):
-        analyzer.analyze(torch.ones(4, 2), dim_result=None)
 
 
 def test_probe_training_does_not_backpropagate_into_caller_representation():

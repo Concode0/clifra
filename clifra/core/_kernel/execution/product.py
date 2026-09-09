@@ -27,7 +27,6 @@ class GradeProductExecutor(nn.Module):
     """Compile-friendly grade-restricted product using a static interaction plan.
 
     ``forward`` returns compact output lanes ordered by ``output_basis_indices``.
-    ``forward_full`` materializes into the canonical all-grades layout.
     """
 
     def __init__(self, plan: GradeProductPlan):
@@ -52,7 +51,7 @@ class GradeProductExecutor(nn.Module):
         self.right_canonical_contract = TensorContract.canonical(self.right_layout)
         self._output_dim = plan.output_dim
         self._pair_count = plan.pair_count
-        self._empty_product = len(plan.tree.paths) == 0
+        self._empty_product = plan.is_empty
         scalar_product = self.op in {"geometric_product", "wedge", "symmetric_product"}
         self._scalar_left = scalar_product and self.left_grades == (0,) and self.right_layout == self.output_layout
         self._scalar_right = scalar_product and self.right_grades == (0,) and self.left_layout == self.output_layout
@@ -175,48 +174,6 @@ class GradeProductExecutor(nn.Module):
         weighted_left = left_gathered * self.pairwise_coefficients
         return torch.einsum("...ljk,...rj->...lrk", weighted_left, right)
 
-    def forward_pairwise_compact_right_signed(
-        self,
-        left: torch.Tensor,
-        right: torch.Tensor,
-        right_signs: torch.Tensor,
-    ) -> torch.Tensor:
-        """Pairwise compact product with a diagonal sign applied to right lanes."""
-        self.left_contract.validate(left, name="left")
-        self.right_contract.validate(right, name="right")
-        if right_signs.shape != (self.right_layout.dim,):
-            raise ValueError(f"right_signs shape must be {(self.right_layout.dim,)}, got {tuple(right_signs.shape)}")
-        left, right = _pairwise_inputs(left, right)
-
-        if self._pairwise_contract_left:
-            flat_positions = self.pairwise_gather_positions.reshape(-1)
-            right_gathered = torch.index_select(right, -1, flat_positions).reshape(
-                *right.shape[:-1],
-                self.left_layout.dim,
-                self.output_dim,
-            )
-            right_signs_gathered = torch.index_select(right_signs, 0, flat_positions).reshape(
-                self.left_layout.dim,
-                self.output_dim,
-            )
-            weighted_right = right_gathered * (self.pairwise_coefficients * right_signs_gathered)
-            return torch.einsum("...li,...rik->...lrk", left, weighted_right)
-
-        flat_positions = self.pairwise_gather_positions.reshape(-1)
-        left_gathered = torch.index_select(left, -1, flat_positions).reshape(
-            *left.shape[:-1],
-            self.right_layout.dim,
-            self.output_dim,
-        )
-        weighted_left = left_gathered * (self.pairwise_coefficients * right_signs.unsqueeze(-1))
-        return torch.einsum("...ljk,...rj->...lrk", weighted_left, right)
-
-    def forward_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Return a full ``[..., 2**n]`` lane tensor."""
-        compact = self.forward(left, right)
-        output = compact.new_zeros(*compact.shape[:-1], self.dim)
-        return output.index_copy(-1, self.output_basis_indices, compact)
-
 
 class FullTableProductExecutor(nn.Module):
     """Planner-owned full-layout Cayley-table product executor.
@@ -287,10 +244,6 @@ class FullTableProductExecutor(nn.Module):
                 *right.shape[:-1], self.dim, self.dim
             )
         return right[..., self.cayley_indices]
-
-    def forward_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Return full-layout product lanes."""
-        return self.forward_compact(left, right)
 
 
 __all__ = ["FullTableProductExecutor", "GradeProductExecutor"]

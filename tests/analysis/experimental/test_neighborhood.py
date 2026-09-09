@@ -169,14 +169,3 @@ def test_coordinate_lifts_preserve_original_quadratic_form(monkeypatch, appended
     torch.testing.assert_close(squares[0], expected)
     torch.testing.assert_close(squares[1], expected + appended_value**2)
     torch.testing.assert_close(squares[2], expected - appended_value**2)
-
-
-def test_removed_neighborhood_conveniences():
-    flow = NeighborhoodBivectorAnalyzer(make_algebra(3))
-    for name in (
-        "_embed",
-        "alignment_threshold_report",
-        "_random_connection_alignment_baseline",
-        "approximate_bivector_interpolation",
-    ):
-        assert not hasattr(flow, name)

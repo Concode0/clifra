@@ -1,513 +1,187 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-from clifra.core._kernel.planning.layouts import ProductRequest
-from clifra.core._kernel.planning.product import assess_product_routes, count_grade_product_interactions
+"""Structural product-planning invariants and selected-route behavior."""
+
+import pytest
+import torch
+
+from clifra.core import AlgebraContext
+from clifra.core._kernel.configuration import configured_algebra
+from clifra.core._kernel.planning.product import (
+    assess_product_routes,
+    build_grade_product_plan_from_tree,
+    count_grade_product_interactions,
+)
+from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core._kernel.planning.tree import build_grade_plan_tree
-from clifra.core.tensors import TensorContract
-from tests.planning._grade_plan_helpers import (
-    DEVICE,
-    AlgebraContext,
-    FullTableProductExecutor,
-    GradeProductExecutor,
-    PreferRoute,
-    ResourceLimits,
-    SmallCliffordOracle,
-    _grade_only_input,
-    _oracle_for,
-    _product_method_name,
-    _sparse_pairwise_product_reference,
-    build_grade_product_plan,
-    expand_output_grades,
-    pytest,
-    select_product_route,
-    torch,
+from tests.helpers.policy import PreferRoute
+from tests.helpers.small_oracle import SmallCliffordOracle
+from tests.planning._grade_plan_helpers import select_product_route
+
+PRODUCT_OPS = (
+    "geometric_product",
+    "wedge",
+    "left_contraction",
+    "right_contraction",
+    "symmetric_product",
+    "commutator_product",
+    "anti_commutator_product",
 )
 
-pytestmark = pytest.mark.unit
+
+@pytest.mark.parametrize("op", PRODUCT_OPS)
+def test_combinatorial_interaction_count_matches_lowering(op):
+    for signature in ((4, 0, 0), (0, 4, 0), (2, 2, 0), (1, 1, 2), (0, 0, 4)):
+        spec = AlgebraContext(*signature).spec
+        tree = build_grade_plan_tree(
+            spec,
+            op=op,
+            left_grades=range(5),
+            right_grades=range(5),
+            output_grades=range(5),
+        )
+        plan = build_grade_product_plan_from_tree(tree, dtype=torch.float64)
+        assert count_grade_product_interactions(tree) == plan.pair_count
 
 
-def _compact_product_request(algebra, *, op, left_layout, right_layout, output_layout):
-    return ProductRequest.compact(
-        algebra._planner.spec,
-        op=op,
-        left_layout=left_layout,
-        right_layout=right_layout,
-        output_layout=output_layout,
-        dtype=algebra.dtype,
-        device=algebra.device,
-    )
-
-
-@pytest.mark.parametrize(
-    "signature",
-    [(4, 0, 0), (0, 4, 0), (2, 2, 0), (3, 0, 1), (1, 1, 2), (0, 0, 4)],
-)
-@pytest.mark.parametrize(
-    "op",
-    [
-        "geometric_product",
-        "wedge",
-        "left_contraction",
-        "right_contraction",
-        "symmetric_product",
-        "commutator_product",
-        "anti_commutator_product",
-    ],
-)
-def test_combinatorial_interaction_count_matches_lowered_plan(signature, op):
-    context = AlgebraContext(*signature, dtype=torch.float64)
-    tree = build_grade_plan_tree(
-        context.spec,
-        op=op,
-        left_grades=range(5),
-        right_grades=range(5),
-        output_grades=(0, 1, 2, 3, 4),
-    )
-    plan = build_grade_product_plan(
-        *signature,
-        op=op,
-        left_grades=tree.left_grades,
-        right_grades=tree.right_grades,
-        output_grades=tree.output_grades,
-        dtype=torch.float64,
-    )
-    assert count_grade_product_interactions(tree) == plan.pair_count
-
-
-def test_product_route_assessment_does_not_enumerate_or_allocate(monkeypatch):
-    context = AlgebraContext(16, dtype=torch.float64)
-    left, right, output = context.layout((1,)), context.layout((2,)), context.layout((1, 3))
+def test_product_assessment_uses_combinatorics_without_enumeration(monkeypatch):
+    algebra = AlgebraContext(16)
 
     def fail(*args, **kwargs):
-        raise AssertionError("assessment must use grade combinatorics only")
+        raise AssertionError("assessment must not enumerate basis interactions")
 
     monkeypatch.setattr("clifra.core._kernel.planning.product.operation_coefficient", fail)
-    for name in ("arange", "empty", "eye", "ones", "tensor", "zeros"):
-        monkeypatch.setattr(torch, name, fail)
-
     assessments = assess_product_routes(
         op="geometric_product",
-        left_layout=left,
-        right_layout=right,
-        output_layout=output,
+        left_layout=algebra.layout((1,)),
+        right_layout=algebra.layout((2,)),
+        output_layout=algebra.layout((1, 3)),
     )
-
     sparse = next(item for item in assessments if item.route == "sparse")
     assert sparse.facts.interactions > 0
-    assert sparse.tree is not None
 
 
 @pytest.mark.parametrize(
-    "op,selected,forbidden_builder",
+    "op,forbidden_builder",
     [
-        ("geometric_product", "full_table", "build_grade_product_plan_from_tree"),
-        ("wedge", "sparse", "build_full_table_product_plan_from_request"),
+        ("geometric_product", "build_grade_product_plan_from_tree"),
+        ("wedge", "build_full_table_product_plan_from_request"),
     ],
 )
-def test_only_selected_product_route_materializes(op, selected, forbidden_builder, monkeypatch):
-    context = AlgebraContext(4, dtype=torch.float64)
-
+def test_only_selected_product_route_constructs_buffers(op, forbidden_builder, monkeypatch):
     def fail(*args, **kwargs):
-        raise AssertionError("unselected route must not construct plan buffers")
+        raise AssertionError("unselected route constructed buffers")
 
     monkeypatch.setattr(f"clifra.core._kernel.planning.product.{forbidden_builder}", fail)
-    executor = context.plan_product(op=op)._kernel
-
-    assert executor.metadata.route == selected
+    AlgebraContext(4).plan_product(op=op)
 
 
-def test_sparse_route_is_assessed_before_dense_cartesian_limit():
+def test_sparse_route_survives_infeasible_dense_cartesian_size():
     limits = ResourceLimits(max_lanes=100, max_pairs=2_200)
-    context = configured_algebra(8, dtype=torch.float64, resource_limits=limits)
-    trivector, grade6 = context.layout((3,)), context.layout((6,))
-
-    executor = context.plan_product(op="wedge", left=trivector, right=trivector, output=grade6)._kernel
-
-    assert trivector.dim**2 > limits.max_pairs
-    assert isinstance(executor, GradeProductExecutor)
-    assert executor.pair_count < limits.max_pairs
+    algebra = configured_algebra(8, dtype=torch.float64, resource_limits=limits)
+    layout, output = algebra.layout((3,)), algebra.layout((6,))
+    operation = algebra.plan_product(op="wedge", left=layout, right=layout, output=output)
+    assert layout.dim**2 > limits.max_pairs
+    assert operation._kernel.route == "sparse"
+    assert operation._kernel.pair_count < limits.max_pairs
 
 
-@pytest.mark.parametrize("warm_cache", [False, True])
-@pytest.mark.parametrize("foreign_side", ["left", "right", "output"])
-def test_product_request_rejects_foreign_layouts_before_cache_lookup(
-    foreign_side,
-    warm_cache,
-):
-    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
-    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
+@pytest.mark.parametrize("role", ["left", "right", "output"])
+def test_product_rejects_foreign_layouts(role):
+    algebra, foreign = AlgebraContext(3), AlgebraContext(0, 3)
     layouts = {
-        "left_layout": algebra.layout((1,)),
-        "right_layout": algebra.layout((1,)),
-        "output_layout": algebra.layout((0,)),
+        "left": algebra.layout((1,)),
+        "right": algebra.layout((1,)),
+        "output": algebra.layout((0, 2)),
     }
-    if warm_cache:
-        algebra._planner.product_executor(_compact_product_request(algebra, op="geometric_product", **layouts))
-    cache_before = tuple(algebra._planner._product_executors.items())
-    layouts[f"{foreign_side}_layout"] = foreign.layout((0,) if foreign_side == "output" else (1,))
-
-    with pytest.raises(ValueError, match=rf"{foreign_side}_layout signature .* does not match algebra signature"):
-        algebra._planner.product_executor(_compact_product_request(algebra, op="geometric_product", **layouts))
-
-    assert tuple(algebra._planner._product_executors.items()) == cache_before
+    layouts[role] = foreign.layout((0, 2) if role == "output" else (1,))
+    with pytest.raises(ValueError, match="signature"):
+        algebra.plan_product(**layouts)
 
 
-def test_product_request_rejects_foreign_tensor_contracts_at_construction():
-    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
-    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
-    own_layouts = {
-        "left_layout": algebra.layout((1,)),
-        "right_layout": algebra.layout((1,)),
-        "output_layout": algebra.layout((0,)),
-    }
-    algebra._planner.product_executor(_compact_product_request(algebra, op="geometric_product", **own_layouts))
-    cache_before = tuple(algebra._planner._product_executors.items())
-    with pytest.raises(ValueError, match="left_layout signature .* does not match algebra signature"):
-        ProductRequest(
-            spec=algebra._planner.spec,
-            op="geometric_product",
-            left=TensorContract.compact(foreign.layout((1,))),
-            right=TensorContract.compact(foreign.layout((1,))),
-            output=TensorContract.compact(foreign.layout((0,))),
+def test_product_accepts_layouts_from_equal_signature_context():
+    algebra, peer = AlgebraContext(3), AlgebraContext(3)
+    operation = algebra.plan_product(left=peer.layout((1,)), right=peer.layout((1,)), output=peer.layout((0, 2)))
+    values = torch.randn(2, 3)
+    torch.testing.assert_close(
+        operation(values, values),
+        algebra.geometric_product(
+            values,
+            values,
+            left=algebra.layout((1,)),
+            right=algebra.layout((1,)),
+            output=algebra.layout((0, 2)),
+        ),
+    )
+
+
+@pytest.mark.parametrize("op", PRODUCT_OPS)
+def test_selected_product_route_matches_independent_oracle(op):
+    algebra = AlgebraContext(3, 1, 1, dtype=torch.float64)
+    oracle = SmallCliffordOracle(3, 1, 1)
+    left = torch.randn(2, algebra.dim, dtype=torch.float64)
+    right = torch.randn(2, algebra.dim, dtype=torch.float64)
+    actual = getattr(algebra, op)(left, right)
+    torch.testing.assert_close(actual, oracle.product(left, right, op=op))
+
+
+def test_product_policy_prefers_structural_pruning_and_is_device_independent():
+    algebra = AlgebraContext(5)
+    layout = algebra.layout()
+    routes = {
+        select_product_route(
+            algebra,
+            op="wedge",
+            left_layout=layout,
+            right_layout=layout,
+            output_layout=layout,
             dtype=torch.float32,
-            device=torch.device(DEVICE),
-        )
-
-    assert tuple(algebra._planner._product_executors.items()) == cache_before
-
-
-@pytest.mark.parametrize("cache", [False, True])
-def test_product_executor_rejects_foreign_request_signature(cache):
-    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
-    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
-    request = ProductRequest.compact(
-        foreign.spec,
-        op="geometric_product",
-        dtype=foreign.dtype,
-        device=foreign.device,
-        left_layout=foreign.layout((1,)),
-        right_layout=foreign.layout((1,)),
-        output_layout=foreign.layout((0,)),
-    )
-
-    cache_before = tuple(algebra._planner._product_executors.items())
-
-    with pytest.raises(ValueError, match="request signature .* does not match algebra signature"):
-        algebra._planner.product_executor(request, cache=cache)
-
-    assert tuple(algebra._planner._product_executors.items()) == cache_before
+            device=device,
+        ).route
+        for device in ("cpu", "mps", "cuda")
+    }
+    assert routes == {"sparse"}
 
 
-def test_product_executor_accepts_layouts_from_equal_signature_algebra():
-    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
-    peer = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
-    own = algebra._planner.product_executor(
-        _compact_product_request(
-            algebra,
-            op="geometric_product",
-            left_layout=algebra.layout((1,)),
-            right_layout=algebra.layout((1,)),
-            output_layout=algebra.layout((0,)),
-        )
-    )
-
-    shared = algebra._planner.product_executor(
-        _compact_product_request(
-            algebra,
-            op="geometric_product",
-            left_layout=peer.layout((1,)),
-            right_layout=peer.layout((1,)),
-            output_layout=peer.layout((0,)),
-        )
-    )
-
-    assert shared is own
+def test_product_policy_override_selects_requested_feasible_route():
+    algebra = configured_algebra(5, planning_policy=PreferRoute("product", "full_table"))
+    assert algebra.plan_product(op="wedge")._kernel.route == "full_table"
 
 
-@pytest.mark.parametrize(
-    "op",
-    [
-        "geometric_product",
-        "wedge",
-        "symmetric_product",
-        "commutator_product",
-        "anti_commutator_product",
-        "left_contraction",
-        "right_contraction",
-    ],
-)
-def test_static_grade_product_matches_small_oracle_for_selected_grade_paths(op):
-    algebra = SmallCliffordOracle(4, 1, 1)
-    left_grades = (1,)
-    right_grades = (1, 2)
-    output_grades = expand_output_grades(left_grades, right_grades, algebra.n, op=op)
-    plan = build_grade_product_plan(
-        algebra.p,
-        algebra.q,
-        algebra.r,
-        left_grades=left_grades,
-        right_grades=right_grades,
-        output_grades=output_grades,
-        op=op,
-        device=DEVICE,
-        dtype=torch.float64,
-    )
-    product = GradeProductExecutor(plan)
-    A = _grade_only_input(algebra, 3, left_grades, seed=101)
-    B = _grade_only_input(algebra, 3, right_grades, seed=103)
-
-    expected = algebra.project(algebra.product(A, B, op=op), output_grades)
-    actual = product.forward_full(A, B)
-
-    assert product.pair_count < algebra.dim * algebra.dim
-    assert actual.shape == expected.shape
-    assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
-
-
-def test_wedge_plan_prunes_grade_route_pairs_before_coefficients():
-    algebra = SmallCliffordOracle(6, 0, 0)
-    broad = build_grade_product_plan(
-        algebra.p,
-        algebra.q,
-        algebra.r,
-        left_grades=(2,),
-        right_grades=(1,),
-        output_grades=(1, 3),
-        op="wedge",
-        device=DEVICE,
-        dtype=torch.float64,
-    )
-    exterior_only = build_grade_product_plan(
-        algebra.p,
-        algebra.q,
-        algebra.r,
-        left_grades=(2,),
-        right_grades=(1,),
-        output_grades=(3,),
-        op="wedge",
-        device=DEVICE,
-        dtype=torch.float64,
-    )
-
-    assert broad.pair_count == exterior_only.pair_count
-    assert all(int(index).bit_count() == 3 for index in broad.output_indices.tolist())
-
-
-def test_product_plan_owns_compact_lane_position_buffers():
-    algebra = SmallCliffordOracle(4, 1, 0)
-    plan = build_grade_product_plan(
-        algebra.p,
-        algebra.q,
-        algebra.r,
-        left_grades=(1,),
-        right_grades=(1,),
-        output_grades=(0, 2),
-        op="geometric_product",
-        device=DEVICE,
-        dtype=torch.float64,
-    )
-    product = GradeProductExecutor(plan)
-    A = _grade_only_input(algebra, 2, (1,), seed=109)
-    B = _grade_only_input(algebra, 2, (1,), seed=111)
-
-    left_positions = {index: position for position, index in enumerate(plan.left_layout.basis_indices)}
-    right_positions = {index: position for position, index in enumerate(plan.right_layout.basis_indices)}
-    expected_left = torch.tensor([left_positions[int(index)] for index in plan.left_indices], dtype=torch.long)
-    expected_right = torch.tensor([right_positions[int(index)] for index in plan.right_indices], dtype=torch.long)
-
-    assert torch.equal(plan.left_compact_positions.cpu(), expected_left)
-    assert torch.equal(plan.right_compact_positions.cpu(), expected_right)
-    assert torch.allclose(
-        product.forward_compact(plan.left_layout.compact(A), plan.right_layout.compact(B)),
-        product(A, B),
-        atol=1e-12,
-        rtol=1e-12,
-    )
-
-
-def test_product_executor_compact_forward_supports_different_layout_widths():
-    algebra = SmallCliffordOracle(4, 1, 0)
-    plan = build_grade_product_plan(
-        algebra.p,
-        algebra.q,
-        algebra.r,
-        left_grades=(1,),
-        right_grades=(1, 2),
-        output_grades=(0, 1, 2, 3),
-        op="geometric_product",
-        device=DEVICE,
-        dtype=torch.float64,
-    )
-    product = GradeProductExecutor(plan)
-    A = _grade_only_input(algebra, 2, (1,), seed=115)
-    B = _grade_only_input(algebra, 2, (1, 2), seed=117)
-
-    compact = product.forward_compact(plan.left_layout.compact(A), plan.right_layout.compact(B))
-    reference = product(A, B)
-
-    assert plan.left_layout.dim != plan.right_layout.dim
-    assert torch.allclose(compact, reference, atol=1e-12, rtol=1e-12)
-
-
-def test_product_executor_pairwise_uses_factorized_smaller_lane_contraction():
-    algebra = SmallCliffordOracle(6, 0, 0)
-    plan = build_grade_product_plan(
-        algebra.p,
-        algebra.q,
-        algebra.r,
-        left_grades=(2,),
-        right_grades=(1,),
-        output_grades=(3,),
-        op="wedge",
-        device=DEVICE,
-        dtype=torch.float64,
-    )
-    product = GradeProductExecutor(plan)
-    generator = torch.Generator(device=DEVICE).manual_seed(119)
-    left = torch.randn(2, 3, plan.left_layout.dim, dtype=torch.float64, generator=generator)
-    right = torch.randn(2, 4, plan.right_layout.dim, dtype=torch.float64, generator=generator)
-
-    actual = product.forward_pairwise_compact(left, right)
-    expected = _sparse_pairwise_product_reference(product, left, right)
-
-    assert not plan.pairwise_contract_left
-    assert product.pairwise_gather_positions.shape == (plan.right_layout.dim, plan.output_dim)
-    assert product.pairwise_coefficients.shape == product.pairwise_gather_positions.shape
-    assert product.pairwise_gather_positions.numel() < plan.left_layout.dim * plan.output_dim
-    assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
-
-
-@pytest.mark.parametrize(
-    "op,executor_type",
-    [
-        ("geometric_product", FullTableProductExecutor),
-        ("wedge", GradeProductExecutor),
-        ("symmetric_product", FullTableProductExecutor),
-        ("commutator_product", GradeProductExecutor),
-        ("anti_commutator_product", FullTableProductExecutor),
-    ],
-)
-def test_structural_product_policy_matches_small_oracle(op, executor_type):
-    context = AlgebraContext(4, 1, 0, device=DEVICE, dtype=torch.float64)
-    oracle = _oracle_for(context)
-    full_layout = context.layout()
-    generator = torch.Generator(device=DEVICE).manual_seed(199)
-    left = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
-    right = torch.randn(3, context.dim, dtype=torch.float64, generator=generator)
-
-    executor = context._planner.product_executor(
-        _compact_product_request(
-            context,
-            op=op,
-            left_layout=full_layout,
-            right_layout=full_layout,
-            output_layout=full_layout,
-        )
-    )
-    actual = getattr(context, _product_method_name(op))(left, right)
-    expected = oracle.product(left, right, op=op)
-
-    assert isinstance(executor, executor_type)
-    assert actual.shape[-1] == context.dim
-    assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
-
-
-def test_product_executor_policy_selects_sparse_for_pruned_full_layout_wedge():
-    context = AlgebraContext(6, 0, 0, device=DEVICE, dtype=torch.float64)
-    oracle = _oracle_for(context)
-    full_layout = context.layout()
-    generator = torch.Generator(device=DEVICE).manual_seed(1019)
-    left = torch.randn(2, context.dim, dtype=torch.float64, generator=generator)
-    right = torch.randn(2, context.dim, dtype=torch.float64, generator=generator)
-
-    decision = select_product_route(
-        context,
-        op="wedge",
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-    )
-    executor = context._planner.product_executor(
-        _compact_product_request(
-            context,
-            op="wedge",
-            left_layout=full_layout,
-            right_layout=full_layout,
-            output_layout=full_layout,
-        )
-    )
-
-    assert decision.route == "sparse"
-    assert isinstance(executor, GradeProductExecutor)
-    assert torch.allclose(context.wedge(left, right), oracle.product(left, right, op="wedge"), atol=1e-12, rtol=1e-12)
-
-
-def test_product_executor_policy_override_can_force_full_table_full_layout_wedge():
-    policy = PreferRoute("product", "full_table")
-    context = configured_algebra(6, 0, 0, device=DEVICE, dtype=torch.float64, planning_policy=policy)
-    full_layout = context.layout()
-
-    decision = select_product_route(
-        context,
-        op="wedge",
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-        dtype=torch.float64,
-        device=DEVICE,
-    )
-    executor = context._planner.product_executor(
-        _compact_product_request(
-            context,
-            op="wedge",
-            left_layout=full_layout,
-            right_layout=full_layout,
-            output_layout=full_layout,
-        )
-    )
-
-    assert decision.route == "full_table"
-    assert isinstance(executor, FullTableProductExecutor)
-
-
-def test_product_executor_policy_is_device_independent():
-    context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float32)
-    full_layout = context.layout()
-
-    cpu_decision = select_product_route(
-        context,
-        op="geometric_product",
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-        dtype=torch.float32,
-        device="cpu",
-    )
-    mps_decision = select_product_route(
-        context,
-        op="geometric_product",
-        left_layout=full_layout,
-        right_layout=full_layout,
-        output_layout=full_layout,
-        dtype=torch.float32,
-        device="mps",
-    )
-
-    assert cpu_decision.route == "full_table"
-    assert mps_decision.route == cpu_decision.route
-
-
-def test_direct_product_executor_obeys_static_pair_limits():
-    limits = ResourceLimits(warn_lanes=512, max_lanes=512, warn_pairs=512, max_pairs=64)
-    algebra = configured_algebra(16, 0, 0, device=DEVICE, dtype=torch.float32, resource_limits=limits)
-
+def test_product_resource_limit_rejects_structurally_oversized_route():
+    algebra = configured_algebra(16, resource_limits=ResourceLimits(max_pairs=64))
     with pytest.raises(ValueError, match="pair/interaction footprint"):
-        algebra.plan_product(
-            op="geometric_product", left=algebra.layout((1,)), right=algebra.layout((1,)), output=algebra.layout((0, 2))
-        )
+        algebra.plan_product(left=algebra.layout((1,)), right=algebra.layout((1,)), output=algebra.layout((0, 2)))
 
 
-from clifra.core._kernel.configuration import configured_algebra
+def test_layout_declaration_is_independent_of_route_limits():
+    limits = ResourceLimits(max_lanes=64, max_pairs=1_024)
+    algebra = configured_algebra(32, resource_limits=limits)
+    layout = algebra.layout((1, 2))
+    assert layout.dim > limits.max_lanes
+    with pytest.raises(ValueError, match="intermediate lanes"):
+        algebra.plan_unary(op="reverse", input=layout)
+
+
+@pytest.mark.parametrize("n", [32, 63])
+def test_high_dimensional_vector_product_uses_declared_grades(n):
+    algebra = configured_algebra(n, resource_limits=ResourceLimits(max_lanes=4_096, max_pairs=200_000))
+    vector, output = algebra.layout((1,)), algebra.layout((0, 2))
+    operation = algebra.plan_product(left=vector, right=vector, output=output)
+    assert operation._kernel.output_dim == 1 + n * (n - 1) // 2
+    assert operation._kernel.pair_count == n * n
+
+
+def test_product_reports_torch_bitmask_boundary():
+    algebra = configured_algebra(64, resource_limits=ResourceLimits(max_lanes=4_096, max_pairs=200_000))
+    with pytest.raises(ValueError, match="up to n=63"):
+        algebra.plan_product(left=algebra.layout((1,)), right=algebra.layout((1,)), output=algebra.layout((0, 2)))
+
+
+def test_selected_product_route_warns_near_limit():
+    limits = ResourceLimits(warn_pairs=128, max_pairs=4_096)
+    algebra = configured_algebra(10, 4, 2, resource_limits=limits)
+    vector = algebra.layout((1,))
+    with pytest.warns(RuntimeWarning):
+        algebra.plan_product(left=vector, right=vector)

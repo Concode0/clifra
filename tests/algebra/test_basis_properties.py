@@ -13,7 +13,6 @@ from hypothesis import strategies as st
 from clifra.core._kernel.basis import (
     basis_count_for_grades,
     basis_index_tuple_for_grades,
-    basis_indices_for_grades,
     expand_output_grades,
     geometric_product_output_grades,
     operation_coefficient,
@@ -130,7 +129,7 @@ def test_geometric_product_grade_bounds_for_high_dimensional_routes():
 
 def test_basis_tensorization_reports_int64_bitmask_boundary():
     with pytest.raises(ValueError, match="torch.long basis bitmasks"):
-        basis_indices_for_grades(64, (1,))
+        AlgebraSpec(64).layout((1,)).indices_tensor()
 
 
 def test_operation_coefficients_keep_wedge_as_exterior_product():

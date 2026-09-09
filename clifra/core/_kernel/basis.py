@@ -69,11 +69,6 @@ def basis_count_for_grades(n: int, grades: Iterable[int]) -> int:
     return sum(comb(n, grade) for grade in normalize_grades(grades, n))
 
 
-def basis_indices_for_grades(n: int, grades: Iterable[int], *, device=None) -> torch.Tensor:
-    """Return canonical bitmask basis indices as a tensor."""
-    return basis_indices_tensor(basis_index_tuple_for_grades(n, grades), n=n, device=device)
-
-
 def basis_indices_tensor(
     indices: Iterable[int],
     *,

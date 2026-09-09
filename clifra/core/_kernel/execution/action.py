@@ -10,15 +10,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from clifra.core._kernel.basis import operation_coefficient
-from clifra.core._kernel.contracts import _check_contract_spec, resolve_contract
+from clifra.core._kernel.contracts import _check_contract_spec
 from clifra.core._kernel.numerics import eps_like, signed_clamp_min
-from clifra.core._kernel.planning.action import (
-    _graded_action_plan_tensors,
-    _scalar_action_positions,
-    build_bivector_vector_generator_buffers,
-    build_full_sandwich_action_buffers,
-)
 from clifra.core.layout import GradeLayout
 from clifra.core.tensors import TensorContract
 
@@ -26,7 +19,14 @@ from clifra.core.tensors import TensorContract
 class GradedLinearActionExecutor(nn.Module):
     """Apply a vector-space map lifted to declared multivector grades."""
 
-    def __init__(self, *, input_layout: GradeLayout, output_layout: GradeLayout):
+    def __init__(
+        self,
+        *,
+        input_layout: GradeLayout,
+        output_layout: GradeLayout,
+        scalar_flat_positions: torch.Tensor,
+        grade_buffers: tuple[tuple[int, torch.Tensor, torch.Tensor, torch.Tensor], ...],
+    ):
         super().__init__()
         self.input_contract = TensorContract.compact(input_layout)
         self.output_contract = _check_contract_spec(
@@ -37,17 +37,10 @@ class GradedLinearActionExecutor(nn.Module):
         self.input_dim = input_layout.dim
         self.output_dim = output_layout.dim
         self.n = input_layout.spec.n
-        self.register_buffer(
-            "scalar_flat_positions", _scalar_action_positions(input_layout, output_layout), persistent=False
-        )
+        self.register_buffer("scalar_flat_positions", scalar_flat_positions, persistent=False)
         self._vector_only = input_layout.grades == output_layout.grades == (1,)
         self._grades = tuple(grade for grade in input_layout.grades if grade > 0 and grade in output_layout.grades)
-        for grade in () if self._vector_only else self._grades:
-            flat_positions, row_indices, col_indices = _graded_action_plan_tensors(
-                input_layout,
-                output_layout,
-                grade=grade,
-            )
+        for grade, flat_positions, row_indices, col_indices in grade_buffers:
             self.register_buffer(f"flat_positions_{grade}", flat_positions, persistent=False)
             self.register_buffer(f"row_indices_{grade}", row_indices, persistent=False)
             self.register_buffer(f"col_indices_{grade}", col_indices, persistent=False)
@@ -153,7 +146,14 @@ def _small_action_minors(matrices: torch.Tensor, rows: torch.Tensor, cols: torch
 class BivectorVectorGeneratorExecutor(nn.Module):
     """Build vector-space generators induced by grade-2 bivectors."""
 
-    def __init__(self, *, bivector_layout: GradeLayout, dtype: torch.dtype = torch.float32, device=None):
+    def __init__(
+        self,
+        *,
+        bivector_layout: GradeLayout,
+        lane_positions: torch.Tensor,
+        flat_positions: torch.Tensor,
+        coefficients: torch.Tensor,
+    ):
         super().__init__()
         self.bivector_contract = TensorContract.compact(bivector_layout)
         bivector_layout = self.bivector_contract.layout
@@ -161,9 +161,6 @@ class BivectorVectorGeneratorExecutor(nn.Module):
             raise ValueError(f"bivector_layout must contain grade 2 only, got {bivector_layout.grades}")
         self.bivector_layout = bivector_layout
         self.n = bivector_layout.spec.n
-        lane_positions, flat_positions, coefficients = build_bivector_vector_generator_buffers(
-            bivector_layout, dtype=dtype, device=device
-        )
         self.register_buffer("lane_positions", lane_positions, persistent=False)
         self.register_buffer("flat_positions", flat_positions, persistent=False)
         self.register_buffer("coefficients", coefficients, persistent=False)
@@ -192,8 +189,9 @@ class VersorVectorMatrixExecutor(nn.Module):
         grade: int,
         parameter_layout: GradeLayout,
         eps: float,
-        dtype: torch.dtype = torch.float32,
-        device=None,
+        generator: BivectorVectorGeneratorExecutor | None,
+        metric_signs: torch.Tensor,
+        eye: torch.Tensor,
     ):
         super().__init__()
         self.grade = int(grade)
@@ -203,30 +201,19 @@ class VersorVectorMatrixExecutor(nn.Module):
         self.n = parameter_layout.spec.n
         self.eps = float(eps)
         if self.grade == 2:
-            self.generator = BivectorVectorGeneratorExecutor(
-                bivector_layout=parameter_layout,
-                dtype=dtype,
-                device=device,
-            )
-            self.register_buffer("metric_signs", torch.empty(0, dtype=dtype, device=device), persistent=False)
-            self.register_buffer("eye", torch.empty(0, dtype=dtype, device=device), persistent=False)
+            if generator is None:
+                raise ValueError("grade-2 vector action requires a prepared generator")
+            self.generator = generator
+            self.register_buffer("metric_signs", metric_signs, persistent=False)
+            self.register_buffer("eye", eye, persistent=False)
         elif self.grade == 1:
             if parameter_layout.grades != (1,):
                 raise ValueError(f"parameter_layout must contain grade 1, got {parameter_layout.grades}")
+            if generator is not None:
+                raise ValueError("grade-1 vector action cannot use a bivector generator")
             self.generator = None
-            signs = [
-                operation_coefficient(
-                    index,
-                    index,
-                    parameter_layout.spec.p,
-                    parameter_layout.spec.q,
-                    parameter_layout.spec.r,
-                    "geometric_product",
-                )
-                for index in parameter_layout.basis_indices
-            ]
-            self.register_buffer("metric_signs", torch.tensor(signs, dtype=dtype, device=device), persistent=False)
-            self.register_buffer("eye", torch.eye(self.n, dtype=dtype, device=device), persistent=False)
+            self.register_buffer("metric_signs", metric_signs, persistent=False)
+            self.register_buffer("eye", eye, persistent=False)
         else:
             raise ValueError("planned versor execution currently supports grade=1 and grade=2")
 
@@ -280,24 +267,6 @@ class FullSandwichActionExecutor(nn.Module):
         self.register_buffer("left_sign_t", left_sign_t, persistent=False)
         self.register_buffer("geometric_product_sign_t", geometric_product_sign_t, persistent=False)
 
-    @classmethod
-    def from_layout(cls, layout: GradeLayout, *, device=None, dtype: torch.dtype = torch.float32):
-        """Build full-layout sandwich action buffers from algebra metadata."""
-        cayley_indices, left_sign_t, geometric_product_sign_t = build_full_sandwich_action_buffers(
-            layout, device=device, dtype=dtype
-        )
-        return cls(
-            layout=layout,
-            cayley_indices=cayley_indices,
-            left_sign_t=left_sign_t,
-            geometric_product_sign_t=geometric_product_sign_t,
-        )
-
-    def action_matrices(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-        """Return matrices ``M[..., k, j]`` such that ``output[..., k] = M @ x``."""
-        self._check_factors(left, right)
-        return self.action_matrices_unchecked(left, right)
-
     def action_matrices_unchecked(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return sandwich coefficients with broadcast factor batch dimensions."""
         indices = self.cayley_indices.reshape(-1)
@@ -339,7 +308,6 @@ class VersorActionExecutor(nn.Module):
 
     def __init__(
         self,
-        algebra,
         *,
         grade: int,
         input_layout: GradeLayout,
@@ -347,11 +315,21 @@ class VersorActionExecutor(nn.Module):
         parameter_layout: GradeLayout,
         route: str,
         components: ActionComponents,
+        action: GradedLinearActionExecutor | None,
+        vector_matrix: VersorVectorMatrixExecutor | None,
+        full_action: FullSandwichActionExecutor | None,
+        rotor_full_indices: torch.Tensor,
+        parameter_full_indices: torch.Tensor,
+        eps_sq: float,
     ):
         super().__init__()
-        self.input_contract = resolve_contract(algebra, layout=input_layout, name="input_layout")
-        self.output_contract = resolve_contract(algebra, layout=output_layout, name="output_layout")
-        self.parameter_contract = resolve_contract(algebra, layout=parameter_layout, name="parameter_layout")
+        self.input_contract = TensorContract.compact(input_layout)
+        self.output_contract = _check_contract_spec(
+            self.input_contract.spec, TensorContract.compact(output_layout), "output_layout"
+        )
+        self.parameter_contract = _check_contract_spec(
+            self.input_contract.spec, TensorContract.compact(parameter_layout), "parameter_layout"
+        )
         self.input_layout = self.input_contract.layout
         self.output_layout = self.output_contract.layout
         self.parameter_layout = self.parameter_contract.layout
@@ -364,37 +342,14 @@ class VersorActionExecutor(nn.Module):
             raise ValueError(f"unsupported {self.action_name} action execution path {self.route!r}")
         self.use_full_action = self.route == "full_action_matrix"
         self.use_rotor_product_action = self.route == "rotor_product"
-        self.action = None
-        self.vector_matrix = None
+        self.action = action
+        self.vector_matrix = vector_matrix
         self.left_product = None
         self.right_product = None
         self.middle_layout = None
-        self.full_action = (
-            FullSandwichActionExecutor.from_layout(
-                self.input_layout,
-                device=getattr(algebra, "device", None),
-                dtype=getattr(algebra, "dtype", torch.float32),
-            )
-            if self.use_full_action
-            else None
-        )
-        if not self.use_full_action and not self.use_rotor_product_action:
-            self.action = GradedLinearActionExecutor(
-                input_layout=self.input_layout,
-                output_layout=self.output_layout,
-            ).to(device=algebra.device)
-            self.vector_matrix = VersorVectorMatrixExecutor(
-                grade=self.grade,
-                parameter_layout=self.parameter_layout,
-                eps=algebra.eps_sq,
-                dtype=getattr(algebra, "dtype", torch.float32),
-                device=getattr(algebra, "device", None),
-            )
-        self._configure_components(algebra, components)
-
-    def _configure_components(self, algebra, components):
-        self.full_dim = int(algebra.dim)
-        self.eps_sq = float(algebra.eps_sq)
+        self.full_action = full_action
+        self.full_dim = input_layout.spec.dim
+        self.eps_sq = float(eps_sq)
         self.rotor_layout = components.rotor_layout
         self.middle_layout = components.middle_layout
         self.bivector_exp = components.exponential
@@ -404,18 +359,8 @@ class VersorActionExecutor(nn.Module):
         self.input_involution = components.involution
         self.left_product = components.left_product
         self.right_product = components.right_product
-        self.register_buffer(
-            "rotor_full_indices",
-            _layout_indices(self.rotor_layout, device=algebra.device)
-            if self.rotor_layout is not None
-            else torch.empty(0, dtype=torch.long, device=algebra.device),
-            persistent=False,
-        )
-        self.register_buffer(
-            "parameter_full_indices",
-            _layout_indices(self.parameter_layout, device=algebra.device),
-            persistent=False,
-        )
+        self.register_buffer("rotor_full_indices", rotor_full_indices, persistent=False)
+        self.register_buffer("parameter_full_indices", parameter_full_indices, persistent=False)
 
     def _planned_full_versor_factors(self, weights: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.grade == 2:
@@ -457,10 +402,6 @@ class VersorActionExecutor(nn.Module):
             return self.right_product(middle, right)
         matrix = self.vector_matrix.execute(weights)
         return self.action.execute(values, matrix)
-
-
-def _layout_indices(layout: GradeLayout, *, device=None) -> torch.Tensor:
-    return torch.tensor(layout.basis_indices, dtype=torch.long, device=device)
 
 
 def _materialize_full_from_indices(values: torch.Tensor, indices: torch.Tensor, dim: int) -> torch.Tensor:

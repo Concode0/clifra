@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Iterable, Protocol, runtime_checkable
 
 import torch
@@ -51,13 +52,19 @@ class AlgebraSpec:
     r: int = 0
 
     def __post_init__(self) -> None:
+        counts = (self.p, self.q, self.r)
+        if any(isinstance(value, bool) or not isinstance(value, Integral) for value in counts):
+            raise TypeError("signature counts must be non-boolean integers")
+        object.__setattr__(self, "p", int(self.p))
+        object.__setattr__(self, "q", int(self.q))
+        object.__setattr__(self, "r", int(self.r))
         if self.p < 0 or self.q < 0 or self.r < 0:
             raise ValueError(f"signature counts must be non-negative, got Cl({self.p},{self.q},{self.r})")
 
     @classmethod
     def from_algebra(cls, algebra) -> "AlgebraSpec":
         """Build a spec from any algebra-like object with ``p``, ``q``, and ``r`` attributes."""
-        return cls(int(algebra.p), int(algebra.q), int(algebra.r))
+        return cls(algebra.p, algebra.q, algebra.r)
 
     @property
     def n(self) -> int:

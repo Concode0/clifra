@@ -18,16 +18,12 @@ import torch
 import torch.nn as nn
 
 from clifra.core._kernel.basis import build_bivector_squared_signs
-from clifra.core._kernel.composition import full_versor_factors
+from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.device import resolve_dtype
-from clifra.core._kernel.execution.action import FullSandwichActionExecutor
 from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core.algebra import AlgebraContext
-from clifra.core.config import make_algebra
-from clifra.core.layout import AlgebraSpec
 from clifra.core.module import CliffordModule
 
-from .._resources import check_matrix_budget
 from .neighborhood import NeighborhoodBivectorAnalyzer
 
 __all__ = ["SignatureProbeAnalyzer", "SignatureProbeResult"]
@@ -103,11 +99,15 @@ class _ProbeRotor(CliffordModule):
         self.channels = channels
         self.parameter_layout = algebra.layout((2,))
         self.full_layout = algebra.layout()
-        self.action = FullSandwichActionExecutor.from_layout(
-            self.full_layout,
-            device=algebra.device,
-            dtype=algebra.dtype,
+        self.rotor_layout = algebra.layout(range(0, algebra.n + 1, 2))
+        self.action = algebra.plan_sandwich_action(
+            left=self.rotor_layout,
+            input=self.full_layout,
+            right=self.rotor_layout,
+            output=self.full_layout,
         )
+        self.exponential = algebra.plan_bivector_exp(input=self.parameter_layout, output=self.rotor_layout)
+        self.reverse = algebra.plan_unary(op="reverse", input=self.rotor_layout, output=self.rotor_layout)
         self.bivector_parameters = nn.Parameter(torch.empty(channels, self.parameter_layout.dim))
         self.reset_parameters()
 
@@ -115,12 +115,8 @@ class _ProbeRotor(CliffordModule):
         nn.init.normal_(self.bivector_parameters, std=_SIGNATURE_PROBE_ROTOR_INIT_STD)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        left, right = full_versor_factors(
-            self.algebra,
-            self.bivector_parameters.to(device=x.device, dtype=x.dtype),
-            grade=2,
-            parameter_layout=self.parameter_layout,
-        )
+        left = self.exponential(-0.5 * self.bivector_parameters.to(device=x.device, dtype=x.dtype))
+        right = self.reverse(left)
         return self.action(left, x, right)
 
     def parameter_l1_penalty(self) -> torch.Tensor:
@@ -294,22 +290,18 @@ class SignatureProbeAnalyzer:
         data = data.to(device=self.device, dtype=self.dtype)
         N, X = data.shape
 
-        spec = AlgebraSpec(X + 1, 1, 0)
-        action_budget = check_matrix_budget(
-            role="signature_probe",
-            matrix_dim=spec.dim,
-            limits=_PROBE_LIMITS,
-            matrix_kind="action",
-            dtype=data.dtype,
-        )
-        if not action_budget:
-            raise ValueError(f"signature probe action matrix exceeds resource limits: {dict(action_budget.details)}")
-
         half_radius_squared = 0.5 * (data**2).sum(dim=-1, keepdim=True)
         ones = torch.ones(N, 1, device=self.device, dtype=data.dtype)
         lifted = torch.cat([data, half_radius_squared, ones], dim=-1)
 
-        algebra = make_algebra(X + 1, 1, 0, device=self.device, dtype=data.dtype)
+        algebra = configured_algebra(
+            X + 1,
+            1,
+            0,
+            device=self.device,
+            dtype=data.dtype,
+            resource_limits=_PROBE_LIMITS,
+        )
         mv = algebra.layout((1,)).full(lifted)
         mv = mv.unsqueeze(1)
         return mv, algebra

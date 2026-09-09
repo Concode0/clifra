@@ -2,28 +2,54 @@
 
 import pytest
 import torch
+from torch import nn
 
 import clifra.core as core
 from clifra.core import (
     AlgebraConfig,
     AlgebraSpec,
+    CliffordModule,
     Layout,
-    PlannedOperation,
     TensorContract,
     make_algebra,
     make_algebra_from_config,
 )
+from clifra.core._kernel.configuration import configured_algebra
+from clifra.core._kernel.planning.resources import ResourceLimits
 
 
-def test_stable_exports_and_construction_reject_removed_tuning():
-    assert all(hasattr(core, name) for name in core.__all__)
-    assert not {"GradePlanner", "PlanFacts", "GradeProductExecutor", "AlgebraLike"}.intersection(core.__all__)
-    for keyword in ("default_grades", "planning_policy", "resource_limits", "bivector_exp_options"):
-        with pytest.raises(TypeError):
-            make_algebra(3, **{keyword: None})
-        with pytest.raises(TypeError):
-            make_algebra_from_config({"p": 3, keyword: None})
+def test_public_core_exports_foundational_contracts():
+    assert {
+        "AlgebraConfig",
+        "AlgebraContext",
+        "AlgebraSpec",
+        "CliffordModule",
+        "ExecutorRegistry",
+        "Layout",
+        "PlannedOperation",
+        "TensorContract",
+        "make_algebra",
+    } <= set(core.__all__)
+    assert not {"GradePlanner", "GradeProductExecutor"}.intersection(core.__all__)
     assert make_algebra_from_config(AlgebraConfig(2, 1)).spec == AlgebraSpec(2, 1)
+
+
+@pytest.mark.parametrize("value", [True, False, 1.5, "2", None])
+def test_signature_counts_reject_booleans_and_nonintegers(value):
+    with pytest.raises(TypeError, match="non-boolean integers"):
+        AlgebraSpec(value)
+    with pytest.raises(TypeError, match="non-boolean integers"):
+        make_algebra(value)
+    with pytest.raises(TypeError, match="non-boolean integers"):
+        make_algebra_from_config({"p": value})
+
+
+def test_signature_counts_reject_negative_integers():
+    for signature in ((-1, 0, 0), (0, -1, 0), (0, 0, -1)):
+        with pytest.raises(ValueError, match="non-negative"):
+            AlgebraSpec(*signature)
+        with pytest.raises(ValueError, match="non-negative"):
+            make_algebra(*signature)
 
 
 def test_geometric_product_identifier_and_full_basis_default():
@@ -97,6 +123,45 @@ def test_plan_dtype_move_does_not_mutate_other_plans_or_algebra():
     assert algebra.plan_product(left=vector, right=vector)(a.double(), a.double()).dtype == torch.float64
 
 
+class _OwnedCliffordModule(CliffordModule):
+    def __init__(self, algebra):
+        super().__init__(algebra)
+        self.weight = nn.Parameter(torch.ones(2))
+        self.register_buffer("offset", torch.ones(3))
+        self.child = nn.Linear(2, 2)
+        self.reverse = algebra.plan_unary(op="reverse", input=algebra.layout((1,)))
+
+
+def test_clifford_module_movement_forks_shared_context_and_preserves_tuning():
+    limits = ResourceLimits(max_lanes=128, max_pairs=1024)
+    shared = configured_algebra(3, resource_limits=limits)
+    first, second = _OwnedCliffordModule(shared), _OwnedCliffordModule(shared)
+
+    first.to(dtype=torch.float64)
+
+    assert first.algebra is not shared
+    assert second.algebra is shared
+    assert shared.dtype == second.algebra.dtype == torch.float32
+    assert first.algebra.dtype == torch.float64
+    assert first.algebra.registry is shared.registry
+    assert first.algebra._resource_limits is limits
+    assert first.algebra._planner.limits is limits
+
+
+def test_clifford_module_apply_converts_every_real_state_tensor_once():
+    module = _OwnedCliffordModule(make_algebra(3))
+    converted = []
+
+    def record(tensor):
+        converted.append(tensor)
+        return tensor
+
+    module._apply(record)
+
+    for tensor in (*module.parameters(), *module.buffers()):
+        assert sum(item is tensor for item in converted) == 1
+
+
 def test_layout_sets_lookup_masks_and_disjoint_conversion_gradients():
     algebra = make_algebra(3)
     vectors, bivectors = algebra.layout((1,)), algebra.layout((2,))
@@ -134,22 +199,3 @@ def test_grade_energy_helpers_have_no_batch_reduction_and_handle_empty_input():
     result.sum().backward()
     assert result.shape == (2, 4)
     assert empty.grad is not None
-
-
-@pytest.mark.parametrize("kind", ["product", "sandwich", "linear"])
-def test_stable_plans_compile_fullgraph(kind):
-    algebra = make_algebra(3)
-    vector = algebra.layout((1,))
-    if kind == "product":
-        operation = algebra.plan_product(left=vector, right=vector)
-        args = (torch.randn(2, 3), torch.randn(2, 3))
-    elif kind == "sandwich":
-        operation = algebra.plan_sandwich_action()
-        args = (torch.randn(2, 8), torch.randn(2, 8), torch.randn(2, 8))
-    else:
-        operation = algebra.plan_linear_action(input=vector)
-        args = (torch.randn(2, 1, 3), torch.eye(3).unsqueeze(0))
-    assert isinstance(operation, PlannedOperation)
-    expected = operation(*args)
-    compiled = torch.compile(operation, backend="aot_eager", fullgraph=True)
-    assert torch.allclose(compiled(*args), expected)

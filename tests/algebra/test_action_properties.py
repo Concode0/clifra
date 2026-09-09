@@ -51,15 +51,16 @@ def test_full_sandwich_execution_modes_match_independent_products(signature, dat
         batch_right.unsqueeze(-2),
     )
     expected_channels = oracle.product(oracle.product(channel_left, values), channel_right)
+    action = algebra.plan_sandwich_action()
 
     assert torch.allclose(
-        action_helpers.sandwich_product(algebra, batch_left, values, batch_right),
+        action(batch_left.unsqueeze(-2), values, batch_right.unsqueeze(-2)),
         expected_batch,
         atol=1e-10,
         rtol=1e-10,
     )
     assert torch.allclose(
-        action_helpers.per_channel_sandwich(algebra, channel_left, values, channel_right),
+        action(channel_left, values, channel_right),
         expected_channels,
         atol=1e-10,
         rtol=1e-10,
@@ -119,7 +120,7 @@ def test_composed_independent_rotors_match_oracle_products(signature, data):
     values = data.draw(tensor_with_shape((1, channels, layout.dim)))
     left_weights = 0.1 * data.draw(tensor_with_shape((pairs, parameter_layout.dim)))
     right_weights = 0.1 * data.draw(tensor_with_shape((pairs, parameter_layout.dim)))
-    channel_to_pair = torch.tensor([index % pairs for index in range(channels)], dtype=torch.long)
+    assignment = torch.tensor([index % pairs for index in range(channels)], dtype=torch.long)
     action = algebra.plan_sandwich_action(left=layout, input=layout, right=layout, output=layout)
     left = rotor_layout.full(algebra.bivector_exp(-0.5 * left_weights, input=parameter_layout, output=rotor_layout))
     right = oracle.reverse(
@@ -127,15 +128,14 @@ def test_composed_independent_rotors_match_oracle_products(signature, data):
     )
     expected = torch.stack(
         [
-            oracle.product(oracle.product(left[channel_to_pair[c]], values[:, c]), right[channel_to_pair[c]])
+            oracle.product(oracle.product(left[assignment[c]], values[:, c]), right[assignment[c]])
             for c in range(channels)
         ],
         dim=1,
     )
 
-    actual = action(left[channel_to_pair], values, right[channel_to_pair])
+    actual = action(left[assignment], values, right[assignment])
     assert torch.allclose(actual, expected, atol=1e-9, rtol=1e-9)
 
 
 from clifra.core._kernel.configuration import configured_algebra
-from tests.helpers import action as action_helpers

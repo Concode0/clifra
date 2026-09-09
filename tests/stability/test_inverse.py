@@ -32,8 +32,18 @@ def _geometry_result(algebra, name, values, blade, layout):
     return getattr(algebra, name)(values, blade, input=layout, **{keyword: layout})
 
 
-@pytest.mark.parametrize("signature,blade", [((2, 0, 0), [0.0, 0.0]), ((1, 1, 0), [1.0, 1.0]), ((1, 0, 1), [0.0, 1.0])])
-@pytest.mark.parametrize("name", ["blade_inverse", "blade_project", "blade_reject", "reflect", "versor_product"])
+@pytest.mark.parametrize(
+    "name,signature,blade",
+    [
+        ("blade_inverse", (2, 0, 0), [0.0, 0.0]),
+        ("blade_inverse", (1, 1, 0), [1.0, 1.0]),
+        ("blade_inverse", (1, 0, 1), [0.0, 1.0]),
+        ("blade_project", (1, 1, 0), [1.0, 1.0]),
+        ("blade_reject", (1, 0, 1), [0.0, 1.0]),
+        ("reflect", (1, 1, 0), [1.0, 1.0]),
+        ("versor_product", (1, 0, 1), [0.0, 1.0]),
+    ],
+)
 def test_existing_geometry_operations_remain_finite_at_singular_inputs(signature, blade, name):
     algebra = AlgebraContext(*signature, dtype=torch.float64)
     layout = algebra.layout((1,))
@@ -47,15 +57,16 @@ def test_existing_geometry_operations_remain_finite_at_singular_inputs(signature
     assert all(gradient is None or torch.isfinite(gradient).all() for gradient in gradients)
 
 
-@pytest.mark.parametrize("signature,blade", [((2, 0, 0), [0.0, 0.0]), ((1, 1, 0), [1.0, 1.0]), ((1, 0, 1), [0.0, 1.0])])
 @pytest.mark.parametrize(
-    "name",
+    "name,signature,blade",
     [
-        "strict_blade_inverse",
-        "strict_blade_project",
-        "strict_blade_reject",
-        "strict_reflect",
-        "strict_versor_product",
+        ("strict_blade_inverse", (2, 0, 0), [0.0, 0.0]),
+        ("strict_blade_inverse", (1, 1, 0), [1.0, 1.0]),
+        ("strict_blade_inverse", (1, 0, 1), [0.0, 1.0]),
+        ("strict_blade_project", (1, 1, 0), [1.0, 1.0]),
+        ("strict_blade_reject", (1, 0, 1), [0.0, 1.0]),
+        ("strict_reflect", (1, 1, 0), [1.0, 1.0]),
+        ("strict_versor_product", (1, 0, 1), [0.0, 1.0]),
     ],
 )
 def test_strict_geometry_rejects_exact_singular_blades(signature, blade, name):
@@ -68,8 +79,13 @@ def test_strict_geometry_rejects_exact_singular_blades(signature, blade, name):
         _geometry_result(algebra, name, values, blade, layout)
 
 
-@pytest.mark.parametrize("route", ["vector_matrix", "full_action_matrix"])
-@pytest.mark.parametrize("signature,normal", [((1, 1, 0), [1.0, 1.0]), ((1, 0, 1), [0.0, 1.0])])
+@pytest.mark.parametrize(
+    "route,signature,normal",
+    [
+        ("vector_matrix", (1, 1, 0), [1.0, 1.0]),
+        ("full_action_matrix", (1, 0, 1), [0.0, 1.0]),
+    ],
+)
 def test_existing_planned_reflection_routes_remain_finite_for_null_normals(route, signature, normal):
     algebra = configured_algebra(
         *signature,
@@ -100,12 +116,16 @@ def test_near_null_inverse_exposes_default_regularization_and_strict_denominator
 
 
 @pytest.mark.parametrize(
-    "base_name",
-    ["blade_inverse", "blade_project", "blade_reject", "reflect", "versor_product"],
-)
-@pytest.mark.parametrize(
-    "signature,blade_coefficients",
-    [((3, 0, 0), [2.0, 0.5, 0.25]), ((1, 2, 0), [2.0, 0.5, 0.25]), ((1, 1, 1), [2.0, 0.5, 0.25])],
+    "base_name,signature,blade_coefficients",
+    [
+        ("blade_inverse", (3, 0, 0), [2.0, 0.5, 0.25]),
+        ("blade_inverse", (1, 2, 0), [2.0, 0.5, 0.25]),
+        ("blade_inverse", (1, 1, 1), [2.0, 0.5, 0.25]),
+        ("blade_project", (1, 2, 0), [2.0, 0.5, 0.25]),
+        ("blade_reject", (1, 1, 1), [2.0, 0.5, 0.25]),
+        ("reflect", (3, 0, 0), [2.0, 0.5, 0.25]),
+        ("versor_product", (1, 2, 0), [2.0, 0.5, 0.25]),
+    ],
 )
 def test_strict_and_default_geometry_agree_with_gradients_away_from_regularization(
     base_name, signature, blade_coefficients

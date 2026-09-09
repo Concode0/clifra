@@ -61,19 +61,3 @@ def algebra_minkowski():
 @pytest.fixture
 def algebra_conformal():
     return AlgebraContext(p=4, q=1, device=DEVICE)
-
-
-# -- Module-scoped (used by test_geodesic.py - exact name match) ----------
-@pytest.fixture(scope="module")
-def alg2():
-    return AlgebraContext(p=2, q=0, device=DEVICE)
-
-
-@pytest.fixture(scope="module")
-def alg3():
-    return AlgebraContext(p=3, q=0, device=DEVICE)
-
-
-@pytest.fixture(scope="module")
-def alg31():
-    return AlgebraContext(p=3, q=1, device=DEVICE)

@@ -1,120 +1,92 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+"""Bivector-exponential capability, policy, and resource boundaries."""
+
 import pytest
 import torch
 
+from clifra.core import AlgebraContext, AlgebraSpec
 from clifra.core._kernel.basis import build_bivector_squared_signs
-from clifra.core._kernel.configuration import configured_algebra
-from clifra.core._kernel.planning.exp import (
-    assess_bivector_exp_routes,
-    select_bivector_exp_executor_family,
-    select_bivector_exp_route,
-    taylor_layouts,
-)
-from clifra.core._kernel.planning.resources import ResourceLimits
-from clifra.core.algebra import AlgebraContext
-from clifra.core.layout import AlgebraSpec
+from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY
+from clifra.core._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS, ResourceLimits
+from clifra.core._kernel.providers import builtin_providers, exp_execution_request
+from clifra.core._kernel.routing import ExecutorRouter
+from clifra.core.executors import Rejected
 from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
 from tests.helpers.policy import PreferRoute
+from tests.helpers.small_oracle import SmallCliffordOracle
 
-pytestmark = pytest.mark.unit
+
+def _select(spec, device="cpu", *, dtype=torch.float32, output=None, policy=None, limits=None):
+    request = exp_execution_request(spec, device, dtype, output)
+    return ExecutorRouter(builtin_providers()).select(
+        request,
+        DEFAULT_PLANNING_POLICY if policy is None else policy,
+        DEFAULT_RESOURCE_LIMITS if limits is None else limits,
+    )
 
 
 @pytest.mark.parametrize("signature", [(3, 0, 0), (0, 3, 0), (2, 1, 1), (0, 0, 3)])
 def test_bivector_square_preparation_matches_independent_products(signature):
-    from tests.helpers.small_oracle import SmallCliffordOracle
-
     spec = AlgebraSpec(*signature)
     layout = spec.layout((2,))
     basis = layout.full(torch.eye(layout.dim, dtype=torch.float64))
     expected = SmallCliffordOracle(*signature).product(basis, basis)[..., 0]
-    actual = build_bivector_squared_signs(layout, dtype=torch.float64, device="cpu")
-    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(build_bivector_squared_signs(layout, dtype=torch.float64, device="cpu"), expected)
 
 
-@pytest.mark.parametrize(
-    "n,device",
-    [
-        (3, "cpu"),
-        (5, "mps"),
-    ],
-)
-def test_closed_exp_route_is_preferred_throughout_its_domain(n, device):
-    assert select_bivector_exp_executor_family(AlgebraSpec(n), device) == "closed"
+def test_closed_route_is_preferred_throughout_its_domain():
+    for n in range(2, 6):
+        assert _select(AlgebraSpec(n)).route == "closed"
 
 
-@pytest.mark.parametrize("n", [6, 8, 12])
-def test_general_exp_default_is_device_independent(n):
-    routes = {select_bivector_exp_executor_family(AlgebraSpec(n), device) for device in ("cpu", "mps", "cuda")}
-    assert len(routes) == 1
-    assert routes <= {"taylor", "left_matrix_exp"}
+def test_general_default_policy_is_device_independent():
+    for n in (6, 8, 12):
+        routes = {_select(AlgebraSpec(n), device).route for device in ("cpu", "mps", "cuda")}
+        assert len(routes) == 1
 
 
-def test_exp_rejects_dimension_before_product_allocation():
-    with pytest.raises(ValueError, match="materialized_exp_requires_n_2_through_12"):
-        select_bivector_exp_executor_family(AlgebraSpec(13), "cpu")
-
-
-def test_exp_respects_intermediate_resource_limit():
-    a = configured_algebra(8, resource_limits=ResourceLimits(max_pairs=1000))
-    with pytest.raises(ValueError, match="pair/interaction footprint"):
-        a._planner.bivector_exp_executor(input_layout=a.layout((2,)), output_layout=a.layout((0,)))
-
-
-def test_exp_cache_and_contracts():
-    a = AlgebraContext(7)
-    kwargs = dict(input_layout=a.layout((2,)), output_layout=a.layout((0, 2)))
-    f = a._planner.bivector_exp_executor(**kwargs)
-    assert a._planner.bivector_exp_executor(**kwargs) is f
-    assert f.input_contract.layout == kwargs["input_layout"]
-    assert f.output_contract.layout == kwargs["output_layout"]
-    with pytest.raises(ValueError):
-        f(torch.zeros(3))
-
-
-def test_taylor_layouts_keep_return_paths():
-    spec = AlgebraSpec(8)
-    layouts = taylor_layouts(spec, spec.layout((0,)), 12)
-    assert layouts[0].grades == (0,)
-    assert layouts[-1].grades == (0,)
-    assert layouts[-2].grades == (0, 2)
-    assert layouts[6].grades == (0, 2, 4, 6, 8)
-
-
-def test_taylor_reuses_repeated_product_modules():
-    a = configured_algebra(7, planning_policy=PreferRoute("bivector_exp", "taylor"))
-    f = a._planner.bivector_exp_executor(input_layout=a.layout((2,)), output_layout=a.layout((0,)))
-    products = list(f.polynomial.products)
-    assert len({id(x) for x in products}) < len(products)
+def test_capability_domain_is_independent_of_default_policy():
+    for n in range(2, 13):
+        spec = AlgebraSpec(n)
+        request = exp_execution_request(spec, "cpu", torch.float32, spec.layout((0,)))
+        accepted = {
+            provider.identity[1]
+            for provider in builtin_providers()
+            if provider.identity[0] == "bivector_exp" and not isinstance(provider.assess(request), Rejected)
+        }
+        assert accepted == ({"closed", "taylor", "left_matrix_exp"} if n <= 5 else {"taylor", "left_matrix_exp"})
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_general_exp_rejects_unvalidated_low_precision(dtype):
+def test_general_routes_reject_unvalidated_low_precision(dtype):
     with pytest.raises(ValueError, match="float32_or_float64"):
-        select_bivector_exp_executor_family(AlgebraSpec(7), "cpu", dtype=dtype)
+        _select(AlgebraSpec(7), dtype=dtype)
 
 
-@pytest.mark.parametrize("n", [2, 3, 4, 5, 6, 7, 8, 9, 12])
-@pytest.mark.parametrize("device", ["cpu", "mps", "cuda"])
-def test_exp_capability_is_independent_of_default_crossover(n, device):
-    spec = AlgebraSpec(n)
-    routes = assess_bivector_exp_routes(spec, device, dtype=torch.float32, output_layout=spec.layout((0,)))
-    accepted = {candidate.route for candidate in routes if candidate.unavailable_reason is None}
-    assert accepted == ({"closed", "taylor", "left_matrix_exp"} if n <= 5 else {"taylor", "left_matrix_exp"})
+def test_dimension_and_resource_limits_reject_before_construction():
+    with pytest.raises(ValueError, match="materialized_exp_requires_n_2_through_12"):
+        _select(AlgebraSpec(13))
+    algebra = AlgebraContext(8)
+    with pytest.raises(ValueError, match="pair/interaction footprint"):
+        _select(
+            algebra.spec,
+            output=algebra.layout((0,)),
+            limits=ResourceLimits(max_pairs=1_000),
+        )
 
 
-@pytest.mark.parametrize(
-    "n,route", [(3, "taylor"), (4, "left_matrix_exp"), (5, "taylor"), (7, "left_matrix_exp"), (8, "left_matrix_exp")]
-)
-def test_nondefault_exp_routes_execute_overlapping_contracts(n, route):
-    a = configured_algebra(n, dtype=torch.float64, planning_policy=PreferRoute("bivector_exp", route))
-    layout, output = a.layout((2,)), a.layout((0, 2))
-    f = a._planner.bivector_exp_executor(input_layout=layout, output_layout=output)
-    assert f.route == route
+@pytest.mark.parametrize("n,route", [(3, "taylor"), (4, "left_matrix_exp"), (7, "left_matrix_exp")])
+def test_nondefault_routes_match_reference_and_gradients(n, route):
+    from clifra.core._kernel.configuration import configured_algebra
+
+    algebra = configured_algebra(n, dtype=torch.float64, planning_policy=PreferRoute("bivector_exp", route))
+    layout, output = algebra.layout((2,)), algebra.layout((0, 2))
+    operation = algebra.plan_bivector_exp(input=layout, output=output)
     values = (torch.randn(1, layout.dim, dtype=torch.float64) * 0.1).requires_grad_()
-    actual = f(values)
-    expected = bivector_exp_cpu_reference(a, values, input_layout=layout, output_layout=output)
+    actual = operation(values)
+    expected = bivector_exp_cpu_reference(algebra, values, input_layout=layout, output_layout=output)
     torch.testing.assert_close(actual, expected, atol=2e-12, rtol=2e-12)
     torch.testing.assert_close(
         torch.autograd.grad(actual.sum(), values)[0],
@@ -124,33 +96,18 @@ def test_nondefault_exp_routes_execute_overlapping_contracts(n, route):
     )
 
 
-def test_matrix_column_materialization_is_guarded_before_allocation(monkeypatch):
-    policy = PreferRoute("bivector_exp", "left_matrix_exp")
+def test_matrix_route_resource_rejection_falls_back_before_build():
     spec = AlgebraSpec(10)
-    candidates = assess_bivector_exp_routes(spec, "cpu", dtype=torch.float64, output_layout=spec.layout((0,)))
-    matrix = next(candidate for candidate in candidates if candidate.route == "left_matrix_exp")
-    assert matrix.unavailable_reason is None
-    assert matrix.resources.pairs == 45 * 512 * 512
-    assert matrix.resources.rejection_reason(ResourceLimits()) is not None
-
-    def fail(*args, **kwargs):
-        raise AssertionError("route selection must not allocate execution tensors")
-
-    with monkeypatch.context() as check:
-        for name in ("zeros", "ones", "eye", "tensor", "empty", "arange"):
-            check.setattr(torch, name, fail)
-        assert select_bivector_exp_executor_family(spec, "cpu", planning_policy=policy) == "taylor"
-        decision = select_bivector_exp_route(
-            spec,
-            "cpu",
-            dtype=torch.float64,
-            output_layout=spec.layout((0,)),
-            policy=policy,
-            limits=ResourceLimits(max_pairs=12_000_000),
-        )
-        assert decision.route == "left_matrix_exp"
+    request = exp_execution_request(spec, "cpu", torch.float64, spec.layout((0,)))
+    providers = builtin_providers()
+    selection = ExecutorRouter(providers).select(
+        request,
+        PreferRoute("bivector_exp", "left_matrix_exp"),
+        DEFAULT_RESOURCE_LIMITS,
+    )
+    assert selection.route == "taylor"
 
 
-def test_mps_float64_output_is_a_capability_rejection():
+def test_mps_float64_is_capability_rejection():
     with pytest.raises(ValueError, match="mps_does_not_support_float64_output"):
-        select_bivector_exp_executor_family(AlgebraSpec(6), "mps", dtype=torch.float64)
+        _select(AlgebraSpec(6), "mps", dtype=torch.float64)

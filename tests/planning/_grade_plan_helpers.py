@@ -1,90 +1,46 @@
-# clifra (C) 2026 Eunkyum Kim
-# SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: F401
+"""Small helpers for exercising real planned action and product paths."""
 
-import pytest
 import torch
 
-from clifra.core._kernel.basis import (
-    basis_indices_for_grades,
-    expand_output_grades,
-)
-from clifra.core._kernel.execution.action import (
-    FullSandwichActionExecutor,
-    GradedLinearActionExecutor,
-)
-from clifra.core._kernel.execution.metric import SignatureNormSquaredExecutor
-from clifra.core._kernel.execution.permutation import PseudoscalarProductExecutor
-from clifra.core._kernel.execution.product import FullTableProductExecutor, GradeProductExecutor
-from clifra.core._kernel.planning.planner import GradePlanner
-from clifra.core._kernel.planning.product import build_grade_product_plan, select_product_route
-from clifra.core._kernel.planning.resources import ResourceLimits
-from clifra.core._kernel.planning.tree import build_grade_plan_tree
-from clifra.core.algebra import AlgebraContext
-from clifra.core.config import make_algebra
-from clifra.core.layout import AlgebraSpec
-from clifra.core.operation import PlannedOperation
-from clifra.core.tensors import LaneStorage
-from tests.helpers.policy import PreferRoute
-from tests.helpers.small_oracle import SmallCliffordOracle
-
-DEVICE = "cpu"
-_PRODUCT_METHODS = {
-    "geometric_product": "geometric_product",
-    "wedge": "wedge",
-    "symmetric_product": "symmetric_product",
-    "commutator_product": "commutator_product",
-    "anti_commutator_product": "anti_commutator_product",
-    "left_contraction": "left_contraction",
-    "right_contraction": "right_contraction",
-}
+from clifra.core import AlgebraContext
 
 
-def _mps_available() -> bool:
-    return bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
+def _planned_graded_action(input_layout, output_layout, *, dtype=torch.float32, device="cpu"):
+    spec = input_layout.spec
+    algebra = AlgebraContext(spec.p, spec.q, spec.r, dtype=dtype, device=device)
+    return algebra.plan_linear_action(input=input_layout, output=output_layout)._kernel
 
 
-def _oracle_for(algebra) -> SmallCliffordOracle:
-    return SmallCliffordOracle(algebra.p, algebra.q, algebra.r)
+def _planned_full_sandwich(layout, *, dtype=torch.float32, device="cpu"):
+    from clifra.core._kernel.providers import action_execution_request
+    from tests.helpers.policy import PreferRoute
+
+    spec = layout.spec
+    algebra = AlgebraContext(spec.p, spec.q, spec.r, dtype=dtype, device=device)
+    request = action_execution_request(algebra, "sandwich", input_layout=layout)
+    selection = algebra._planner.router.select(
+        request,
+        PreferRoute("action", "full_action_matrix"),
+        algebra._planner.limits,
+    )
+    return selection.build()
 
 
-def _oracle_sandwich_action_matrices(
-    oracle: SmallCliffordOracle,
-    left: torch.Tensor,
-    right: torch.Tensor,
-) -> torch.Tensor:
-    basis = torch.eye(oracle.dim, dtype=left.dtype, device=left.device)
-    matrices = []
-    for item in range(left.shape[0]):
-        left_values = left[item].expand(oracle.dim, oracle.dim)
-        right_values = right[item].expand(oracle.dim, oracle.dim)
-        transformed = oracle.product(oracle.product(left_values, basis), right_values)
-        matrices.append(transformed.transpose(0, 1))
-    return torch.stack(matrices)
+def select_product_route(algebra, *, op, left_layout, right_layout, output_layout, dtype, device, policy=None):
+    from clifra.core._kernel.planning.layouts import ProductRequest
+    from clifra.core._kernel.providers import product_execution_request
 
-
-def _grade_only_input(algebra, batch: int, grades: tuple[int, ...], seed: int) -> torch.Tensor:
-    generator = torch.Generator(device=DEVICE).manual_seed(seed)
-    mv = torch.zeros(batch, algebra.dim, dtype=torch.float64)
-    indices = basis_indices_for_grades(algebra.n, grades, device=DEVICE)
-    mv[:, indices] = torch.randn(batch, indices.numel(), dtype=torch.float64, generator=generator) * 0.1
-    return mv
-
-
-def _sparse_pairwise_product_reference(
-    executor: GradeProductExecutor,
-    left: torch.Tensor,
-    right: torch.Tensor,
-) -> torch.Tensor:
-    prefix = torch.broadcast_shapes(left.shape[:-2], right.shape[:-2])
-    left = left.expand(*prefix, *left.shape[-2:])
-    right = right.expand(*prefix, *right.shape[-2:])
-    left_terms = torch.index_select(left, -1, executor.left_compact_positions)
-    right_terms = torch.index_select(right, -1, executor.right_compact_positions)
-    terms = left_terms.unsqueeze(-2) * right_terms.unsqueeze(-3) * executor.coefficients
-    output = terms.new_zeros(*terms.shape[:-1], executor.output_dim)
-    return output.index_add(-1, executor.output_positions, terms)
-
-
-def _product_method_name(op: str) -> str:
-    return _PRODUCT_METHODS[op]
+    request = ProductRequest.compact(
+        algebra.spec,
+        op=op,
+        left_layout=left_layout,
+        right_layout=right_layout,
+        output_layout=output_layout,
+        dtype=dtype,
+        device=device,
+    )
+    return algebra._planner.router.select(
+        product_execution_request(request),
+        algebra._planner.policy if policy is None else policy,
+        algebra._planner.limits,
+    )

@@ -5,126 +5,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from math import comb
 
 import torch
 
 from clifra.core._kernel.basis import operation_coefficient
-from clifra.core._kernel.contracts import _check_contract_spec
 from clifra.core._kernel.planning.policy import ActionFacts
 from clifra.core._kernel.planning.resources import ResourceRequirements
-from clifra.core.layout import AlgebraSpec, GradeLayout
-from clifra.core.tensors import TensorContract
-
-
-def _contract(spec, layout, role: str) -> TensorContract:
-    return _check_contract_spec(spec, TensorContract.compact(layout), f"{role}_layout")
-
-
-def _bind_contracts(plan, *roles: str) -> None:
-    spec = plan.input_layout.spec
-    for role in roles:
-        object.__setattr__(plan, f"{role}_contract", _contract(spec, getattr(plan, f"{role}_layout"), role))
-
-
-@dataclass(frozen=True)
-class LinearActionPlan:
-    """Resolved contract for a vector-space action lifted to multivector grades."""
-
-    input_layout: GradeLayout
-    output_layout: GradeLayout
-    input_contract: TensorContract = field(init=False, repr=False)
-    output_contract: TensorContract = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        _bind_contracts(self, "input", "output")
-
-    @property
-    def input_grades(self) -> tuple[int, ...]:
-        """Return the grades accepted by the action input layout."""
-        return self.input_layout.grades
-
-    @property
-    def output_grades(self) -> tuple[int, ...]:
-        """Return the grades emitted by the action output layout."""
-        return self.output_layout.grades
-
-
-@dataclass(frozen=True)
-class VersorActionPlan:
-    """Resolved contract for grade-1 or grade-2 versor actions."""
-
-    grade: int
-    input_layout: GradeLayout
-    output_layout: GradeLayout
-    parameter_layout: GradeLayout
-    route: str
-    input_contract: TensorContract = field(init=False, repr=False)
-    output_contract: TensorContract = field(init=False, repr=False)
-    parameter_contract: TensorContract = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        _bind_contracts(self, "input", "output", "parameter")
-
-
-def build_linear_action_plan(
-    *,
-    input_layout: GradeLayout,
-    output_layout: GradeLayout | None = None,
-) -> LinearActionPlan:
-    """Build a plan-only linear action contract."""
-    spec = input_layout.spec
-    output_layout = input_layout if output_layout is None else output_layout
-    _contract(spec, output_layout, "output")
-    return LinearActionPlan(input_layout=input_layout, output_layout=output_layout)
-
-
-def build_versor_action_plan(
-    algebra,
-    *,
-    grade: int,
-    input_layout: GradeLayout,
-    output_layout: GradeLayout | None = None,
-    parameter_layout: GradeLayout | None = None,
-) -> VersorActionPlan:
-    """Build a plan-only versor action contract."""
-    spec = AlgebraSpec.from_algebra(algebra)
-    grade = int(grade)
-    if grade not in {1, 2}:
-        raise ValueError("planned versor actions currently support grade=1 and grade=2")
-    output_layout = input_layout if output_layout is None else output_layout
-    parameter_layout = algebra.layout((grade,)) if parameter_layout is None else parameter_layout
-    input_layout = _contract(spec, input_layout, "input").layout
-    output_layout = _contract(spec, output_layout, "output").layout
-    parameter_layout = _contract(spec, parameter_layout, "parameter").layout
-    if parameter_layout.grades != (grade,):
-        raise ValueError(f"parameter_layout must contain grade {grade}, got {parameter_layout.grades}")
-    decision = _select_versor_action_route(
-        algebra,
-        grade=grade,
-        input_layout=input_layout,
-        output_layout=output_layout,
-        parameter_layout=parameter_layout,
-    )
-    return VersorActionPlan(
-        grade=grade,
-        input_layout=input_layout,
-        output_layout=output_layout,
-        parameter_layout=parameter_layout,
-        route=decision.route,
-    )
-
-
-def _select_versor_action_route(algebra, **parameters):
-    return _select_action_route(algebra, "versor", parameters)
-
-
-def _select_action_route(algebra, operation, parameters):
-    from clifra.core._kernel.providers import action_execution_request
-
-    request = action_execution_request(algebra, operation, **parameters)
-    return algebra._planner.router.select(request, algebra._planner.policy, algebra._planner.limits)
+from clifra.core.layout import GradeLayout
 
 
 def _basis_bits_tuple(index: int, n: int) -> tuple[int, ...]:
@@ -207,6 +95,32 @@ def build_bivector_vector_generator_buffers(bivector_layout, *, dtype, device):
     )
 
 
+def build_versor_vector_buffers(parameter_layout, *, grade, dtype, device):
+    """Prepare route-local vector-action buffers after route selection."""
+    if grade == 2:
+        generator = build_bivector_vector_generator_buffers(parameter_layout, dtype=dtype, device=device)
+        empty = torch.empty(0, dtype=dtype, device=device)
+        return generator, empty, empty
+    if grade != 1 or parameter_layout.grades != (1,):
+        raise ValueError("vector action parameters must have the selected grade layout")
+    signs = [
+        operation_coefficient(
+            index,
+            index,
+            parameter_layout.spec.p,
+            parameter_layout.spec.q,
+            parameter_layout.spec.r,
+            "geometric_product",
+        )
+        for index in parameter_layout.basis_indices
+    ]
+    return (
+        None,
+        torch.tensor(signs, dtype=dtype, device=device),
+        torch.eye(parameter_layout.spec.n, dtype=dtype, device=device),
+    )
+
+
 def build_full_sandwich_action_buffers(layout, *, device=None, dtype=torch.float32):
     dim = layout.spec.dim
     indices = torch.arange(dim, dtype=torch.long, device=device)
@@ -255,7 +169,11 @@ def _linear_action_structure(input_layout, output_layout, *, generator_layout=No
     minor_entries = sum(count * g * g for g, count in blocks.items() if g >= 4)
     determinant_work = sum(count * (2 if g == 2 else 9 if g == 3 else g**3) for g, count in blocks.items() if g >= 2)
     generator_terms = 0 if generator_layout is None else _bivector_generator_term_count(generator_layout)
-    pairs = max(n * n, dense, minors)
+    # Prepared index buffers remain resident while the largest determinant
+    # gather and dense lifted action coexist during execution.
+    pairs = scalar + indices + dense + minors
+    if generator_layout is not None:
+        pairs += 3 * generator_terms + 2 * n * n
     lanes = max(n, input_layout.dim, output_layout.dim, 0 if generator_layout is None else generator_layout.dim)
     return (
         ActionFacts(

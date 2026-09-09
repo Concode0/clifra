@@ -10,7 +10,6 @@ they are lowered into flat Torch executor buffers.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -28,17 +27,9 @@ from clifra.core.layout import AlgebraSpec
 class GradePathNode:
     """One homogeneous left-grade/right-grade route in a product plan."""
 
-    path_index: int
     left_grade: int
     right_grade: int
     output_grades: tuple[int, ...]
-    left_dim: int
-    right_dim: int
-
-    @property
-    def estimated_pairs(self) -> int:
-        """Upper-bound number of basis pairs before metric zero pruning."""
-        return self.left_dim * self.right_dim
 
 
 @dataclass(frozen=True)
@@ -51,16 +42,6 @@ class GradePlanTree:
     right_grades: tuple[int, ...]
     output_grades: tuple[int, ...]
     paths: tuple[GradePathNode, ...]
-
-    @property
-    def path_count(self) -> int:
-        """Number of selected homogeneous product routes."""
-        return len(self.paths)
-
-    @property
-    def estimated_pairs(self) -> int:
-        """Upper-bound number of basis pairs across all paths."""
-        return sum(path.estimated_pairs for path in self.paths)
 
 
 def build_grade_plan_tree(
@@ -84,7 +65,6 @@ def build_grade_plan_tree(
 
     paths = []
     for left_grade in left:
-        left_dim = _grade_dim(spec.n, left_grade)
         for right_grade in right:
             route_outputs = product_output_grades(left_grade, right_grade, spec.n, op=op)
             route_outputs = tuple(grade for grade in route_outputs if grade in output_set)
@@ -92,12 +72,9 @@ def build_grade_plan_tree(
                 continue
             paths.append(
                 GradePathNode(
-                    path_index=len(paths),
                     left_grade=left_grade,
                     right_grade=right_grade,
                     output_grades=route_outputs,
-                    left_dim=left_dim,
-                    right_dim=_grade_dim(spec.n, right_grade),
                 )
             )
 
@@ -109,9 +86,3 @@ def build_grade_plan_tree(
         output_grades=output,
         paths=tuple(paths),
     )
-
-
-def _grade_dim(n: int, grade: int) -> int:
-    if grade < 0 or grade > n:
-        return 0
-    return math.comb(n, grade)

@@ -13,7 +13,7 @@ and all basis interactions are expanded once. Hot tensor execution lives in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Optional
 
 import torch
 
@@ -22,13 +22,12 @@ from clifra.core._kernel.basis import (
     _grade_product_interaction_count,
     basis_index_tuple_for_grades,
     basis_indices_tensor,
-    normalize_grade_product_op,
     operation_coefficient,
 )
 from clifra.core._kernel.planning.layouts import ProductRequest
-from clifra.core._kernel.planning.policy import ProductFacts, RouteDecision
+from clifra.core._kernel.planning.policy import ProductFacts
 from clifra.core._kernel.planning.resources import ResourceRequirements
-from clifra.core._kernel.planning.tree import GradePlanTree, build_grade_plan_tree
+from clifra.core._kernel.planning.tree import GradePlanTree
 from clifra.core.layout import AlgebraSpec
 from clifra.core.tensors import TensorContract
 
@@ -50,45 +49,6 @@ def count_grade_product_interactions(tree: GradePlanTree) -> int:
             tree.op,
         )
         for path in tree.paths
-    )
-
-
-def select_product_route(
-    algebra,
-    *,
-    op,
-    left_layout,
-    right_layout,
-    output_layout,
-    dtype,
-    device,
-    policy=None,
-) -> RouteDecision:
-    """Select an executor-owned route through the private registry."""
-    from clifra.core._kernel.planning.resources import validate_product_grades_cost
-    from clifra.core._kernel.providers import product_execution_request
-
-    validate_product_grades_cost(
-        algebra,
-        left_layout.spec,
-        op=op,
-        left_grades=left_layout.grades,
-        right_grades=right_layout.grades,
-        output_grades=output_layout.grades,
-    )
-    request = ProductRequest.compact(
-        left_layout.spec,
-        op=op,
-        left_layout=left_layout,
-        right_layout=right_layout,
-        output_layout=output_layout,
-        dtype=dtype,
-        device=device,
-    )
-    return algebra._planner.router.select(
-        product_execution_request(request),
-        algebra._planner.policy if policy is None else policy,
-        algebra._planner.limits,
     )
 
 
@@ -116,7 +76,7 @@ class GradeProductPlan:
         pairwise_contract_left: bool,
         pairwise_gather_positions: torch.Tensor,
         pairwise_coefficients: torch.Tensor,
-        tree: GradePlanTree,
+        is_empty: bool,
     ):
         self.spec = AlgebraSpec(p, q, r)
         self.op = op
@@ -137,7 +97,7 @@ class GradeProductPlan:
         self.pairwise_contract_left = bool(pairwise_contract_left)
         self.pairwise_gather_positions = pairwise_gather_positions
         self.pairwise_coefficients = pairwise_coefficients
-        self.tree = tree
+        self._is_empty = bool(is_empty)
 
     @property
     def p(self) -> int:
@@ -192,14 +152,7 @@ class GradeProductPlan:
     @property
     def is_empty(self) -> bool:
         """Return whether the product has no nonzero basis interactions."""
-        return self.pair_count == 0
-
-    @property
-    def density(self) -> float:
-        """Return realized interaction density relative to the grade tree estimate."""
-        if self.tree.estimated_pairs == 0:
-            return 0.0
-        return self.pair_count / self.tree.estimated_pairs
+        return self._is_empty
 
 
 class FullTableProductPlan:
@@ -274,31 +227,6 @@ class FullTableProductPlan:
     def output_grades(self) -> tuple[int, ...]:
         """Return all output grades."""
         return self.output_layout.grades
-
-
-def build_grade_product_plan(
-    p: int,
-    q: int = 0,
-    r: int = 0,
-    *,
-    left_grades: Iterable[int],
-    right_grades: Iterable[int],
-    output_grades: Optional[Iterable[int]] = None,
-    op: GradeProductOp = "geometric_product",
-    device=None,
-    dtype: torch.dtype = torch.float32,
-) -> GradeProductPlan:
-    """Build an exact static basis-pair plan for a grade-restricted operation."""
-    spec = AlgebraSpec(int(p), int(q), int(r))
-    op = normalize_grade_product_op(op)
-    tree = build_grade_plan_tree(
-        spec,
-        left_grades=left_grades,
-        right_grades=right_grades,
-        output_grades=output_grades,
-        op=op,
-    )
-    return build_grade_product_plan_from_tree(tree, device=device, dtype=dtype)
 
 
 def build_grade_product_plan_from_tree(
@@ -433,7 +361,7 @@ def build_grade_product_plan_from_tree(
         pairwise_contract_left=pairwise_contract_left,
         pairwise_gather_positions=pairwise_gather_positions,
         pairwise_coefficients=pairwise_coefficients,
-        tree=tree,
+        is_empty=count_grade_product_interactions(tree) == 0,
     )
 
 

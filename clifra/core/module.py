@@ -24,6 +24,7 @@ class CliffordModule(nn.Module):
         return self._algebra
 
     def _apply(self, fn):
+        probe = fn(self._algebra._placement_probe())
         result = super()._apply(fn)
-        self._algebra._apply(fn)
+        object.__setattr__(self, "_algebra", self._algebra._copy_with_placement(probe.device, probe.dtype))
         return result

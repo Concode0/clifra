@@ -1,6 +1,6 @@
 """An external-style provider: this file imports no private clifra modules."""
 
-from dataclasses import FrozenInstanceError, dataclass, fields
+from dataclasses import FrozenInstanceError, dataclass, replace
 
 import pytest
 import torch
@@ -23,6 +23,15 @@ class ScalarProduct(nn.Module):
 
     def forward(self, left, right):
         return left * right * self.one
+
+
+class ParameterScalarProduct(nn.Module):
+    def __init__(self, preparation):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones((), dtype=preparation.dtype, device=preparation.device))
+
+    def forward(self, left, right):
+        return left * right * self.scale
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,15 @@ class ExternalScalarProvider:
         )
         self.calls.append(("build", request, assessment))
         return ScalarProduct(assessment.preparation)
+
+
+@dataclass(frozen=True)
+class ExternalParameterProvider(ExternalScalarProvider):
+    identity: tuple[str, str] = ("product", "external_parameter")
+
+    def build(self, request, assessment):
+        self.calls.append(("build", request, assessment))
+        return ParameterScalarProduct(assessment.preparation)
 
 
 def registry_with_external(calls):
@@ -86,6 +104,25 @@ def test_external_provider_uses_only_public_contract_and_preserves_storage_and_g
     assert all(contract.uses_compact_storage for contract in calls[0][1].inputs)
     moved = operation.to(dtype=torch.float32)
     torch.testing.assert_close(moved(left.float(), right.float()), left.float() * right.float())
+
+
+def test_parameter_only_cached_external_kernel_moves_independently_between_plans():
+    calls = []
+    provider = ExternalParameterProvider(calls)
+    algebra = AlgebraContext(2, registry=ExecutorRegistry((provider,)))
+    scalar = algebra.layout((0,))
+    first = algebra.plan_product(left=scalar, right=scalar, output=scalar)
+    second = algebra.plan_product(left=scalar, right=scalar, output=scalar)
+    assert first._kernel.executor is second._kernel.executor
+
+    first.to(dtype=torch.float64)
+
+    assert first._kernel.executor is not second._kernel.executor
+    assert first._kernel.executor.scale.dtype == torch.float64
+    assert second._kernel.executor.scale.dtype == torch.float32
+    value = torch.tensor([2.0])
+    torch.testing.assert_close(first(value.double(), value.double()), torch.tensor([4.0], dtype=torch.float64))
+    torch.testing.assert_close(second(value, value), torch.tensor([4.0]))
 
 
 def test_external_provider_pairwise_and_compile_need_only_forward():
@@ -126,9 +163,7 @@ def test_explicit_empty_registry_does_not_silently_restore_defaults():
         algebra.plan_product()
 
 
-def test_public_assessment_requires_only_resource_counts_and_preparation():
-    assert [field.name for field in fields(Assessment)] == ["lanes", "pairs", "preparation"]
-    assert Assessment() == Assessment(lanes=0, pairs=0, preparation=None)
+def test_public_assessment_carries_resource_counts_and_provider_preparation():
     calls = []
     provider = ExternalScalarProvider(calls, lanes=0, pairs=0)
     a = AlgebraContext(3, registry=ExecutorRegistry((provider,)))
@@ -184,9 +219,7 @@ def test_external_resource_rejection_falls_through_without_build():
     assert second == []
 
 
-@pytest.mark.parametrize(
-    "field", ["forward_work", "backward_work", "compile_work", "peak_bytes", "exact", "truncated", "value_dependent"]
-)
-def test_provider_cost_and_quality_flags_are_not_public_assessment_fields(field):
-    with pytest.raises(TypeError):
-        Assessment(**{field: 0})
+@pytest.mark.parametrize("change", [{"lanes": -1}, {"pairs": 1.5}, {"lanes": True}, {"pairs": float("nan")}])
+def test_public_assessment_rejects_invalid_resource_counts(change):
+    with pytest.raises((TypeError, ValueError)):
+        replace(Assessment(), **change)
