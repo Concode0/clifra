@@ -42,7 +42,9 @@ def _reference(matrix, input_layout, output_layout):
 
 
 @pytest.mark.parametrize("device", DEVICES)
-@pytest.mark.parametrize("grades,output_grades", [((1,), (1,)), ((2,), (2,)), ((3,), (3,)), ((0, 1, 2, 3), (0, 2, 3))])
+@pytest.mark.parametrize(
+    "grades,output_grades", [((1,), (1,)), ((2,), (2,)), ((3,), (3,)), ((4,), (4,)), ((0, 1, 2, 3), (0, 2, 3))]
+)
 @pytest.mark.parametrize("kind", ["random", "singular", "zero"])
 def test_induced_action_coefficients_and_gradients(device, grades, output_grades, kind):
     torch.manual_seed(73)
@@ -65,6 +67,25 @@ def test_induced_action_coefficients_and_gradients(device, grades, output_grades
     torch.testing.assert_close(actual_grad.cpu().double(), expected_grad, atol=5e-5, rtol=2e-5)
 
 
+def test_induced_grade4_action_gradcheck_and_gradgradcheck():
+    spec = AlgebraSpec(5)
+    layout = spec.layout((4,))
+    executor = GradedLinearActionExecutor(
+        input_layout=layout,
+        output_layout=layout,
+    )
+
+    matrix = (
+        torch.eye(5, dtype=torch.float64)
+        + 0.1 * torch.randn(5, 5, dtype=torch.float64)
+    ).requires_grad_()
+
+    fn = executor.coefficients
+
+    assert torch.autograd.gradcheck(fn, (matrix,))
+    assert torch.autograd.gradgradcheck(fn, (matrix,))
+
+
 @pytest.mark.parametrize("grades", [(1,), (2,), (3,), (1, 2)])
 def test_induced_action_single_and_multi_compile(grades):
     spec = AlgebraSpec(6)
@@ -72,7 +93,8 @@ def test_induced_action_single_and_multi_compile(grades):
     executor = GradedLinearActionExecutor(input_layout=layout, output_layout=layout)
     matrices = torch.randn(2, 6, 6, dtype=torch.float64, requires_grad=True)
     values = torch.randn(3, 2, layout.dim, dtype=torch.float64, requires_grad=True)
-    for method in (executor.execute, executor.multi_execute):
+    for values in (values, values.unsqueeze(-2)):
+        method = executor.execute
         compiled = torch.compile(method, fullgraph=True, backend="aot_eager")
         expected = method(values, matrices)
         actual = compiled(values, matrices)

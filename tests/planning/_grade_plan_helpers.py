@@ -12,8 +12,6 @@ from clifra.core._kernel.basis import (
 from clifra.core._kernel.execution.action import (
     FullSandwichActionExecutor,
     GradedLinearActionExecutor,
-    MultiVersorActionExecutor,
-    PairedBivectorActionExecutor,
 )
 from clifra.core._kernel.execution.metric import SignatureNormSquaredExecutor
 from clifra.core._kernel.execution.permutation import PseudoscalarProductExecutor

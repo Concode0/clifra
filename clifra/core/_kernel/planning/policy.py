@@ -212,7 +212,6 @@ class DefaultPolicy:
             ("action", "vector_matrix"): -1.0,
             ("action", "rotor_product"): 0.0,
             ("action", "full_action_matrix"): -2.0,
-            ("action", "paired_rotor_product"): 0.0,
             ("action", "graded_linear"): 0.0,
             ("unary", "grade_map"): 0.0,
             ("metric", "diagonal"): 0.0,

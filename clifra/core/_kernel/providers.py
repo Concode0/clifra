@@ -9,7 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from clifra.core.layout import AlgebraSpec, GradeLayout
+import torch
+
+from clifra.core.layout import AlgebraSpec
 
 if TYPE_CHECKING:
     from clifra.core._kernel.planning.layouts import ProductRequest
@@ -49,8 +51,6 @@ class ExpExecutionRequest(ExecutorRequest):
 class ActionExecutionRequest(ExecutorRequest):
     algebra: AlgebraContext
     grade: int | None = None
-    rotor_layout: GradeLayout | None = None
-    middle_layout: GradeLayout | None = None
 
 
 @dataclass(frozen=True)
@@ -128,16 +128,10 @@ def action_execution_request(
     output_layout=None,
     parameter_layout=None,
     grade=None,
-    rotor_layout=None,
-    middle_layout=None,
 ):
     inputs = TensorContract.compact(input_layout)
     output = TensorContract.compact(output_layout or input_layout)
     contracts = (inputs, TensorContract.compact(parameter_layout)) if parameter_layout is not None else (inputs, None)
-    if operation == "multi":
-        contracts = (*contracts, None)
-    if operation == "paired":
-        contracts = (*contracts, contracts[1], None)
     if operation == "sandwich":
         contracts = (inputs, inputs, inputs)
     return ActionExecutionRequest(
@@ -149,8 +143,6 @@ def action_execution_request(
         algebra.device,
         algebra,
         grade,
-        rotor_layout,
-        middle_layout,
     )
 
 
@@ -424,13 +416,13 @@ def _build_exp(request, route, preparation):
         polynomial=polynomial(preparation.polynomial),
         full_polynomial=polynomial(preparation.full_polynomial),
         square=build(preparation.square),
-    )
+    ).to(device=plan.output_scalar_mask.device)
 
 
 def _assess_action(request, route):
     from clifra.core._kernel.basis import expand_output_grades
 
-    from .planning.action import _action_extensions
+    from .planning.action import _action_extensions, _linear_action_facts
 
     algebra, spec = request.algebra, request.inputs[0].spec
     planner = algebra._planner
@@ -438,31 +430,28 @@ def _assess_action(request, route):
     operation, grade = request.operation, request.grade
     parameter = request.inputs[1].layout if request.inputs[1] is not None else None
     full = inputs.dim == spec.dim and output.dim == spec.dim
+    if request.device.type == "mps" and request.dtype == torch.float64:
+        return Rejected("mps_does_not_support_float64_output")
+    if route in {"graded_linear", "vector_matrix"}:
+        needs_det = any(g >= 4 for g in set(inputs.grades) & set(output.grades))
+        if (needs_det or grade == 2) and request.dtype not in (torch.float32, torch.float64):
+            return Rejected("matrix_action_requires_float32_or_float64")
     if operation == "linear":
         if route != "graded_linear":
             return Rejected("requires_linear_action")
-        facts = _simple_facts(request, inputs.dim * output.dim)
+        facts = _linear_action_facts(inputs, output, dtype_bytes=request.dtype.itemsize)
         return _accepted(facts, ActionPreparation(facts))
     if operation == "sandwich":
         if route != "full_action_matrix" or not full:
             return Rejected("requires_full_sandwich")
         facts = _simple_facts(request, spec.dim**2)
         return _accepted(facts, ActionPreparation(facts))
-    paired = operation == "paired"
-    grade = 2 if paired else grade
-    if grade not in (1, 2) or parameter.grades != (grade,):
+    if operation != "versor":
+        return Rejected("unsupported_action_operation")
+    if grade not in (1, 2) or parameter is None or parameter.grades != (grade,):
         return Rejected("invalid_action_parameter_grade")
     allowed = (
-        route == "vector_matrix"
-        and not paired
-        and (grade == 1 or inputs.grades == output.grades == (1,))
-        or route == "full_action_matrix"
-        and full
-        or route == "rotor_product"
-        and not paired
-        and grade == 2
-        or route == "paired_rotor_product"
-        and paired
+        route == "vector_matrix" or route == "full_action_matrix" and full or route == "rotor_product" and grade == 2
     )
     if not allowed:
         return Rejected("unsupported_action_domain")
@@ -491,20 +480,22 @@ def _assess_action(request, route):
                 request.device,
             )
             norm = planner.router.select(norm_request, planner.policy, planner.limits)
-            involution = _unary_child(planner, parameter, "grade_involution", request.dtype, request.device)
+            involution = _unary_child(planner, inputs, "grade_involution", request.dtype, request.device)
             reverse = _unary_child(planner, parameter, "reverse", request.dtype, request.device)
     work = spec.n**3 + inputs.dim * output.dim if route == "vector_matrix" else pairs
-    facts = PlanFacts(
-        work, 2 * work, pairs * request.dtype.itemsize, pairs, resources=ResourceRequirements(lanes, pairs)
+    facts = (
+        _linear_action_facts(inputs, output, dtype_bytes=request.dtype.itemsize, generator=grade == 2)
+        if route == "vector_matrix"
+        else PlanFacts(
+            work, 2 * work, pairs * request.dtype.itemsize, pairs, resources=ResourceRequirements(lanes, pairs)
+        )
     )
     children = [child.facts for child in (exponential, reverse, left, right, norm, involution) if child is not None]
-    if paired and exponential is not None:
-        children.append(exponential.facts)
     intermediate = (2 * rotor.dim if rotor is not None else 0) + (middle.dim if middle is not None else 0) + output.dim
     facts = compose_plan_facts(
         facts,
         *children,
-        peak_bytes=(pairs + intermediate) * request.dtype.itemsize,
+        peak_bytes=max(facts.peak_bytes, (pairs + intermediate) * request.dtype.itemsize),
         extensions=_action_extensions(
             algebra,
             input_layout=inputs,
@@ -532,14 +523,12 @@ def _build_action(request, route, preparation):
         ActionComponents,
         FullSandwichActionExecutor,
         GradedLinearActionExecutor,
-        MultiVersorActionExecutor,
-        PairedBivectorActionExecutor,
         VersorActionExecutor,
     )
 
     inputs, output = request.inputs[0].layout, request.output.layout
     if request.operation == "linear":
-        return GradedLinearActionExecutor(input_layout=inputs, output_layout=output)
+        return GradedLinearActionExecutor(input_layout=inputs, output_layout=output).to(device=request.device)
     if request.operation == "sandwich":
         return FullSandwichActionExecutor.from_layout(inputs, device=request.device, dtype=request.dtype)
     components = ActionComponents(
@@ -552,19 +541,7 @@ def _build_action(request, route, preparation):
         _operation(preparation.norm),
         _operation(preparation.involution),
     )
-    if request.operation == "paired":
-        return PairedBivectorActionExecutor(
-            request.algebra,
-            input_layout=inputs,
-            output_layout=output,
-            parameter_layout=request.inputs[1].layout,
-            rotor_layout=preparation.rotor_layout,
-            middle_layout=preparation.middle_layout or request.middle_layout,
-            route=route,
-            components=components,
-        )
-    executor = MultiVersorActionExecutor if request.operation == "multi" else VersorActionExecutor
-    return executor(
+    return VersorActionExecutor(
         request.algebra,
         grade=request.grade,
         input_layout=inputs,
@@ -589,7 +566,7 @@ def builtin_providers():
             ),
             (
                 "action",
-                ("vector_matrix", "rotor_product", "full_action_matrix", "paired_rotor_product", "graded_linear"),
+                ("vector_matrix", "rotor_product", "full_action_matrix", "graded_linear"),
             ),
         )
         for route in routes

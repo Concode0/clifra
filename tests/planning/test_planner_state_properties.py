@@ -21,7 +21,6 @@ _CACHE_NAMES = (
     "_bivector_exp_executors",
     "_full_sandwich_action_executors",
     "_versor_action_plans",
-    "_paired_bivector_action_plans",
 )
 _ACTIONS = (
     "product_geometric_product",
@@ -32,7 +31,6 @@ _ACTIONS = (
     "pseudoscalar",
     "bivector_exp",
     "versor_action",
-    "paired_action",
     "clear",
 )
 
@@ -67,11 +65,7 @@ def _plan(algebra, action: str):
             output_layout=vector,
             parameter_layout=bivector,
         )
-    return algebra._planner.paired_bivector_action_plan(
-        input_layout=vector,
-        output_layout=vector,
-        parameter_layout=bivector,
-    )
+    raise AssertionError(action)
 
 
 @QUICK_PROPERTY_SETTINGS

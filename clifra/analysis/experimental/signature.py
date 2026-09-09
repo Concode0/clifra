@@ -121,7 +121,7 @@ class _ProbeRotor(CliffordModule):
             grade=2,
             parameter_layout=self.parameter_layout,
         )
-        return self.action.per_channel(left, x, right)
+        return self.action(left, x, right)
 
     def parameter_l1_penalty(self) -> torch.Tensor:
         return torch.norm(self.bivector_parameters, p=1)

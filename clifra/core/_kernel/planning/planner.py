@@ -11,10 +11,8 @@ import torch
 from clifra.core._kernel.contracts import _check_contract_spec
 from clifra.core._kernel.planning.action import (
     LinearActionPlan,
-    PairedBivectorActionPlan,
     VersorActionPlan,
     build_linear_action_plan,
-    build_paired_bivector_action_plan,
     build_versor_action_plan,
 )
 from clifra.core._kernel.planning.layouts import ProductRequest
@@ -52,7 +50,6 @@ class GradePlanner:
         self._bivector_exp_executors = {}
         self._full_sandwich_action_executors = {}
         self._versor_action_plans = {}
-        self._paired_bivector_action_plans = {}
 
     def layout(self, grades):
         """Return the compact layout for ``grades``."""
@@ -67,7 +64,6 @@ class GradePlanner:
         self._bivector_exp_executors.clear()
         self._full_sandwich_action_executors.clear()
         self._versor_action_plans.clear()
-        self._paired_bivector_action_plans.clear()
 
     def product_executor(
         self,
@@ -284,37 +280,6 @@ class GradePlanner:
                 parameter_layout=parameter_layout,
             )
             self._versor_action_plans[key] = plan
-        return plan
-
-    def paired_bivector_action_plan(
-        self,
-        *,
-        input_layout: GradeLayout,
-        output_layout: GradeLayout = None,
-        parameter_layout: GradeLayout = None,
-    ) -> PairedBivectorActionPlan:
-        """Return a plan-only contract for independent bivector rotor pairs."""
-        input_layout = self._compact_contract(input_layout, "input_layout").layout
-        if output_layout is not None:
-            output_layout = self._compact_contract(output_layout, "output_layout").layout
-        if parameter_layout is not None:
-            parameter_layout = self._compact_contract(parameter_layout, "parameter_layout").layout
-        key = self._action_plan_cache_key(
-            "paired_bivector_action",
-            2,
-            input_layout,
-            output_layout,
-            parameter_layout,
-        )
-        plan = self._paired_bivector_action_plans.get(key)
-        if plan is None:
-            plan = build_paired_bivector_action_plan(
-                self.algebra,
-                input_layout=input_layout,
-                output_layout=output_layout,
-                parameter_layout=parameter_layout,
-            )
-            self._paired_bivector_action_plans[key] = plan
         return plan
 
     def _single_executor(self, family, operation, inputs, output, dtype, device, declaration=None):

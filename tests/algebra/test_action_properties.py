@@ -106,13 +106,10 @@ def test_forced_full_versor_action_routes_match_independent_products(route, sign
     )
 
 
-@pytest.mark.parametrize("route", ("full_action_matrix", "paired_rotor_product"))
 @QUICK_PROPERTY_SETTINGS
 @given(signature=signature_strategy(min_n=2, max_n=4), data=st.data())
-def test_forced_paired_action_routes_match_independent_products(route, signature, data):
-    algebra = configured_algebra(
-        *signature, device="cpu", dtype=torch.float64, planning_policy=_force_action_route(route)
-    )
+def test_composed_independent_rotors_match_oracle_products(signature, data):
+    algebra = AlgebraContext(*signature, device="cpu", dtype=torch.float64)
     oracle = SmallCliffordOracle(*signature)
     layout = algebra.layout(range(algebra.n + 1))
     parameter_layout = algebra.layout((2,))
@@ -123,9 +120,7 @@ def test_forced_paired_action_routes_match_independent_products(route, signature
     left_weights = 0.1 * data.draw(tensor_with_shape((pairs, parameter_layout.dim)))
     right_weights = 0.1 * data.draw(tensor_with_shape((pairs, parameter_layout.dim)))
     channel_to_pair = torch.tensor([index % pairs for index in range(channels)], dtype=torch.long)
-    action = action_helpers.plan_paired_bivector_action(
-        algebra, input_layout=layout, output_layout=layout, parameter_layout=parameter_layout
-    )
+    action = algebra.plan_sandwich_action(left=layout, input=layout, right=layout, output=layout)
     left = rotor_layout.full(algebra.bivector_exp(-0.5 * left_weights, input=parameter_layout, output=rotor_layout))
     right = oracle.reverse(
         rotor_layout.full(algebra.bivector_exp(-0.5 * right_weights, input=parameter_layout, output=rotor_layout))
@@ -138,8 +133,8 @@ def test_forced_paired_action_routes_match_independent_products(route, signature
         dim=1,
     )
 
-    assert action.route == route
-    assert torch.allclose(action(values, left_weights, right_weights, channel_to_pair), expected, atol=1e-9, rtol=1e-9)
+    actual = action(left[channel_to_pair], values, right[channel_to_pair])
+    assert torch.allclose(actual, expected, atol=1e-9, rtol=1e-9)
 
 
 from clifra.core._kernel.configuration import configured_algebra

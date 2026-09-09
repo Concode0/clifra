@@ -226,9 +226,9 @@ def test_full_sandwich_action_executor_compiles_fullgraph_with_aot_eager():
     right = algebra.reverse(left, input=layout, output=layout)
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float32, generator=generator)
 
-    compiled = torch.compile(executor.per_channel, backend="aot_eager", fullgraph=True)
+    compiled = torch.compile(executor.forward, backend="aot_eager", fullgraph=True)
 
-    expected = executor.per_channel(left, values, right)
+    expected = executor.forward(left, values, right)
     actual = compiled(left, values, right)
 
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
@@ -268,9 +268,9 @@ def test_plan_sandwich_action_handle_compiles_fullgraph_without_cache_mutation()
     values = torch.randn(2, 4, algebra.dim, dtype=torch.float32, generator=generator)
     cache_size = len(algebra._planner._full_sandwich_action_executors)
 
-    compiled = torch.compile(handle.per_channel, backend="aot_eager", fullgraph=True)
+    compiled = torch.compile(handle.forward, backend="aot_eager", fullgraph=True)
 
-    expected = handle.per_channel(left, values, right)
+    expected = handle.forward(left, values, right)
     actual = compiled(left, values, right)
 
     assert cache_size == 1
@@ -309,39 +309,6 @@ def test_plan_versor_action_handle_compiles_fullgraph_with_aot_eager():
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_plan_multi_versor_action_handle_compiles_fullgraph_without_cache_mutation():
-    algebra = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float32)
-    input_layout = algebra.layout((1,))
-    parameter_layout = algebra.layout((2,))
-    handle = action_helpers.plan_multi_versor_action(
-        algebra, grade=2, input_layout=input_layout, output_layout=input_layout, parameter_layout=parameter_layout
-    )
-    generator = torch.Generator(device=DEVICE).manual_seed(317)
-    values = torch.randn(2, 4, input_layout.dim, dtype=torch.float32, generator=generator)
-    weights = torch.randn(5, parameter_layout.dim, dtype=torch.float32, generator=generator) * 0.1
-    mix = torch.randn(4, 5, dtype=torch.float32, generator=generator)
-    cache_sizes = (
-        len(algebra._planner._product_executors),
-        len(algebra._planner._unary_executors),
-        len(algebra._planner._bivector_exp_executors),
-        len(algebra._planner._full_sandwich_action_executors),
-    )
-
-    compiled = torch.compile(handle, backend="aot_eager", fullgraph=True)
-
-    expected = handle(values, weights, mix)
-    actual = compiled(values, weights, mix)
-
-    assert (
-        len(algebra._planner._product_executors),
-        len(algebra._planner._unary_executors),
-        len(algebra._planner._bivector_exp_executors),
-        len(algebra._planner._full_sandwich_action_executors),
-    ) == cache_sizes
-    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
-
-
-@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 def test_plan_full_versor_action_handle_compiles_fullgraph_without_cache_mutation():
     algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
     full_layout = algebra.layout()
@@ -361,40 +328,6 @@ def test_plan_full_versor_action_handle_compiles_fullgraph_without_cache_mutatio
 
     expected = handle(values, weights)
     actual = compiled(values, weights)
-
-    assert (
-        len(algebra._planner._product_executors),
-        len(algebra._planner._unary_executors),
-        len(algebra._planner._bivector_exp_executors),
-        len(algebra._planner._full_sandwich_action_executors),
-    ) == cache_sizes
-    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
-
-
-@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
-def test_plan_paired_bivector_action_handle_compiles_fullgraph_without_cache_mutation():
-    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
-    vector_layout = algebra.layout((1,))
-    parameter_layout = algebra.layout((2,))
-    handle = action_helpers.plan_paired_bivector_action(
-        algebra, input_layout=vector_layout, output_layout=vector_layout, parameter_layout=parameter_layout
-    )
-    generator = torch.Generator(device=DEVICE).manual_seed(323)
-    values = torch.randn(2, 4, vector_layout.dim, dtype=torch.float32, generator=generator)
-    left_weights = torch.randn(3, parameter_layout.dim, dtype=torch.float32, generator=generator) * 0.1
-    right_weights = torch.randn(3, parameter_layout.dim, dtype=torch.float32, generator=generator) * 0.1
-    channel_to_pair = torch.tensor([0, 1, 2, 0], dtype=torch.long)
-    cache_sizes = (
-        len(algebra._planner._product_executors),
-        len(algebra._planner._unary_executors),
-        len(algebra._planner._bivector_exp_executors),
-        len(algebra._planner._full_sandwich_action_executors),
-    )
-
-    compiled = torch.compile(handle, backend="aot_eager", fullgraph=True)
-
-    expected = handle(values, left_weights, right_weights, channel_to_pair)
-    actual = compiled(values, left_weights, right_weights, channel_to_pair)
 
     assert (
         len(algebra._planner._product_executors),

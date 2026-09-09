@@ -6,10 +6,8 @@
 
 from .action import (
     LinearActionPlan,
-    PairedBivectorActionPlan,
     VersorActionPlan,
     build_linear_action_plan,
-    build_paired_bivector_action_plan,
     build_versor_action_plan,
 )
 from .exp import (
@@ -56,10 +54,8 @@ __all__ = [
     "PolicyCoverageError",
     "BivectorExpPlan",
     "LinearActionPlan",
-    "PairedBivectorActionPlan",
     "VersorActionPlan",
     "build_linear_action_plan",
-    "build_paired_bivector_action_plan",
     "build_versor_action_plan",
     "GradeUnaryOp",
     "GradeUnaryPlan",

@@ -120,8 +120,11 @@ class BivectorExpExecutor(nn.Module):
         if self.route != "closed" and dtype not in (torch.float32, torch.float64):
             raise ValueError("general bivector_exp requires float32 or float64")
         self._set_tolerances(torch.finfo(dtype).eps)
-        if self.route == "left_matrix_exp":
-            # Preserve CPU execution when a public planned operation moves to MPS.
+        if self.route == "left_matrix_exp" or (
+            self.route == "closed" and self.spec.n >= 4 and self.output_scalar_mask.device.type == "mps"
+        ):
+            # Preserve CPU execution for unsupported matrix exponentials and
+            # MPS compiled biquadratic derivatives that disagree with eager.
             super()._apply(lambda tensor: tensor.cpu(), recurse=recurse)
         elif self.route == "taylor":
             full_product = self.full_polynomial.products[self.spec.n // 2]
@@ -133,7 +136,9 @@ class BivectorExpExecutor(nn.Module):
     def forward(self, values):
         self.input_contract.validate(values, name="values")
         if self.route == "closed":
-            return self._closed_simple(values) if self.spec.n <= 3 else self._closed_biquadratic(values)
+            prepared = values.to(device=self.output_scalar_mask.device)
+            result = self._closed_simple(prepared) if self.spec.n <= 3 else self._closed_biquadratic(prepared)
+            return result.to(device=values.device)
         if self.route == "left_matrix_exp":
             matrix_values = values.to(device=self.operator_eye.device)
             columns = self.left_product.forward_compact(matrix_values.unsqueeze(-2), self.operator_eye)

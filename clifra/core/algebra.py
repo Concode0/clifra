@@ -361,7 +361,7 @@ class AlgebraContext:
         )
 
     def plan_linear_action(self, *, input=None, output=None):
-        """Plan induced action of [channels, n, n] matrices on [..., channels, lanes]."""
+        """Plan induced action of [..., n, n] matrices on broadcast [..., lanes] values."""
 
         input = self._contract(input)
         output = self._contract(output, default=input.layout)

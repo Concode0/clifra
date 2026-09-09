@@ -6,9 +6,6 @@ from tests.planning._grade_plan_helpers import (
     AlgebraContext,
     FullSandwichActionExecutor,
     GradedLinearActionExecutor,
-    MultiVersorActionExecutor,
-    PairedBivectorActionExecutor,
-    PlannedOperation,
     _oracle_for,
     _oracle_sandwich_action_matrices,
     pytest,
@@ -62,9 +59,8 @@ def test_high_dimensional_action_route_selection_uses_only_static_layout_facts(m
     assert plan.route == "vector_matrix"
 
 
-@pytest.mark.parametrize("route", ["plan_versor_action", "plan_multi_versor_action", "plan_paired_bivector_action"])
 @pytest.mark.parametrize("foreign_side", ["input", "output", "parameter"])
-def test_action_plans_reject_foreign_contracts_before_executor_construction(route, foreign_side):
+def test_action_plans_reject_foreign_contracts_before_executor_construction(foreign_side):
     algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
     foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
     layouts = {
@@ -80,10 +76,7 @@ def test_action_plans_reject_foreign_contracts_before_executor_construction(rout
     )
 
     with pytest.raises(ValueError, match=rf"{foreign_side}_layout signature .* does not match algebra signature"):
-        if route == "plan_paired_bivector_action":
-            action_helpers.plan_paired_bivector_action(algebra, **layouts)
-        else:
-            getattr(action_helpers, route)(algebra, grade=2, **layouts)
+        action_helpers.plan_versor_action(algebra, grade=2, **layouts)
 
     assert (
         len(algebra._planner._product_executors),
@@ -122,7 +115,7 @@ def test_multi_graded_linear_action_matches_stacked_single_actions():
     matrices = torch.randn(5, algebra.n, algebra.n, dtype=torch.float64)
 
     executor = GradedLinearActionExecutor(input_layout=layout, output_layout=layout)
-    actual = executor.multi(values, matrices)
+    actual = executor(values.unsqueeze(-2), matrices)
     expected = torch.stack(
         [executor(values, matrix.unsqueeze(0).expand(values.shape[-2], -1, -1)) for matrix in matrices],
         dim=-2,
@@ -149,7 +142,7 @@ def test_full_sandwich_action_executor_matches_small_oracle_action_matrices():
 
     assert executor.route == "full_action_matrix"
     assert torch.allclose(executor.action_matrices(left, right), expected_matrices, atol=1e-12, rtol=1e-12)
-    assert torch.allclose(executor.per_channel(left, values, right), expected_values, atol=1e-12, rtol=1e-12)
+    assert torch.allclose(executor.forward(left, values, right), expected_values, atol=1e-12, rtol=1e-12)
 
 
 def test_context_sandwich_helpers_use_planner_full_action_executor():
@@ -246,14 +239,14 @@ def test_plan_sandwich_action_handle_covers_public_full_action_helpers():
         handle.action_matrices(left, right), action_helpers.sandwich_action_matrices(algebra, left, right)
     )
     assert torch.allclose(
-        handle.batched(batch_left, values, batch_right),
+        handle(batch_left.unsqueeze(-2), values, batch_right.unsqueeze(-2)),
         action_helpers.sandwich_product(algebra, batch_left, values, batch_right),
     )
     assert torch.allclose(
-        handle.per_channel(left, values, right), action_helpers.per_channel_sandwich(algebra, left, values, right)
+        handle.forward(left, values, right), action_helpers.per_channel_sandwich(algebra, left, values, right)
     )
     assert torch.allclose(
-        handle.multi(left, values, right), action_helpers.multi_rotor_sandwich(algebra, left, values, right)
+        handle(left, values.unsqueeze(-2), right), action_helpers.multi_rotor_sandwich(algebra, left, values, right)
     )
 
 
@@ -277,96 +270,6 @@ def test_context_full_layout_versor_action_uses_static_action_matrix_executor():
     assert torch.allclose(actual, expected, atol=1e-12, rtol=1e-12)
 
 
-def test_action_plan_handles_match_public_versor_helpers():
-    context = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float64)
-    full_layout = context.layout()
-    parameter_layout = context.layout((2,))
-    generator = torch.Generator(device=DEVICE).manual_seed(313)
-    values = torch.randn(2, 4, context.dim, dtype=torch.float64, generator=generator)
-    weights = torch.randn(4, parameter_layout.dim, dtype=torch.float64, generator=generator) * 0.1
-    multi_weights = torch.randn(5, parameter_layout.dim, dtype=torch.float64, generator=generator) * 0.1
-    mix = torch.randn(4, 5, dtype=torch.float64, generator=generator)
-    left_weights = torch.randn(3, parameter_layout.dim, dtype=torch.float64, generator=generator) * 0.1
-    right_weights = torch.randn(3, parameter_layout.dim, dtype=torch.float64, generator=generator) * 0.1
-    channel_to_pair = torch.tensor([0, 1, 2, 0], dtype=torch.long)
-
-    versor = context.plan_versor_action(grade=2, input=full_layout, output=full_layout, parameter=parameter_layout)
-    multi = action_helpers.plan_multi_versor_action(
-        context, grade=2, input_layout=full_layout, output_layout=full_layout, parameter_layout=parameter_layout
-    )
-    paired = action_helpers.plan_paired_bivector_action(
-        context, input_layout=full_layout, output_layout=full_layout, parameter_layout=parameter_layout
-    )
-
-    assert isinstance(versor, PlannedOperation)
-    assert isinstance(multi, MultiVersorActionExecutor)
-    assert isinstance(paired, PairedBivectorActionExecutor)
-    assert versor._kernel.bivector_exp is not None
-    assert versor._kernel.rotor_reverse is not None
-    assert multi.bivector_exp is not None
-    assert multi.rotor_reverse is not None
-    assert paired.bivector_exp is not None
-    assert paired.rotor_reverse is not None
-    assert torch.allclose(
-        versor(values, weights),
-        context.versor_action(
-            values, weights, grade=2, input=full_layout, output=full_layout, parameter=parameter_layout
-        ),
-        atol=1e-12,
-        rtol=1e-12,
-    )
-    assert torch.allclose(
-        multi(values, multi_weights, mix),
-        action_helpers.multi_versor_action(
-            context,
-            values,
-            multi_weights,
-            mix,
-            grade=2,
-            input_layout=full_layout,
-            output_layout=full_layout,
-            parameter_layout=parameter_layout,
-        ),
-        atol=1e-12,
-        rtol=1e-12,
-    )
-    assert torch.allclose(
-        paired(values, left_weights, right_weights, channel_to_pair),
-        action_helpers.paired_bivector_action(
-            context,
-            values,
-            left_weights,
-            right_weights,
-            channel_to_pair,
-            input_layout=full_layout,
-            output_layout=full_layout,
-            parameter_layout=parameter_layout,
-        ),
-        atol=1e-12,
-        rtol=1e-12,
-    )
-
-
-def test_compact_paired_bivector_action_handle_preplans_factor_products():
-    context = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float64)
-    vector_layout = context.layout((1,))
-    parameter_layout = context.layout((2,))
-    handle = action_helpers.plan_paired_bivector_action(
-        context, input_layout=vector_layout, output_layout=vector_layout, parameter_layout=parameter_layout
-    )
-
-    assert isinstance(handle, PairedBivectorActionExecutor)
-    assert handle.bivector_exp is not None
-    assert handle.rotor_reverse is not None
-    assert handle.left_product is not None
-    assert handle.right_product is not None
-    assert handle.left_product._kernel.metadata.family == "product"
-    assert handle.right_product._kernel.metadata.family == "product"
-    # Children are built from retained selections, not looked up/reselected via
-    # the algebra's independent top-level operation cache.
-    assert not context._planner._product_executors
-
-
 def test_compact_versor_action_routes_vector_actions_without_full_rotor_layouts():
     context = AlgebraContext(5, 0, 0, device=DEVICE, dtype=torch.float64)
     vector_layout = context.layout((1,))
@@ -375,9 +278,6 @@ def test_compact_versor_action_routes_vector_actions_without_full_rotor_layouts(
 
     vector_rotor = context.plan_versor_action(
         grade=2, input=vector_layout, output=vector_layout, parameter=bivector_layout
-    )
-    vector_multi = action_helpers.plan_multi_versor_action(
-        context, grade=2, input_layout=vector_layout, output_layout=vector_layout, parameter_layout=bivector_layout
     )
     mixed_rotor = context.plan_versor_action(
         grade=2, input=mixed_layout, output=mixed_layout, parameter=bivector_layout
@@ -392,21 +292,9 @@ def test_compact_versor_action_routes_vector_actions_without_full_rotor_layouts(
     assert vector_rotor._kernel.left_product is None
     assert vector_rotor._kernel.right_product is None
     assert vector_rotor._kernel.rotor_layout is None
-    assert not vector_multi.use_rotor_product_action
-    assert vector_multi.vector_matrix is not None
-    assert vector_multi.action is not None
-    assert vector_multi.bivector_exp is None
-    assert vector_multi.rotor_reverse is None
-    assert vector_multi.left_product is None
-    assert vector_multi.right_product is None
-    assert vector_multi.rotor_layout is None
-    assert mixed_rotor._kernel.use_rotor_product_action
-    assert mixed_rotor._kernel.vector_matrix is None
-    assert mixed_rotor._kernel.action is None
-    assert mixed_rotor._kernel.bivector_exp is not None
-    assert mixed_rotor._kernel.rotor_reverse is not None
-    assert mixed_rotor._kernel.left_product is not None
-    assert mixed_rotor._kernel.right_product is not None
+    assert mixed_rotor._kernel.route == "vector_matrix"
+    assert mixed_rotor._kernel.bivector_exp is None
+    assert mixed_rotor._kernel.rotor_layout is None
     assert reflection._kernel.vector_matrix.metric_signs.numel() == vector_layout.dim
     assert not hasattr(reflection._kernel.action, "flat_positions_1")
 
@@ -487,7 +375,7 @@ def test_action_plan_handle_validates_inputs_through_executor_forward():
     weights = torch.randn(4, bivector_layout.dim, dtype=torch.float64, generator=generator) * 0.1
 
     assert torch.allclose(handle(values, weights), handle._kernel(values, weights), atol=1e-12, rtol=1e-12)
-    with pytest.raises(ValueError, match="expected 3 channels"):
+    with pytest.raises(RuntimeError):
         handle(values, weights[:3])
 
 

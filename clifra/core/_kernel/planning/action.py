@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import comb
 
 import torch
 
-from clifra.core._kernel.basis import expand_output_grades, operation_coefficient
+from clifra.core._kernel.basis import operation_coefficient
 from clifra.core._kernel.contracts import _check_contract_spec
-from clifra.core._kernel.planning.policy import environment_extensions
+from clifra.core._kernel.planning.policy import PlanFacts, environment_extensions
+from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import TensorContract
 
@@ -65,41 +67,6 @@ class VersorActionPlan:
     def __post_init__(self) -> None:
         _bind_contracts(self, "input", "output", "parameter")
 
-    @property
-    def linear_action(self) -> LinearActionPlan:
-        """Return the equivalent linear action over the same input/output layouts."""
-        return LinearActionPlan(input_layout=self.input_layout, output_layout=self.output_layout)
-
-
-@dataclass(frozen=True)
-class PairedBivectorActionPlan:
-    """Resolved contract for independent left/right bivector rotor actions."""
-
-    input_layout: GradeLayout
-    output_layout: GradeLayout
-    parameter_layout: GradeLayout
-    rotor_layout: GradeLayout
-    middle_layout: GradeLayout
-    route: str
-    input_contract: TensorContract = field(init=False, repr=False)
-    output_contract: TensorContract = field(init=False, repr=False)
-    parameter_contract: TensorContract = field(init=False, repr=False)
-    rotor_contract: TensorContract = field(init=False, repr=False)
-    middle_contract: TensorContract = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        _bind_contracts(self, "input", "output", "parameter", "rotor", "middle")
-
-    @property
-    def input_grades(self) -> tuple[int, ...]:
-        """Return the grades accepted before the paired bivector action."""
-        return self.input_layout.grades
-
-    @property
-    def output_grades(self) -> tuple[int, ...]:
-        """Return the grades retained after the paired bivector action."""
-        return self.output_layout.grades
-
 
 def build_linear_action_plan(
     *,
@@ -149,59 +116,8 @@ def build_versor_action_plan(
     )
 
 
-def build_paired_bivector_action_plan(
-    algebra,
-    *,
-    input_layout: GradeLayout,
-    output_layout: GradeLayout | None = None,
-    parameter_layout: GradeLayout | None = None,
-) -> PairedBivectorActionPlan:
-    """Build a plan for ``R_left x R_right_reverse`` with independent rotors.
-
-    Unlike a true versor sandwich ``R x R~``, independent left/right rotors are
-    not generally grade-preserving. The planner therefore expands the default
-    output layout through both geometric products and lets callers explicitly
-    project with ``output_layout`` when they want a narrower result.
-    """
-    spec = AlgebraSpec.from_algebra(algebra)
-    parameter_layout = algebra.layout((2,)) if parameter_layout is None else parameter_layout
-    input_layout = _contract(spec, input_layout, "input").layout
-    parameter_layout = _contract(spec, parameter_layout, "parameter").layout
-    if parameter_layout.grades != (2,):
-        raise ValueError(f"parameter_layout must contain grade 2, got {parameter_layout.grades}")
-
-    rotor_layout = spec.layout(range(0, spec.n + 1, 2))
-    middle_grades = expand_output_grades(rotor_layout.grades, input_layout.grades, spec.n, op="geometric_product")
-    middle_layout = spec.layout(middle_grades)
-    inferred_output = spec.layout(
-        expand_output_grades(middle_layout.grades, rotor_layout.grades, spec.n, op="geometric_product")
-    )
-    output_layout = inferred_output if output_layout is None else output_layout
-    output_layout = _contract(spec, output_layout, "output").layout
-    decision = _select_paired_action_route(
-        algebra,
-        input_layout=input_layout,
-        output_layout=output_layout,
-        parameter_layout=parameter_layout,
-        rotor_layout=rotor_layout,
-        middle_layout=middle_layout,
-    )
-    return PairedBivectorActionPlan(
-        input_layout=input_layout,
-        output_layout=output_layout,
-        parameter_layout=parameter_layout,
-        rotor_layout=rotor_layout,
-        middle_layout=middle_layout,
-        route=decision.route,
-    )
-
-
 def _select_versor_action_route(algebra, **parameters):
     return _select_action_route(algebra, "versor", parameters)
-
-
-def _select_paired_action_route(algebra, **parameters):
-    return _select_action_route(algebra, "paired", parameters)
 
 
 def _select_action_route(algebra, operation, parameters):
@@ -324,3 +240,30 @@ def build_full_sandwich_action_buffers(layout, *, device=None, dtype=torch.float
     output_indices = torch.arange(dim, dtype=torch.long, device=device).unsqueeze(0).expand(dim, dim)
     left_sign_t = geometric_product_signs[cayley_indices, output_indices].T.contiguous()
     return cayley_indices, left_sign_t, geometric_product_signs.T.contiguous()
+
+
+def _linear_action_facts(input_layout, output_layout, *, dtype_bytes, generator=False):
+    """Bound dense lifted coefficients and the largest determinant temporary.
+
+    These are per broadcast item, like other static resource estimates. Count
+    grade blocks without constructing their Cartesian-product index buffers.
+    """
+    n = input_layout.spec.n
+    grades = set(input_layout.grades) & set(output_layout.grades)
+    vector_only = input_layout.grades == output_layout.grades == (1,)
+    blocks = {} if vector_only else {g: comb(n, g) ** 2 for g in grades if g > 0}
+    dense = input_layout.dim * output_layout.dim
+    minors = max((count * g * g for g, count in blocks.items()), default=0)
+    indices = sum(count * (1 + 2 * g) for g, count in blocks.items())
+    work = dense + sum(count * g**3 for g, count in blocks.items()) + (n**3 if generator else 0)
+    backward_work = 2 * dense + sum(count * (g**5 if g >= 4 else 2 * g**3) for g, count in blocks.items())
+    backward_work += 2 * n**3 if generator else 0
+    pairs = max(n * n, dense, minors)
+    lanes = max(n, input_layout.dim, output_layout.dim, comb(n, 2) if generator else 0)
+    return PlanFacts(
+        work,
+        backward_work,
+        (2 * dense + minors + (3 * n * n if generator else 0)) * dtype_bytes + indices * 8,
+        indices + n * n,
+        resources=ResourceRequirements(lanes, pairs),
+    )

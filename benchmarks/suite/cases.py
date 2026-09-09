@@ -8,10 +8,11 @@ from typing import Any, Iterable
 
 import torch
 
-from clifra import make_algebra
-from clifra.core import ResourceLimits
-from clifra.core.foundation.basis import expand_output_grades
+from clifra.core import AlgebraSpec
+from clifra.core._kernel.basis import expand_output_grades
+from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.planning.exp import select_bivector_exp_executor_family
+from clifra.core._kernel.planning.resources import ResourceLimits
 
 from .models import PreparedCase, ResourceConfig, SignatureSpec
 
@@ -50,7 +51,7 @@ class FeasibleCase:
 def make_benchmark_algebra(spec: SignatureSpec, *, device: str, dtype: torch.dtype):
     """Construct an algebra with clifra resource limits unlocked."""
 
-    return make_algebra(
+    return configured_algebra(
         spec.p,
         spec.q,
         spec.r,
@@ -251,6 +252,15 @@ def estimate_case_bytes(
         tensor_elements += 2 * pairs * rotor_lanes
         interaction_count = max(interaction_count, rotor_lanes * max(input_lanes, output_lanes, 1))
 
+    if exp_family == "vector_matrix_exp":
+        shared = set(selectors["input_grades"]) & set(selectors["output_grades"])
+        minor_entries = max((math.comb(n, g) ** 2 * g * g for g in shared), default=0)
+        items = actions if kind == "multi_versor_action" else channels
+        tensor_elements += items * (input_lanes * output_lanes + minor_entries + 3 * n * n)
+        interaction_count = max(interaction_count, minor_entries)
+    if kind == "multi_versor_action":
+        tensor_elements += batch * channels * actions * output_lanes
+
     tensor_bytes = tensor_elements * element_size
     plan_bytes = interaction_count * 32
     return int(math.ceil((tensor_bytes + plan_bytes) * float(safety_factor)))
@@ -269,9 +279,18 @@ def exp_executor_family(
     if kind not in {"bivector_exp", "paired_bivector_action", "versor_action", "multi_versor_action"}:
         return None
     if kind in {"versor_action", "multi_versor_action"}:
-        if selectors.get("input_grades") == (1,) and selectors.get("output_grades") == (1,):
+        grade = selectors["parameter_grades"][0]
+        if grade == 1:
+            return None
+        algebra = make_benchmark_algebra(spec, dtype=dtype, device=device)
+        plan = algebra._planner.versor_action_plan(
+            grade=grade,
+            input_layout=algebra.layout(selectors["input_grades"]),
+            output_layout=algebra.layout(selectors["output_grades"]),
+        )
+        if plan.route == "vector_matrix":
             return "vector_matrix_exp"
-    return select_bivector_exp_executor_family(spec, device, dtype=dtype)
+    return select_bivector_exp_executor_family(AlgebraSpec(spec.p, spec.q, spec.r), device, dtype=dtype)
 
 
 def implicit_internal_lanes(
@@ -332,7 +351,7 @@ def build_case(
         left = layouts["left_grades"]
         right = layouts["right_grades"]
         output = layouts["output_grades"]
-        module = algebra.plan_product(op=operation, left_layout=left, right_layout=right, output_layout=output)
+        module = algebra.plan_product(op=operation, left=left, right=right, output=output)
         args = (
             random_tensor((batch, left.dim), device=device, dtype=dtype, seed=seed, scale=scale),
             random_tensor((batch, right.dim), device=device, dtype=dtype, seed=seed + 1, scale=scale),
@@ -344,14 +363,14 @@ def build_case(
         operation = str(case["operation"])
         input_layout = layouts["input_grades"]
         output = layouts["output_grades"]
-        module = algebra.plan_unary(op=operation, input_layout=input_layout, output_layout=output)
+        module = algebra.plan_unary(op=operation, input=input_layout, output=output)
         args = (random_tensor((batch, input_layout.dim), device=device, dtype=dtype, seed=seed, scale=scale),)
         metadata.update(executor_family=getattr(module, "executor_family", "unary"), pair_count=input_layout.dim)
         return PreparedCase(str(case["id"]), kind, operation, module, args, input_layout, output, metadata, backward)
 
     if kind == "signature_norm":
         input_layout = layouts["input_grades"]
-        module = algebra.plan_signature_norm_squared(input_layout=input_layout)
+        module = algebra.plan_signature_norm_squared(input=input_layout)
         args = (random_tensor((batch, input_layout.dim), device=device, dtype=dtype, seed=seed, scale=scale),)
         metadata.update(
             executor_family=getattr(module, "executor_family", "metric"), output_lanes=1, pair_count=input_layout.dim
@@ -363,7 +382,7 @@ def build_case(
     if kind == "pseudoscalar_product":
         input_layout = layouts["input_grades"]
         output = layouts["output_grades"]
-        module = algebra.plan_pseudoscalar_product(input_layout=input_layout, output_layout=output)
+        module = algebra.plan_pseudoscalar_product(input=input_layout, output=output)
         args = (random_tensor((batch, input_layout.dim), device=device, dtype=dtype, seed=seed, scale=scale),)
         metadata.update(executor_family=getattr(module, "executor_family", "permutation"), pair_count=input_layout.dim)
         return PreparedCase(str(case["id"]), kind, kind, module, args, input_layout, output, metadata, backward)
@@ -371,7 +390,7 @@ def build_case(
     if kind == "bivector_exp":
         input_layout = layouts["input_grades"]
         output = layouts["output_grades"]
-        module = algebra.plan_bivector_exp(input_layout=input_layout, output_layout=output)
+        module = algebra.plan_bivector_exp(input=input_layout, output=output)
         args = (random_tensor((batch, input_layout.dim), device=device, dtype=dtype, seed=seed, scale=scale),)
         metadata.update(
             executor_family=getattr(module, "executor_family", "bivector_exp"),
@@ -383,7 +402,7 @@ def build_case(
 
     if kind == "sandwich_action":
         layout = layouts["input_grades"]
-        module = algebra.plan_sandwich_action(layout=layout)
+        module = algebra.plan_sandwich_action(left=layout, input=layout, right=layout, output=layout)
         args = (
             random_tensor((channels, layout.dim), device=device, dtype=dtype, seed=seed, scale=scale),
             random_tensor((batch, channels, layout.dim), device=device, dtype=dtype, seed=seed + 1),
@@ -401,9 +420,9 @@ def build_case(
         grade = int(case.get("grade", 2))
         module = algebra.plan_versor_action(
             grade=grade,
-            input_layout=input_layout,
-            output_layout=output,
-            parameter_layout=parameter,
+            input=input_layout,
+            output=output,
+            parameter=parameter,
         )
         args = (
             values,
@@ -411,11 +430,8 @@ def build_case(
         )
     elif kind == "multi_versor_action":
         grade = int(case.get("grade", 2))
-        module = algebra.plan_multi_versor_action(
-            grade=grade,
-            input_layout=input_layout,
-            output_layout=output,
-            parameter_layout=parameter,
+        module = _WeightedActions(
+            algebra.plan_versor_action(grade=grade, input=input_layout, output=output, parameter=parameter)
         )
         args = (
             values,
@@ -423,10 +439,11 @@ def build_case(
             random_tensor((channels, actions), device=device, dtype=dtype, seed=seed + 2),
         )
     elif kind == "paired_bivector_action":
-        module = algebra.plan_paired_bivector_action(
-            input_layout=input_layout,
-            output_layout=output,
-            parameter_layout=parameter,
+        even = algebra.layout(range(0, algebra.n + 1, 2))
+        module = _IndependentRotors(
+            algebra.plan_bivector_exp(input=parameter, output=even),
+            algebra.plan_unary(op="reverse", input=even),
+            algebra.plan_sandwich_action(left=even, input=input_layout, right=even, output=output),
         )
         args = (
             values,
@@ -445,7 +462,7 @@ def build_case(
 
 
 def _action_exp_metadata(module) -> dict[str, Any]:
-    executor = module.executor
+    executor = module.action._kernel if isinstance(module, _WeightedActions) else getattr(module, "_kernel", module)
     vector_matrix = getattr(executor, "vector_matrix", None)
     planned_exp = getattr(executor, "bivector_exp", None)
     if vector_matrix is not None and getattr(executor, "grade", 2) == 2:
@@ -464,15 +481,15 @@ def _action_exp_metadata(module) -> dict[str, Any]:
         "internal_middle_lanes": int(getattr(getattr(executor, "middle_layout", None), "dim", 0) or 0),
     }
     if planned_exp is not None:
-        metadata["exp_executor_family"] = planned_exp.executor_family
-        metadata["exp_operator_lanes"] = int(planned_exp.operator_layout.dim)
-        if planned_exp.executor_family in {"left_matrix_exp", "cpu_matrix_exp"}:
-            metadata["matrix_exp_order"] = int(planned_exp.operator_layout.dim)
+        metadata["exp_executor_family"] = planned_exp._kernel.metadata.route
+        metadata["exp_operator_lanes"] = int(planned_exp._kernel.operator_layout.dim)
+        if planned_exp._kernel.metadata.route == "left_matrix_exp":
+            metadata["matrix_exp_order"] = int(planned_exp._kernel.operator_layout.dim)
     return metadata
 
 
 def _action_pair_count(module) -> int:
-    executor = module.executor
+    executor = module.action._kernel if isinstance(module, _WeightedActions) else getattr(module, "_kernel", module)
     return sum(
         int(getattr(product, "pair_count", 0) or 0)
         for product in (getattr(executor, "left_product", None), getattr(executor, "right_product", None))
@@ -497,3 +514,30 @@ def _required(selectors: dict[str, tuple[int, ...]], key: str) -> tuple[int, ...
         return selectors[key]
     except KeyError as exc:
         raise PreflightSkip(f"case requires {key}") from exc
+
+
+class _WeightedActions(torch.nn.Module):
+    """Benchmark workload: broadcast independent actions, then mix with PyTorch."""
+
+    def __init__(self, action):
+        super().__init__()
+        self.action = action
+
+    def forward(self, values, weights, mix):
+        transformed = self.action(values.unsqueeze(-2), weights)
+        return torch.einsum("ck,...cko->...co", mix, transformed)
+
+
+class _IndependentRotors(torch.nn.Module):
+    """Benchmark workload: exponentiate, select factors, then compose L X R."""
+
+    def __init__(self, exponential, reverse, sandwich):
+        super().__init__()
+        self.bivector_exp = exponential
+        self.reverse = reverse
+        self.sandwich = sandwich
+
+    def forward(self, values, left_weights, right_weights, indices):
+        left = self.bivector_exp(-0.5 * left_weights)
+        right = self.reverse(self.bivector_exp(-0.5 * right_weights))
+        return self.sandwich(left[indices], values, right[indices])

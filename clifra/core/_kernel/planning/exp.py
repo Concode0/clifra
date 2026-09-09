@@ -75,7 +75,9 @@ def build_bivector_exp_plan(
     decision = route_decision or select_bivector_exp_route(
         spec, device, dtype=dtype, output_layout=output_layout, policy=planning_policy
     )
-    if decision.route == "left_matrix_exp":
+    if decision.route == "left_matrix_exp" or (
+        decision.route == "closed" and spec.n >= 4 and torch.device(device).type == "mps"
+    ):
         device = torch.device("cpu")
     even = spec.layout(range(0, spec.n + 1, 2))
     grade4 = spec.layout((4,)) if decision.route == "closed" and spec.n >= 4 else None
