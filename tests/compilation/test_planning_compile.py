@@ -376,6 +376,16 @@ def test_planned_blade_inverse_compiles_fullgraph_after_cache_warm():
 
 
 @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
+def test_compiled_strict_blade_inverse_rejects_singular_input_at_runtime():
+    algebra = AlgebraContext(1, 1, device=DEVICE, dtype=torch.float32)
+    layout = algebra.layout((1,))
+    inverse = torch.compile(algebra.plan_strict_blade_inverse(input=layout), backend="aot_eager", fullgraph=True)
+
+    with pytest.raises(RuntimeError, match="blade inverse is undefined for a zero denominator"):
+        inverse(torch.tensor([1.0, 1.0], device=DEVICE))
+
+
+@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 def test_planned_reflect_compiles_fullgraph_after_cache_warm():
     algebra = AlgebraContext(5, 0, device=DEVICE, dtype=torch.float32)
     layout = algebra.layout((1,))

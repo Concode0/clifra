@@ -6,7 +6,7 @@ from torch import nn
 from clifra.core.layout import GradeLayout
 
 from .basis import expand_output_grades
-from .numerics import eps_like, signed_clamp_min
+from .numerics import eps_like, require_nonzero, signed_clamp_min
 
 
 class Geometry(nn.Module):
@@ -45,13 +45,26 @@ class Geometry(nn.Module):
             left, x, right = values
             return self.second(self.first(left, x), right)
         blade = values[0] if self.kind == "blade_inverse" else values[1]
-        inverse = self.reverse(blade) / signed_clamp_min(self.norm(blade), self.eps_sq)
+        inverse = self._inverse(blade)
         if self.kind == "blade_inverse":
             return self.project(inverse)
         x = values[0]
         middle = self.first(self.involution(blade), x) if self.kind == "versor" else self.first(x, blade)
         result = self.second(middle, inverse)
         return x - result if self.kind == "blade_reject" else result
+
+    def _inverse(self, blade):
+        denominator = signed_clamp_min(self.norm(blade), self.eps_sq)
+        return self.reverse(blade) / denominator
+
+
+class StrictGeometry(Geometry):
+    """Geometry composition using the exact mathematical inverse denominator."""
+
+    def _inverse(self, blade):
+        denominator = self.norm(blade)
+        require_nonzero(denominator, name=self.kind.replace("_", " "))
+        return self.reverse(blade) / denominator
 
 
 def full_versor_factors(

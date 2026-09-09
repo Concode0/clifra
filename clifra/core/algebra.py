@@ -320,7 +320,24 @@ class AlgebraContext:
         return self._build_geometry("blade_inverse", input=input, output=output)
 
     def blade_inverse(self, a, *, input=None, output=None):
+        """Return the epsilon-stabilized blade inverse."""
         return self._on(self.plan_blade_inverse(input=input, output=output), a.device, a.dtype)(a)
+
+    def _build_strict_geometry(self, kind, *, input=None, right=None, output=None):
+        from ._kernel.composition import StrictGeometry
+
+        declarations = (input,) if kind == "blade_inverse" else (input, right)
+        inputs = tuple(self._contract(item) for item in declarations)
+        output = self._contract(output, default=inputs[0].layout)
+        kernel = StrictGeometry(self, kind, tuple(item.layout for item in inputs), output.layout)
+        return PlannedOperation(kernel, inputs, output)
+
+    def plan_strict_blade_inverse(self, *, input=None, output=None):
+        return self._build_strict_geometry("blade_inverse", input=input, output=output)
+
+    def strict_blade_inverse(self, a, *, input=None, output=None):
+        """Return reverse(A) / <A reverse(A)>_0, raising for a zero denominator."""
+        return self._on(self.plan_strict_blade_inverse(input=input, output=output), a.device, a.dtype)(a)
 
     def plan_blade_project(self, *, input=None, blade=None, output=None):
         return self._build_geometry("blade_project", input=input, right=blade, output=output)
@@ -329,12 +346,30 @@ class AlgebraContext:
         device, dtype = self._placement(values, a)
         return self._on(self.plan_blade_project(input=input, blade=blade, output=output), device, dtype)(values, a)
 
+    def plan_strict_blade_project(self, *, input=None, blade=None, output=None):
+        return self._build_strict_geometry("blade_project", input=input, right=blade, output=output)
+
+    def strict_blade_project(self, values, a, *, input=None, blade=None, output=None):
+        """Project using an exact blade inverse, raising for a zero denominator."""
+        device, dtype = self._placement(values, a)
+        operation = self.plan_strict_blade_project(input=input, blade=blade, output=output)
+        return self._on(operation, device, dtype)(values, a)
+
     def plan_blade_reject(self, *, input=None, blade=None, output=None):
         return self._build_geometry("blade_reject", input=input, right=blade, output=output)
 
     def blade_reject(self, values, a, *, input=None, blade=None, output=None):
         device, dtype = self._placement(values, a)
         return self._on(self.plan_blade_reject(input=input, blade=blade, output=output), device, dtype)(values, a)
+
+    def plan_strict_blade_reject(self, *, input=None, blade=None, output=None):
+        return self._build_strict_geometry("blade_reject", input=input, right=blade, output=output)
+
+    def strict_blade_reject(self, values, a, *, input=None, blade=None, output=None):
+        """Reject using an exact blade inverse, raising for a zero denominator."""
+        device, dtype = self._placement(values, a)
+        operation = self.plan_strict_blade_reject(input=input, blade=blade, output=output)
+        return self._on(operation, device, dtype)(values, a)
 
     def plan_reflect(self, *, input=None, normal=None, output=None):
         return self._build_geometry("versor", input=input, right=normal, output=output)
@@ -343,12 +378,30 @@ class AlgebraContext:
         device, dtype = self._placement(values, a)
         return self._on(self.plan_reflect(input=input, normal=normal, output=output), device, dtype)(values, a)
 
+    def plan_strict_reflect(self, *, input=None, normal=None, output=None):
+        return self._build_strict_geometry("versor", input=input, right=normal, output=output)
+
+    def strict_reflect(self, values, a, *, input=None, normal=None, output=None):
+        """Reflect using an exact normal inverse, raising for a zero denominator."""
+        device, dtype = self._placement(values, a)
+        operation = self.plan_strict_reflect(input=input, normal=normal, output=output)
+        return self._on(operation, device, dtype)(values, a)
+
     def plan_versor_product(self, *, input=None, versor=None, output=None):
         return self._build_geometry("versor", input=input, right=versor, output=output)
 
     def versor_product(self, a, values, *, input=None, versor=None, output=None):
         device, dtype = self._placement(values, a)
         return self._on(self.plan_versor_product(input=input, versor=versor, output=output), device, dtype)(values, a)
+
+    def plan_strict_versor_product(self, *, input=None, versor=None, output=None):
+        return self._build_strict_geometry("versor", input=input, right=versor, output=output)
+
+    def strict_versor_product(self, a, values, *, input=None, versor=None, output=None):
+        """Apply a versor with its exact inverse, raising for a zero denominator."""
+        device, dtype = self._placement(values, a)
+        operation = self.plan_strict_versor_product(input=input, versor=versor, output=output)
+        return self._on(operation, device, dtype)(values, a)
 
     def plan_sandwich_action(self, *, left=None, input=None, right=None, output=None):
         """Plan L X R with ordinary tensor broadcasting."""

@@ -29,3 +29,13 @@ def signed_clamp_min(values: torch.Tensor, eps: float | torch.Tensor) -> torch.T
     eps_tensor = torch.as_tensor(eps, device=values.device, dtype=values.dtype)
     magnitude = values.abs().clamp_min(eps_tensor)
     return torch.where(values < 0, -magnitude, magnitude)
+
+
+def require_nonzero(values: torch.Tensor, *, name: str) -> None:
+    """Raise when any prepared denominator is exactly zero."""
+    valid = torch.all(values != 0)
+    message = f"{name} is undefined for a zero denominator"
+    if torch.compiler.is_compiling():
+        torch._assert_async(valid, message)
+    elif not bool(valid.item()):
+        raise ValueError(message)
