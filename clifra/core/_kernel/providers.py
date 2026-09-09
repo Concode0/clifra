@@ -1,4 +1,8 @@
-"""Concrete preparation for the built-in mathematical execution routes."""
+"""Bridge planning assessments and prepared children to built-in executors.
+
+Assessment may select required child routes but allocates no execution buffers.
+Construction consumes the retained preparation without selecting routes again.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ if TYPE_CHECKING:
     from clifra.core._kernel.planning.unary import UnaryRequest
     from clifra.core.algebra import AlgebraContext
 
-    from ..routing import Selection
+    from .routing import Selection
 
 
 from clifra.core._kernel.planning.policy import (
@@ -224,7 +228,7 @@ class BuiltinProvider:
         if family == "product":
             if request.output.spec.n > 63:
                 return Rejected("Current Torch-backed executors support bitmask tensorization up to n=63")
-            from .product import assess_product_routes
+            from .planning.product import assess_product_routes
 
             candidates = assess_product_routes(
                 request.algebra,
@@ -269,7 +273,7 @@ class BuiltinProvider:
                 build_grade_product_plan_from_tree,
             )
 
-            from .product import FullTableProductExecutor, GradeProductExecutor
+            from .execution.product import FullTableProductExecutor, GradeProductExecutor
 
             if route == "full_table":
                 return FullTableProductExecutor(build_full_table_product_plan_from_request(preparation.declaration))
@@ -283,13 +287,13 @@ class BuiltinProvider:
         if family == "unary":
             from clifra.core._kernel.planning.unary import build_unary_plan_from_request
 
-            from .unary import GradeUnaryExecutor
+            from .execution.unary import GradeUnaryExecutor
 
             return GradeUnaryExecutor(build_unary_plan_from_request(request.declaration))
         if family == "metric":
             from clifra.core._kernel.planning.metric import build_signature_norm_squared_plan
 
-            from .metric import SignatureNormSquaredExecutor
+            from .execution.metric import SignatureNormSquaredExecutor
 
             return SignatureNormSquaredExecutor(
                 build_signature_norm_squared_plan(
@@ -301,7 +305,7 @@ class BuiltinProvider:
             )
         from clifra.core._kernel.planning.permutation import build_pseudoscalar_product_plan
 
-        from .permutation import PseudoscalarProductExecutor
+        from .execution.permutation import PseudoscalarProductExecutor
 
         return PseudoscalarProductExecutor(
             build_pseudoscalar_product_plan(
@@ -317,7 +321,7 @@ class BuiltinProvider:
 def _assess_exp(request, route):
     from clifra.core._kernel.planning.exp import taylor_degree, taylor_layouts
 
-    from .exp import assess_bivector_exp_routes
+    from .planning.exp import assess_bivector_exp_routes
 
     candidate = next(
         item
@@ -380,7 +384,7 @@ def _assess_exp(request, route):
 def _build_exp(request, route, preparation):
     from clifra.core._kernel.planning.exp import build_bivector_exp_plan
 
-    from .exp import BivectorExpExecutor, TaylorPolynomial
+    from .execution.exp import BivectorExpExecutor, TaylorPolynomial
 
     plan = build_bivector_exp_plan(
         request.spec,
@@ -426,7 +430,7 @@ def _build_exp(request, route, preparation):
 def _assess_action(request, route):
     from clifra.core._kernel.basis import expand_output_grades
 
-    from .action import _action_extensions
+    from .planning.action import _action_extensions
 
     algebra, spec = request.algebra, request.inputs[0].spec
     planner = algebra._planner
@@ -524,7 +528,7 @@ def _operation(child):
 
 
 def _build_action(request, route, preparation):
-    from .action import (
+    from .execution.action import (
         ActionComponents,
         FullSandwichActionExecutor,
         GradedLinearActionExecutor,

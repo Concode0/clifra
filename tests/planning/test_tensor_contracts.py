@@ -4,13 +4,58 @@
 import pytest
 import torch
 
-from clifra.core._kernel.contracts import check_layout_spec, compact_pair_values, infer_contract, resolve_contract
-from clifra.core._kernel.planning.layouts import build_product_request
+from clifra.core import AlgebraContext
+from clifra.core._kernel.contracts import resolve_contract
 from clifra.core._kernel.planning.unary import UnaryRequest
 from clifra.core.layout import AlgebraSpec
 from clifra.core.tensors import LaneStorage, TensorContract
 
 pytestmark = pytest.mark.unit
+
+
+def test_explicit_canonical_product_contracts_preserve_narrow_semantics():
+    algebra = AlgebraContext(4)
+    vector = algebra.layout((1,))
+    output = algebra.layout((0, 2))
+    canonical = TensorContract.canonical(vector)
+    operation = algebra.plan_product(left=canonical, right=vector, output=TensorContract.canonical(output))
+    left = torch.randn(2, algebra.dim)
+    right = torch.randn(2, vector.dim)
+    expected = algebra.geometric_product(vector.compact(left), right, left=vector, right=vector, output=output)
+    torch.testing.assert_close(operation(left, right), output.full(expected))
+
+
+def test_layout_does_not_infer_canonical_storage_from_width():
+    algebra = AlgebraContext(4)
+    vector = algebra.layout((1,))
+    values = torch.randn(2, algebra.dim)
+    with pytest.raises(ValueError, match="compact last dimension must be 4"):
+        algebra.reverse(values, input=vector)
+    actual = algebra.reverse(values, input=TensorContract.canonical(vector), output=vector)
+    torch.testing.assert_close(actual, vector.compact(values))
+
+
+def test_equal_width_layouts_keep_distinct_algebraic_meanings():
+    algebra = AlgebraContext(3)
+    values = torch.tensor([1.0, 0.0, 0.0])
+    vector, bivector = algebra.layout((1,)), algebra.layout((2,))
+    scalar = algebra.layout((0,))
+    assert vector.dim == bivector.dim
+    torch.testing.assert_close(
+        algebra.geometric_product(values, values, left=vector, right=vector, output=scalar), torch.tensor([1.0])
+    )
+    torch.testing.assert_close(
+        algebra.geometric_product(values, values, left=bivector, right=bivector, output=scalar), torch.tensor([-1.0])
+    )
+    with pytest.raises(ValueError, match="last dimension must be 8"):
+        algebra.reverse(values)
+
+
+def test_contract_resolution_ignores_obsolete_grade_defaults():
+    algebra = AlgebraContext(3)
+    algebra._default_grades = (1,)
+    algebra.default_layout = algebra.layout((2,))
+    assert resolve_contract(algebra).layout == algebra.layout()
 
 
 def test_tensor_contract_records_declared_layout_and_storage():
@@ -25,17 +70,6 @@ def test_tensor_contract_records_declared_layout_and_storage():
     assert canonical.layout is vector_layout
     assert canonical.storage is LaneStorage.CANONICAL
     assert canonical.lane_dim == spec.dim
-
-
-def test_public_layout_spec_validation_accepts_equal_specs_and_rejects_foreign_signatures():
-    spec = AlgebraSpec(3, 0, 0)
-    peer_spec = AlgebraSpec(3, 0, 0)
-    foreign_spec = AlgebraSpec(0, 3, 0)
-    layout = peer_spec.layout((1,))
-
-    assert check_layout_spec(spec, layout, "input_layout") is None
-    with pytest.raises(ValueError, match="input_layout signature .* does not match algebra signature"):
-        check_layout_spec(foreign_spec, layout, "input_layout")
 
 
 def test_resolve_contract_reports_role_and_grade_disagreement():
@@ -76,19 +110,6 @@ def test_tensor_contract_converts_between_compact_and_canonical():
     assert torch.allclose(canonical_contract.to_compact(canonical_values), compact_values)
 
 
-def test_infer_contract_detects_compact_and_canonical_storage():
-    spec = AlgebraSpec(6, 0, 0)
-    layout = spec.layout((1,))
-    compact = torch.zeros(2, layout.dim)
-    canonical = torch.zeros(2, spec.dim)
-
-    compact_contract = infer_contract(spec, compact, layout=layout, side="value")
-    canonical_contract = infer_contract(spec, canonical, layout=layout, side="value")
-
-    assert compact_contract.storage is LaneStorage.COMPACT
-    assert canonical_contract.storage is LaneStorage.CANONICAL
-
-
 def test_grade_layout_returns_compact_positions_for_grades():
     spec = AlgebraSpec(4, 0, 0)
     layout = spec.layout((0, 2))
@@ -99,73 +120,3 @@ def test_grade_layout_returns_compact_positions_for_grades():
     assert scalar_positions.tolist() == [0]
     assert len(bivector_positions) == 6
     assert set(bivector_positions.tolist()).isdisjoint(scalar_positions.tolist())
-
-
-def test_product_request_carries_resolved_tensor_contracts():
-    spec = AlgebraSpec(6, 0, 0)
-    vector_layout = spec.layout((1,))
-    bivector_layout = spec.layout((2,))
-    left = torch.zeros(2, vector_layout.dim)
-    right = torch.zeros(2, spec.dim)
-
-    request = build_product_request(
-        spec,
-        left,
-        right,
-        left_layout=vector_layout,
-        right_layout=bivector_layout,
-        right_storage=LaneStorage.CANONICAL,
-        op="geometric_product",
-    )
-
-    assert request.left.storage is LaneStorage.COMPACT
-    assert request.right.storage is LaneStorage.CANONICAL
-    assert request.left_grades == (1,)
-    assert request.right_grades == (2,)
-    assert request.output.storage is LaneStorage.COMPACT
-    assert request.output_grades == (1, 3)
-
-
-def test_product_request_can_declare_canonical_output_storage():
-    spec = AlgebraSpec(4, 0, 0)
-    vector_layout = spec.layout((1,))
-    values = torch.zeros(2, vector_layout.dim)
-    request = build_product_request(
-        spec,
-        values,
-        values,
-        left_layout=vector_layout,
-        right_layout=vector_layout,
-        output_storage=LaneStorage.CANONICAL,
-        op="geometric_product",
-    )
-
-    assert request.output.uses_canonical_storage
-    assert request.output.lane_dim == spec.dim
-
-
-def test_compact_pair_values_aligns_to_grade_union_without_full_materialization():
-    spec = AlgebraSpec(4, 0, 0)
-    vector_layout = spec.layout((1,))
-    bivector_layout = spec.layout((2,))
-    resolved_layout = spec.layout((1, 2))
-    vector_values = torch.ones(2, vector_layout.dim)
-    bivector_values = torch.full((2, bivector_layout.dim), 2.0)
-
-    aligned_vector, aligned_bivector, resolved = compact_pair_values(
-        spec,
-        vector_values,
-        bivector_values,
-        left_layout=vector_layout,
-        right_layout=bivector_layout,
-    )
-
-    assert resolved == resolved_layout
-    assert aligned_vector.shape[-1] == resolved_layout.dim
-    assert aligned_bivector.shape[-1] == resolved_layout.dim
-    vector_positions = resolved_layout.positions_for_grades((1,))
-    bivector_positions = resolved_layout.positions_for_grades((2,))
-    assert torch.allclose(torch.index_select(aligned_vector, -1, vector_positions), vector_values)
-    assert torch.allclose(torch.index_select(aligned_vector, -1, bivector_positions), torch.zeros_like(bivector_values))
-    assert torch.allclose(torch.index_select(aligned_bivector, -1, vector_positions), torch.zeros_like(vector_values))
-    assert torch.allclose(torch.index_select(aligned_bivector, -1, bivector_positions), bivector_values)

@@ -51,7 +51,6 @@ class GradePlanTree:
     right_grades: tuple[int, ...]
     output_grades: tuple[int, ...]
     paths: tuple[GradePathNode, ...]
-    chunk_pair_limit: Optional[int] = None
 
     @property
     def path_count(self) -> int:
@@ -63,20 +62,6 @@ class GradePlanTree:
         """Upper-bound number of basis pairs across all paths."""
         return sum(path.estimated_pairs for path in self.paths)
 
-    @property
-    def estimated_chunks(self) -> int:
-        """Number of planner chunks implied by ``chunk_pair_limit``."""
-        if self.chunk_pair_limit is None or self.chunk_pair_limit <= 0:
-            return 1 if self.paths else 0
-        return sum(math.ceil(path.estimated_pairs / self.chunk_pair_limit) for path in self.paths)
-
-    def path_for_grades(self, left_grade: int, right_grade: int) -> Optional[GradePathNode]:
-        """Return the selected path for a homogeneous grade pair."""
-        for path in self.paths:
-            if path.left_grade == left_grade and path.right_grade == right_grade:
-                return path
-        return None
-
 
 def build_grade_plan_tree(
     spec: AlgebraSpec,
@@ -85,7 +70,6 @@ def build_grade_plan_tree(
     right_grades: Iterable[int],
     output_grades: Optional[Iterable[int]] = None,
     op: GradeProductOp = "geometric_product",
-    chunk_pair_limit: Optional[int] = None,
 ) -> GradePlanTree:
     """Build planner metadata for grade route grouping."""
     op = normalize_grade_product_op(op)
@@ -124,7 +108,6 @@ def build_grade_plan_tree(
         right_grades=right,
         output_grades=output,
         paths=tuple(paths),
-        chunk_pair_limit=chunk_pair_limit,
     )
 
 

@@ -8,9 +8,12 @@ from __future__ import annotations
 
 from itertools import combinations
 from math import comb
-from typing import Iterable, Literal, Optional, get_args
+from typing import TYPE_CHECKING, Iterable, Literal, Optional, get_args
 
 import torch
+
+if TYPE_CHECKING:
+    from clifra.core.layout import GradeLayout
 
 GradeProductOp = Literal[
     "geometric_product",
@@ -286,3 +289,16 @@ def _swap_parity_between_orders(index_a: int, index_b: int) -> int:
     right_grade = int(index_b).bit_count()
     overlap = (int(index_a) & int(index_b)).bit_count()
     return (left_grade * right_grade - overlap) % 2
+
+
+def build_bivector_squared_signs(input_layout: GradeLayout, *, dtype, device):
+    """Prepare static (e_ab)^2 signature data in declared bivector lane order."""
+    if input_layout.grades != (2,):
+        raise ValueError("bivector square signs require a grade-2 layout")
+    spec = input_layout.spec
+    metric = [1] * spec.p + [-1] * spec.q + [0] * spec.r
+    signs = []
+    for index in input_layout.basis_indices:
+        i, j = [bit for bit in range(spec.n) if index & (1 << bit)]
+        signs.append(-metric[i] * metric[j])
+    return torch.tensor(signs, dtype=dtype, device=device)

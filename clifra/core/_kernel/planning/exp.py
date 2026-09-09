@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 import torch
 
+from clifra.core._kernel.basis import build_bivector_squared_signs
 from clifra.core._kernel.contracts import _check_contract_spec
 from clifra.core._kernel.planning.policy import DEFAULT_PLANNING_POLICY
 from clifra.core.layout import AlgebraSpec, GradeLayout
@@ -78,11 +79,6 @@ def build_bivector_exp_plan(
         device = torch.device("cpu")
     even = spec.layout(range(0, spec.n + 1, 2))
     grade4 = spec.layout((4,)) if decision.route == "closed" and spec.n >= 4 else None
-    metric = [1] * spec.p + [-1] * spec.q + [0] * spec.r
-    signs = []
-    for index in input_layout.basis_indices:
-        i, j = [bit for bit in range(spec.n) if index & (1 << bit)]
-        signs.append(-metric[i] * metric[j])
     positions = {index: pos for pos, index in enumerate(even.basis_indices)}
     return BivectorExpPlan(
         spec,
@@ -92,7 +88,7 @@ def build_bivector_exp_plan(
         grade4,
         decision.route,
         torch.finfo(dtype).eps,
-        torch.tensor(signs, dtype=dtype, device=device),
+        build_bivector_squared_signs(input_layout, dtype=dtype, device=device),
         torch.tensor([float(i == 0) for i in output_layout.basis_indices], dtype=dtype, device=device),
         _layout_map(input_layout, output_layout, dtype=dtype, device=device),
         _layout_map(grade4, output_layout, dtype=dtype, device=device),
@@ -115,8 +111,8 @@ def _layout_map(source, target, *, dtype, device):
 
 
 def select_bivector_exp_route(spec, device, *, dtype, output_layout, policy, router=None, limits=None):
-    from clifra.core._kernel.execution.providers import exp_execution_request
     from clifra.core._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS
+    from clifra.core._kernel.providers import exp_execution_request
     from clifra.core._kernel.routing import default_router
 
     request = exp_execution_request(spec, device, dtype, output_layout)
@@ -131,3 +127,48 @@ def select_bivector_exp_executor_family(
     return select_bivector_exp_route(
         spec, device, dtype=dtype, output_layout=output_layout, policy=planning_policy
     ).route
+
+
+def assess_bivector_exp_routes(spec, device, *, dtype, output_layout):
+    """Declare conservative materialization costs before allocating product plans."""
+    from clifra.core._kernel.planning.policy import PlanCandidate, PlanFacts, environment_extensions
+    from clifra.core._kernel.planning.resources import ResourceRequirements
+
+    even = 1 << max(spec.n - 1, 0)
+    bivector_lanes = spec.n * (spec.n - 1) // 2
+    width = output_layout.dim if output_layout is not None else 1
+    size = torch.finfo(dtype).bits // 8
+    shared = {**environment_extensions(spec, torch.device(device).type, size), "layout.output_lanes": width}
+    candidates = []
+    for route, reason, work, pairs in (
+        ("closed", None if 2 <= spec.n <= 5 else "closed_requires_n_2_through_5", 32, max(width, spec.n**4)),
+        (
+            "taylor",
+            None if 2 <= spec.n <= 12 else "materialized_exp_requires_n_2_through_12",
+            18 * even * spec.n**2,
+            even**2,
+        ),
+        (
+            "left_matrix_exp",
+            None if 2 <= spec.n <= 12 else "materialized_exp_requires_n_2_through_12",
+            even**3,
+            # Constructing all left-multiplication columns broadcasts a planned
+            # bivector/even product over `even` fixed columns. Guard this known
+            # expansion, not just the resulting dense matrix.
+            max(bivector_lanes, 1) * even**2,
+        ),
+    ):
+        if route != "closed" and dtype not in (torch.float32, torch.float64):
+            reason = "general_exp_requires_float32_or_float64"
+        if torch.device(device).type == "mps" and dtype == torch.float64:
+            reason = "mps_does_not_support_float64_output"
+        facts = PlanFacts(
+            work,
+            work * 2,
+            pairs * size,
+            work,
+            extensions=shared,
+            resources=ResourceRequirements(max(width, even), pairs),
+        )
+        candidates.append(PlanCandidate("bivector_exp", route, facts, reason))
+    return tuple(candidates)

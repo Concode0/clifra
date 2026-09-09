@@ -8,16 +8,7 @@ import torch
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clifra.core._kernel.energy import lane_distance, lane_dot_product, lane_energy, lane_norm
-from clifra.core._kernel.forms import (
-    conjugate_form_distance_like,
-    conjugate_form_magnitude,
-    conjugate_scalar_form,
-    conjugate_scalar_form_signs,
-    signature_norm_squared,
-    signature_trace_form,
-)
-from clifra.core._kernel.metric import scalar_product, signature_magnitude
+from clifra.core._kernel.forms import conjugate_scalar_form_signs
 from clifra.core.algebra import AlgebraContext
 from tests.helpers.hypothesis_cases import (
     CORE_PROPERTY_SETTINGS,
@@ -40,25 +31,25 @@ def test_full_lane_signed_scalar_forms_match_small_oracle(signature, data):
     right = data.draw(tensor_with_shape((batch, algebra.dim)))
 
     assert torch.allclose(
-        scalar_product(algebra, left, right),
+        algebra.scalar_product(left, right),
         oracle.scalar_product(left, right),
         atol=1e-12,
         rtol=1e-12,
     )
     assert torch.allclose(
-        conjugate_scalar_form(algebra, left, right),
+        algebra.conjugate_scalar_form(left, right),
         oracle.conjugate_scalar_form(left, right),
         atol=1e-12,
         rtol=1e-12,
     )
     assert torch.allclose(
-        signature_trace_form(algebra, left, right),
+        algebra.scalar_product(algebra.reverse(left), right),
         oracle.signature_trace_form(left, right),
         atol=1e-12,
         rtol=1e-12,
     )
     assert torch.allclose(
-        signature_norm_squared(algebra, left),
+        algebra.signature_norm_squared(left),
         oracle.signature_trace_form(left, left),
         atol=1e-12,
         rtol=1e-12,
@@ -75,13 +66,13 @@ def test_compact_signed_scalar_forms_match_small_oracle(case, data):
     right = data.draw(tensor_with_shape(tuple(left.shape)))
 
     assert torch.allclose(
-        scalar_product(algebra, left, right, left_layout=layout, right_layout=layout),
+        algebra.scalar_product(left, right, left=layout, right=layout),
         oracle.scalar_product(left, right, left_indices=layout.basis_indices, right_indices=layout.basis_indices),
         atol=1e-12,
         rtol=1e-12,
     )
     assert torch.allclose(
-        conjugate_scalar_form(algebra, left, right, layout=layout),
+        algebra.conjugate_scalar_form(left, right, left=layout, right=layout),
         oracle.conjugate_scalar_form(left, right, layout.basis_indices),
         atol=1e-12,
         rtol=1e-12,
@@ -97,15 +88,15 @@ def test_lane_metrics_are_positive_coefficient_geometry(signature, data):
     middle = data.draw(tensor_with_shape((batch, algebra.dim)))
     right = data.draw(tensor_with_shape((batch, algebra.dim)))
 
-    assert torch.allclose(lane_energy(algebra, left), (left * left).sum(dim=-1, keepdim=True))
-    assert torch.allclose(lane_norm(algebra, left), torch.linalg.vector_norm(left, dim=-1, keepdim=True))
-    assert torch.allclose(lane_dot_product(algebra, left, right), (left * right).sum(dim=-1, keepdim=True))
-    assert torch.all(lane_norm(algebra, left) >= 0)
-    assert torch.allclose(lane_distance(algebra, left, left), torch.zeros(batch, 1, dtype=torch.float64))
-    assert torch.allclose(lane_distance(algebra, left, right), lane_distance(algebra, right, left))
+    assert torch.allclose(algebra.lane_energy(left), (left * left).sum(dim=-1, keepdim=True))
+    assert torch.allclose(algebra.lane_norm(left), torch.linalg.vector_norm(left, dim=-1, keepdim=True))
+    assert torch.allclose(algebra.lane_dot_product(left, right), (left * right).sum(dim=-1, keepdim=True))
+    assert torch.all(algebra.lane_norm(left) >= 0)
+    assert torch.allclose(algebra.lane_distance(left, left), torch.zeros(batch, 1, dtype=torch.float64))
+    assert torch.allclose(algebra.lane_distance(left, right), algebra.lane_distance(right, left))
     assert torch.all(
-        lane_distance(algebra, left, right)
-        <= lane_distance(algebra, left, middle) + lane_distance(algebra, middle, right) + 1e-12
+        algebra.lane_distance(left, right)
+        <= algebra.lane_distance(left, middle) + algebra.lane_distance(middle, right) + 1e-12
     )
 
 
@@ -115,10 +106,10 @@ def test_null_blade_has_positive_lane_energy_but_zero_signed_forms():
     null_index = 1 << algebra.p
     values[null_index] = 1.0
 
-    assert torch.allclose(lane_energy(algebra, values), torch.tensor([1.0], dtype=torch.float64))
-    assert torch.allclose(lane_norm(algebra, values), torch.tensor([1.0], dtype=torch.float64))
-    assert torch.allclose(conjugate_scalar_form(algebra, values, values), torch.zeros(1, dtype=torch.float64))
-    assert torch.allclose(signature_norm_squared(algebra, values), torch.zeros(1, dtype=torch.float64))
+    assert torch.allclose(algebra.lane_energy(values), torch.tensor([1.0], dtype=torch.float64))
+    assert torch.allclose(algebra.lane_norm(values), torch.tensor([1.0], dtype=torch.float64))
+    assert torch.allclose(algebra.conjugate_scalar_form(values, values), torch.zeros(1, dtype=torch.float64))
+    assert torch.allclose(algebra.signature_norm_squared(values), torch.zeros(1, dtype=torch.float64))
 
 
 def test_conjugate_scalar_form_signs_preserve_null_degeneracy_in_layouts():
@@ -141,7 +132,14 @@ def test_signed_magnitudes_are_absolute_forms_not_lane_norms():
 
     expected_signature_norm_squared = oracle.signature_trace_form(values, values)
 
-    assert torch.allclose(signature_norm_squared(algebra, values), expected_signature_norm_squared)
-    assert torch.allclose(signature_magnitude(algebra, values), torch.sqrt(expected_signature_norm_squared.abs()))
-    assert torch.allclose(conjugate_form_magnitude(algebra, values), torch.sqrt(expected_signature_norm_squared.abs()))
-    assert torch.allclose(conjugate_form_distance_like(algebra, values, values), torch.zeros(1, 1, dtype=torch.float64))
+    assert torch.allclose(algebra.signature_norm_squared(values), expected_signature_norm_squared)
+    assert torch.allclose(
+        algebra.signature_norm_squared(values).abs().sqrt(), torch.sqrt(expected_signature_norm_squared.abs())
+    )
+    assert torch.allclose(
+        algebra.conjugate_scalar_form(values, values).abs().sqrt(), torch.sqrt(expected_signature_norm_squared.abs())
+    )
+    assert torch.allclose(
+        algebra.conjugate_scalar_form(values - values, values - values).abs().sqrt(),
+        torch.zeros(1, 1, dtype=torch.float64),
+    )

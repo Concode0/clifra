@@ -89,10 +89,11 @@ def test_product_request_rejects_foreign_tensor_contracts_at_construction():
 def test_product_executor_rejects_foreign_request_signature(cache):
     algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
     foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
-    values = torch.zeros(1, 3)
-    request = foreign._planner.product_request(
-        values,
-        values,
+    request = ProductRequest.compact(
+        foreign.spec,
+        op="geometric_product",
+        dtype=foreign.dtype,
+        device=foreign.device,
         left_layout=foreign.layout((1,)),
         right_layout=foreign.layout((1,)),
         output_layout=foreign.layout((0,)),
@@ -130,19 +131,6 @@ def test_product_executor_accepts_layouts_from_equal_signature_algebra():
     )
 
     assert shared is own
-
-
-def test_planner_conversion_rejects_mutually_consistent_foreign_layouts():
-    algebra = AlgebraContext(3, 0, 0, device=DEVICE, dtype=torch.float32)
-    foreign = AlgebraContext(0, 3, 0, device=DEVICE, dtype=torch.float32)
-    values = torch.zeros(2, foreign.layout((1,)).dim)
-
-    with pytest.raises(ValueError, match="source_layout signature .* does not match algebra signature"):
-        algebra._planner.convert_values(
-            values,
-            source_layout=foreign.layout((1,)),
-            target_layout=foreign.layout((1, 2)),
-        )
 
 
 @pytest.mark.parametrize(

@@ -17,8 +17,10 @@ from typing import Dict, Tuple
 import torch
 import torch.nn as nn
 
+from clifra.core._kernel.basis import build_bivector_squared_signs
+from clifra.core._kernel.composition import full_versor_factors
 from clifra.core._kernel.device import resolve_dtype
-from clifra.core._kernel.execution.action import FullSandwichActionExecutor, full_versor_factors
+from clifra.core._kernel.execution.action import FullSandwichActionExecutor
 from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core.algebra import AlgebraContext
 from clifra.core.config import make_algebra
@@ -165,12 +167,12 @@ def _initialize_bivector_parameters(
 ) -> None:
     """Initialize bivector parameters using declared basis-bivector square signs.
 
-    Uses the core planner to classify each basis bivector:
+    Uses static basis signature data to classify each basis bivector:
     - bv_sq = -1: elliptic (equal-sign non-null base vectors)
     - bv_sq = +1: hyperbolic (mixed-signature base vectors)
     - bv_sq =  0: null (degenerate base vectors)
     """
-    bv_sq = algebra._planner.bivector_squared_signs(device=algebra.device, dtype=algebra.dtype)
+    bv_sq = build_bivector_squared_signs(algebra.layout((2,)), device=algebra.device, dtype=algebra.dtype)
     ell = _BV_SQ_ELLIPTIC_BOUND
     hyp = _BV_SQ_HYPERBOLIC_BOUND
     rotor = probe.rotor
@@ -372,7 +374,7 @@ class SignatureProbeAnalyzer:
         original_dim: int,
     ) -> Tuple[Tuple[int, int], Dict]:
         """Map bivector parameter energies to heuristic active counts ``(p, q)``."""
-        bv_sq = algebra._planner.bivector_squared_signs(device=self.device, dtype=algebra.dtype)
+        bv_sq = build_bivector_squared_signs(algebra.layout((2,)), device=self.device, dtype=algebra.dtype)
         bv_indices = algebra.layout((2,)).indices_tensor(device=self.device)
 
         total_energy = probe.rotor.bivector_parameters.detach().square().mean(dim=0)

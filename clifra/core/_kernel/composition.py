@@ -1,9 +1,12 @@
 """Static compositions of existing tensor kernels for geometric operations."""
 
+import torch
 from torch import nn
 
+from clifra.core.layout import GradeLayout
+
 from .basis import expand_output_grades
-from .numerics import signed_clamp_min
+from .numerics import eps_like, signed_clamp_min
 
 
 class Geometry(nn.Module):
@@ -49,3 +52,46 @@ class Geometry(nn.Module):
         middle = self.first(self.involution(blade), x) if self.kind == "versor" else self.first(x, blade)
         result = self.second(middle, inverse)
         return x - result if self.kind == "blade_reject" else result
+
+
+def full_versor_factors(
+    algebra,
+    weights: torch.Tensor,
+    *,
+    grade: int,
+    parameter_layout: GradeLayout,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return full-lane left/right factors for a grade-1 or grade-2 versor action."""
+    grade = int(grade)
+    if grade == 2:
+        rotor_layout = parameter_layout.spec.layout(range(0, parameter_layout.spec.n + 1, 2))
+        rotor = _bivector_exp(
+            algebra,
+            -0.5 * weights,
+            parameter_layout=parameter_layout,
+            rotor_layout=rotor_layout,
+        )
+        right = algebra.reverse(rotor, input=rotor_layout, output=rotor_layout)
+        return rotor_layout.full(rotor), rotor_layout.full(right)
+
+    if grade == 1:
+        signature_norm_squared = algebra.signature_norm_squared(weights, input=parameter_layout)
+        scale = signature_norm_squared.abs().clamp_min(eps_like(signature_norm_squared)).sqrt()
+        versor = weights / scale
+    else:
+        norm = weights.norm(dim=-1, keepdim=True).clamp_min(eps_like(weights))
+        versor = weights / norm
+
+    left = algebra.grade_involution(versor, input=parameter_layout, output=parameter_layout)
+    right = algebra.blade_inverse(versor, input=parameter_layout)
+    return parameter_layout.full(left), parameter_layout.full(right)
+
+
+def _bivector_exp(
+    algebra,
+    values: torch.Tensor,
+    *,
+    parameter_layout: GradeLayout,
+    rotor_layout: GradeLayout,
+) -> torch.Tensor:
+    return algebra.bivector_exp(values, input=parameter_layout, output=rotor_layout)

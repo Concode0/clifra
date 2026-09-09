@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import torch
 
-from ._kernel.basis import expand_output_grades
+from ._kernel.basis import expand_output_grades, normalize_grade_product_op
 from ._kernel.device import resolve_device, resolve_dtype
-from ._kernel.planning.layouts import ProductRequest, normalize_product_op
+from ._kernel.planning.layouts import ProductRequest
 from ._kernel.planning.planner import GradePlanner
 from ._kernel.planning.policy import DEFAULT_PLANNING_POLICY
 from ._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS
@@ -109,7 +109,7 @@ class AlgebraContext:
         self, *, op="geometric_product", left=None, right=None, output=None, pairwise=False, device=None, dtype=None
     ):
         left, right = self._contract(left), self._contract(right)
-        op = normalize_product_op(op)
+        op = normalize_grade_product_op(op)
         if output is None:
             full = tuple(range(self.n + 1))
             output = self.layout(

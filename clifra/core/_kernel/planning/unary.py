@@ -7,14 +7,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 import torch
 
-from clifra.core._kernel.basis import normalize_grades, unary_sign
-from clifra.core._kernel.contracts import _check_contract_spec, infer_contract
+from clifra.core._kernel.basis import unary_sign
+from clifra.core._kernel.contracts import _check_contract_spec
 from clifra.core.layout import AlgebraSpec, GradeLayout
-from clifra.core.tensors import LaneStorage, TensorContract
+from clifra.core.tensors import TensorContract
 
 GradeUnaryOp = Literal["identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"]
 _VALID_UNARY_OPS = {"identity", "reverse", "grade_involution", "clifford_conjugation", "grade_projection"}
@@ -71,11 +71,6 @@ class UnaryRequest:
     def output_layout(self) -> GradeLayout:
         """Return the resolved output layout."""
         return self.output.layout
-
-    @property
-    def input_uses_compact_storage(self) -> bool:
-        """Return whether the input tensor is already compact."""
-        return self.input.uses_compact_storage
 
     @property
     def input_grades(self) -> tuple[int, ...]:
@@ -135,51 +130,6 @@ class GradeUnaryPlan:
         return self.output_layout.dim
 
 
-def build_unary_request(
-    spec: AlgebraSpec,
-    values: torch.Tensor,
-    *,
-    op: str,
-    input_grades=None,
-    output_grades=None,
-    input_layout: Optional[GradeLayout] = None,
-    output_layout: Optional[GradeLayout] = None,
-    input_storage: LaneStorage | str | None = None,
-    output_storage: LaneStorage | str = LaneStorage.COMPACT,
-) -> UnaryRequest:
-    """Resolve caller input into a static unary request."""
-    op = normalize_unary_op(op)
-    if op == "grade_projection" and input_grades is None and input_layout is None and input_storage is None:
-        if output_layout is not None:
-            input_layout = output_layout
-        elif output_grades is not None:
-            input_grades = output_grades
-    input_contract = infer_contract(
-        spec,
-        values,
-        grades=input_grades,
-        layout=input_layout,
-        storage=input_storage,
-        side="input",
-    )
-    output_layout = resolve_unary_output_layout(
-        spec,
-        op=op,
-        input_layout=input_contract.layout,
-        output_grades=output_grades,
-        output_layout=output_layout,
-    )
-    output_contract = TensorContract(layout=output_layout, storage=output_storage)
-    return UnaryRequest(
-        spec=spec,
-        op=op,
-        input=input_contract,
-        output=output_contract,
-        dtype=values.dtype,
-        device=values.device,
-    )
-
-
 def build_unary_plan_from_request(request: UnaryRequest) -> GradeUnaryPlan:
     """Lower a unary request into static gather/sign buffers."""
     input_position_by_index = {index: pos for pos, index in enumerate(request.input_layout.basis_indices)}
@@ -211,39 +161,3 @@ def normalize_unary_op(op: str) -> GradeUnaryOp:
     if normalized not in _VALID_UNARY_OPS:
         raise ValueError(f"Unsupported grade unary op {op!r}")
     return normalized
-
-
-def resolve_unary_output_layout(
-    spec: AlgebraSpec,
-    *,
-    op: GradeUnaryOp,
-    input_layout: GradeLayout,
-    output_grades=None,
-    output_layout: Optional[GradeLayout] = None,
-) -> GradeLayout:
-    """Resolve output layout for a planned unary operation."""
-    if output_layout is not None:
-        output_contract = TensorContract.compact(output_layout)
-        output_layout = _check_contract_spec(spec, output_contract, "output_layout").layout
-        if output_grades is not None and output_layout.grades != normalize_grades(
-            output_grades, spec.n, name="output_grades"
-        ):
-            raise ValueError("output_layout and output_grades disagree")
-        return output_layout
-
-    if op == "grade_projection":
-        if output_grades is None:
-            raise ValueError("output_grades is required for grade_projection")
-        projected = normalize_grades(output_grades, spec.n, name="output_grades")
-        missing = tuple(grade for grade in projected if grade not in input_layout.grades)
-        if missing:
-            raise ValueError(f"Cannot project missing grades {missing} from input grades {input_layout.grades}")
-        return spec.layout(projected)
-
-    if output_grades is not None:
-        projected = normalize_grades(output_grades, spec.n, name="output_grades")
-        missing = tuple(grade for grade in projected if grade not in input_layout.grades)
-        if missing:
-            raise ValueError(f"Cannot project missing grades {missing} from input grades {input_layout.grades}")
-        return spec.layout(projected)
-    return input_layout

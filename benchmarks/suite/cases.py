@@ -11,7 +11,7 @@ import torch
 from clifra import make_algebra
 from clifra.core import ResourceLimits
 from clifra.core.foundation.basis import expand_output_grades
-from clifra.core.planning.exp import select_bivector_exp_executor_family
+from clifra.core._kernel.planning.exp import select_bivector_exp_executor_family
 
 from .models import PreparedCase, ResourceConfig, SignatureSpec
 

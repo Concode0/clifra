@@ -31,6 +31,9 @@ from clifra.core._kernel.planning.tree import GradePlanTree, build_grade_plan_tr
 from clifra.core.layout import AlgebraSpec
 from clifra.core.tensors import TensorContract
 
+# Bound temporary Cartesian-product rows during buffer construction.
+_PRODUCT_CHUNK_PAIRS = 262_144
+
 
 def select_product_route(
     algebra,
@@ -44,8 +47,8 @@ def select_product_route(
     policy=None,
 ) -> RouteDecision:
     """Select an executor-owned route through the private registry."""
-    from clifra.core._kernel.execution.providers import product_execution_request
     from clifra.core._kernel.planning.resources import validate_product_grades_cost
+    from clifra.core._kernel.providers import product_execution_request
 
     validate_product_grades_cost(
         algebra,
@@ -280,27 +283,6 @@ def build_grade_product_plan(
     return build_grade_product_plan_from_tree(tree, device=device, dtype=dtype)
 
 
-def build_grade_product_plan_from_request(
-    request: ProductRequest,
-    *,
-    device=None,
-    dtype: Optional[torch.dtype] = None,
-) -> GradeProductPlan:
-    """Build a plan from a normalized product request."""
-    tree = build_grade_plan_tree(
-        request.spec,
-        left_grades=request.left_grades,
-        right_grades=request.right_grades,
-        output_grades=request.output_grades,
-        op=request.op,
-    )
-    return build_grade_product_plan_from_tree(
-        tree,
-        device=request.device if device is None else device,
-        dtype=request.dtype if dtype is None else dtype,
-    )
-
-
 def build_grade_product_plan_from_tree(
     tree: GradePlanTree,
     *,
@@ -347,14 +329,13 @@ def build_grade_product_plan_from_tree(
     coefficient_chunks: list[torch.Tensor] = []
     negative_mask = sum(1 << bit for bit in range(p, p + q))
     null_mask = sum(1 << bit for bit in range(p + q, n))
-    pair_limit = tree.chunk_pair_limit if tree.chunk_pair_limit and tree.chunk_pair_limit > 0 else 262_144
 
     for path in tree.paths:
         left_basis = left_basis_by_grade[path.left_grade]
         right_basis = right_basis_by_grade[path.right_grade]
         if left_basis.numel() == 0 or right_basis.numel() == 0:
             continue
-        rows_per_chunk = max(1, min(left_basis.numel(), int(pair_limit) // max(int(right_basis.numel()), 1)))
+        rows_per_chunk = max(1, min(left_basis.numel(), _PRODUCT_CHUNK_PAIRS // max(int(right_basis.numel()), 1)))
         right = right_basis.view(1, -1)
         right_positions_template = _positions_in_sorted_indices(right, right_layout_indices).expand(rows_per_chunk, -1)
         allowed_output_grades = torch.tensor(path.output_grades, dtype=torch.long)
@@ -623,3 +604,80 @@ def request_is_full_layout_product(request: ProductRequest) -> bool:
         and request.right_grades == full_grades
         and request.output_grades == full_grades
     )
+
+
+def assess_product_routes(
+    algebra,
+    *,
+    op: str,
+    left_layout,
+    right_layout,
+    output_layout,
+    dtype: torch.dtype,
+    device,
+):
+    """Declare product capabilities and conservative costs without execution buffers."""
+    from clifra.core._kernel.planning.policy import PlanCandidate, PlanFacts, environment_extensions
+    from clifra.core._kernel.planning.resources import ResourceRequirements
+    from clifra.core._kernel.planning.tree import build_grade_plan_tree
+
+    tree = build_grade_plan_tree(
+        left_layout.spec,
+        op=op,
+        left_grades=left_layout.grades,
+        right_grades=right_layout.grades,
+        output_grades=output_layout.grades,
+    )
+    backend = _device_backend(device)
+    dtype_bytes = torch.finfo(dtype).bits // 8
+    full_table_pairs = left_layout.dim * right_layout.dim
+    sparse_pairs = tree.estimated_pairs
+    full_table_bytes = full_table_pairs * (8 + dtype_bytes)
+    sparse_bytes = sparse_pairs * (24 + dtype_bytes)
+    full_grades = tuple(range(left_layout.spec.n + 1))
+    full_table_supported = (
+        left_layout.grades == full_grades and right_layout.grades == full_grades and output_layout.grades == full_grades
+    )
+
+    def candidate(route: str, pair_count: int, peak_bytes: int, unavailable_reason=None) -> PlanCandidate:
+        extensions = {
+            **environment_extensions(left_layout.spec, backend, dtype_bytes),
+            "layout.left_lanes": left_layout.dim,
+            "layout.right_lanes": right_layout.dim,
+            "layout.output_lanes": output_layout.dim,
+        }
+        return PlanCandidate(
+            "product",
+            route,
+            PlanFacts(
+                forward_work=pair_count,
+                backward_work=pair_count * 2,
+                peak_bytes=peak_bytes,
+                compile_work=tree.path_count,
+                extensions=extensions,
+                resources=ResourceRequirements(
+                    max(left_layout.dim, right_layout.dim, output_layout.dim),
+                    max(pair_count, min(left_layout.dim, right_layout.dim) * output_layout.dim)
+                    if route == "sparse"
+                    else pair_count,
+                ),
+            ),
+            unavailable_reason,
+        )
+
+    return (
+        candidate(
+            "full_table",
+            full_table_pairs,
+            full_table_bytes,
+            None if full_table_supported else "requires_canonical_full_layouts",
+        ),
+        candidate("sparse", sparse_pairs, sparse_bytes),
+    )
+
+
+def _device_backend(device) -> str:
+    if device is None:
+        return "cpu"
+    device_type = torch.device(device).type
+    return device_type if device_type in {"cpu", "mps"} else "other"

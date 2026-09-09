@@ -116,7 +116,7 @@ class ExecutorRegistry:
     @classmethod
     def default(cls):
         """Return a fresh immutable collection of the built-in route providers."""
-        from ._kernel.execution.providers import builtin_providers
+        from ._kernel.providers import builtin_providers
 
         return cls(builtin_providers())
 

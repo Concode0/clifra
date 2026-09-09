@@ -18,12 +18,10 @@ from clifra.core._kernel.execution.action import (
 from clifra.core._kernel.execution.metric import SignatureNormSquaredExecutor
 from clifra.core._kernel.execution.permutation import PseudoscalarProductExecutor
 from clifra.core._kernel.execution.product import FullTableProductExecutor, GradeProductExecutor
-from clifra.core._kernel.planning.layouts import build_product_request
 from clifra.core._kernel.planning.planner import GradePlanner
 from clifra.core._kernel.planning.product import build_grade_product_plan, select_product_route
 from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core._kernel.planning.tree import build_grade_plan_tree
-from clifra.core._kernel.planning.unary import build_unary_request
 from clifra.core.algebra import AlgebraContext
 from clifra.core.config import make_algebra
 from clifra.core.layout import AlgebraSpec

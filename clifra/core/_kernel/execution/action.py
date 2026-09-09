@@ -11,8 +11,14 @@ import torch
 import torch.nn as nn
 
 from clifra.core._kernel.basis import operation_coefficient
-from clifra.core._kernel.contracts import _check_contract_spec, canonical_values, resolve_contract
+from clifra.core._kernel.contracts import _check_contract_spec, resolve_contract
 from clifra.core._kernel.numerics import eps_like, signed_clamp_min
+from clifra.core._kernel.planning.action import (
+    _graded_action_plan_tensors,
+    _scalar_action_positions,
+    build_bivector_vector_generator_buffers,
+    build_full_sandwich_action_buffers,
+)
 from clifra.core.layout import GradeLayout
 from clifra.core.tensors import TensorContract
 
@@ -142,37 +148,12 @@ class BivectorVectorGeneratorExecutor(nn.Module):
             raise ValueError(f"bivector_layout must contain grade 2 only, got {bivector_layout.grades}")
         self.bivector_layout = bivector_layout
         self.n = bivector_layout.spec.n
-        lane_positions: list[int] = []
-        flat_positions: list[int] = []
-        coefficients: list[float] = []
-        vector_layout = bivector_layout.spec.layout((1,))
-        vector_positions = {index: position for position, index in enumerate(vector_layout.basis_indices)}
-        for bivector_position, bivector_index in enumerate(bivector_layout.basis_indices):
-            for input_position, input_index in enumerate(vector_layout.basis_indices):
-                output_index = bivector_index ^ input_index
-                output_position = vector_positions.get(output_index)
-                if output_position is None:
-                    continue
-                coefficient = -0.5 * operation_coefficient(
-                    bivector_index,
-                    input_index,
-                    bivector_layout.spec.p,
-                    bivector_layout.spec.q,
-                    bivector_layout.spec.r,
-                    "commutator_product",
-                )
-                if coefficient == 0.0:
-                    continue
-                lane_positions.append(bivector_position)
-                flat_positions.append(output_position * self.n + input_position)
-                coefficients.append(coefficient)
-        self.register_buffer(
-            "lane_positions", torch.tensor(lane_positions, dtype=torch.long, device=device), persistent=False
+        lane_positions, flat_positions, coefficients = build_bivector_vector_generator_buffers(
+            bivector_layout, dtype=dtype, device=device
         )
-        self.register_buffer(
-            "flat_positions", torch.tensor(flat_positions, dtype=torch.long, device=device), persistent=False
-        )
-        self.register_buffer("coefficients", torch.tensor(coefficients, dtype=dtype, device=device), persistent=False)
+        self.register_buffer("lane_positions", lane_positions, persistent=False)
+        self.register_buffer("flat_positions", flat_positions, persistent=False)
+        self.register_buffer("coefficients", coefficients, persistent=False)
 
     def forward(self, bivectors: torch.Tensor) -> torch.Tensor:
         """Return vector-space generator matrices for bivectors."""
@@ -283,28 +264,14 @@ class FullSandwichActionExecutor(nn.Module):
     @classmethod
     def from_layout(cls, layout: GradeLayout, *, device=None, dtype: torch.dtype = torch.float32):
         """Build full-layout sandwich action buffers from algebra metadata."""
-        dim = layout.spec.dim
-        indices = torch.arange(dim, dtype=torch.long, device=device)
-        cayley_indices = indices.unsqueeze(0) ^ indices.unsqueeze(1)
-        sign_rows: list[list[float]] = []
-        for left_index in range(dim):
-            row = []
-            for output_index in range(dim):
-                right_index = left_index ^ output_index
-                row.append(
-                    operation_coefficient(
-                        left_index, right_index, layout.spec.p, layout.spec.q, layout.spec.r, "geometric_product"
-                    )
-                )
-            sign_rows.append(row)
-        geometric_product_signs = torch.tensor(sign_rows, dtype=dtype, device=device)
-        output_indices = torch.arange(dim, dtype=torch.long, device=device).unsqueeze(0).expand(dim, dim)
-        left_sign_t = geometric_product_signs[cayley_indices, output_indices].T.contiguous()
+        cayley_indices, left_sign_t, geometric_product_sign_t = build_full_sandwich_action_buffers(
+            layout, device=device, dtype=dtype
+        )
         return cls(
             layout=layout,
             cayley_indices=cayley_indices,
             left_sign_t=left_sign_t,
-            geometric_product_sign_t=geometric_product_signs.T.contiguous(),
+            geometric_product_sign_t=geometric_product_sign_t,
         )
 
     def action_matrices(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
@@ -689,54 +656,6 @@ class PairedBivectorActionExecutor(nn.Module):
         return left_rotor, self.rotor_reverse(right_rotor)
 
 
-def _basis_bits_tuple(index: int, n: int) -> tuple[int, ...]:
-    return tuple(bit for bit in range(n) if index & (1 << bit))
-
-
-def _scalar_action_positions(input_layout: GradeLayout, output_layout: GradeLayout) -> torch.Tensor:
-    positions: list[int] = []
-    for output_position, output_index in enumerate(output_layout.basis_indices):
-        if output_index != 0:
-            continue
-        for input_position, input_index in enumerate(input_layout.basis_indices):
-            if input_index == 0:
-                positions.append(output_position * input_layout.dim + input_position)
-    return torch.tensor(positions, dtype=torch.long)
-
-
-def _graded_action_plan_tensors(
-    input_layout: GradeLayout,
-    output_layout: GradeLayout,
-    *,
-    grade: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    flat_positions: list[int] = []
-    row_indices: list[tuple[int, ...]] = []
-    col_indices: list[tuple[int, ...]] = []
-    input_items = [
-        (input_position, _basis_bits_tuple(input_index, input_layout.spec.n))
-        for input_position, input_index in enumerate(input_layout.basis_indices)
-        if input_index.bit_count() == grade
-    ]
-    for output_position, output_index in enumerate(output_layout.basis_indices):
-        if output_index.bit_count() != grade:
-            continue
-        output_bits = _basis_bits_tuple(output_index, input_layout.spec.n)
-        for input_position, input_bits in input_items:
-            flat_positions.append(output_position * input_layout.dim + input_position)
-            row_indices.append(output_bits)
-            col_indices.append(input_bits)
-
-    if not flat_positions:
-        empty = torch.empty(0, dtype=torch.long)
-        return empty, torch.empty(0, grade, dtype=torch.long), torch.empty(0, grade, dtype=torch.long)
-    return (
-        torch.tensor(flat_positions, dtype=torch.long),
-        torch.tensor(row_indices, dtype=torch.long),
-        torch.tensor(col_indices, dtype=torch.long),
-    )
-
-
 def _layout_indices(layout: GradeLayout, *, device=None) -> torch.Tensor:
     return torch.tensor(layout.basis_indices, dtype=torch.long, device=device)
 
@@ -746,77 +665,9 @@ def _materialize_full_from_indices(values: torch.Tensor, indices: torch.Tensor, 
     return output.index_copy(-1, indices, values)
 
 
-def full_versor_factors(
-    algebra,
-    weights: torch.Tensor,
-    *,
-    grade: int,
-    parameter_layout: GradeLayout,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return full-lane left/right factors for a grade-1 or grade-2 versor action."""
-    grade = int(grade)
-    if grade == 2:
-        rotor_layout = parameter_layout.spec.layout(range(0, parameter_layout.spec.n + 1, 2))
-        rotor = _bivector_exp(
-            algebra,
-            -0.5 * weights,
-            parameter_layout=parameter_layout,
-            rotor_layout=rotor_layout,
-        )
-        right = algebra.reverse(rotor, input=rotor_layout, output=rotor_layout)
-        return canonical_values(algebra, rotor, layout=rotor_layout), canonical_values(
-            algebra,
-            right,
-            layout=rotor_layout,
-        )
-
-    if grade == 1:
-        signature_norm_squared = algebra.signature_norm_squared(weights, input=parameter_layout)
-        scale = signature_norm_squared.abs().clamp_min(eps_like(signature_norm_squared)).sqrt()
-        versor = weights / scale
-    else:
-        norm = weights.norm(dim=-1, keepdim=True).clamp_min(eps_like(weights))
-        versor = weights / norm
-
-    left = algebra.grade_involution(versor, input=parameter_layout, output=parameter_layout)
-    right = algebra.blade_inverse(versor, input=parameter_layout)
-    return canonical_values(algebra, left, layout=parameter_layout), canonical_values(
-        algebra,
-        right,
-        layout=parameter_layout,
-    )
-
-
-def _bivector_exp(
-    algebra,
-    values: torch.Tensor,
-    *,
-    parameter_layout: GradeLayout,
-    rotor_layout: GradeLayout,
-) -> torch.Tensor:
-    return algebra.bivector_exp(values, input=parameter_layout, output=rotor_layout)
-
-
 def _validate_channels(contract, values, *, channels, name):
     if values.ndim < 3:
         raise ValueError(f"{name}: expected ndim >= 3, got shape {tuple(values.shape)}")
     if values.shape[-2] != channels:
         raise ValueError(f"{name}: expected {channels} channels, got {values.shape[-2]} (shape {tuple(values.shape)})")
     contract.validate(values, name=name)
-
-
-from clifra.core._kernel.planning.policy import environment_extensions
-
-
-def _action_extensions(algebra, *, input_layout, output_layout, parameter_layout, intermediate_lanes: int = 0):
-    device_type = getattr(getattr(algebra, "device", None), "type", str(getattr(algebra, "device", "cpu")))
-    dtype = getattr(algebra, "dtype", None)
-    dtype_bytes = 4 if dtype is None else torch.finfo(dtype).bits // 8
-    return {
-        **environment_extensions(algebra, device_type, dtype_bytes),
-        "layout.input_lanes": input_layout.dim,
-        "layout.output_lanes": output_layout.dim,
-        "action.parameter_lanes": parameter_layout.dim,
-        "action.intermediate_lanes": intermediate_lanes,
-        "action.full_lanes": algebra.dim,
-    }

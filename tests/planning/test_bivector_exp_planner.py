@@ -4,9 +4,10 @@
 import pytest
 import torch
 
+from clifra.core._kernel.basis import build_bivector_squared_signs
 from clifra.core._kernel.configuration import configured_algebra
-from clifra.core._kernel.execution.exp import assess_bivector_exp_routes
 from clifra.core._kernel.planning.exp import (
+    assess_bivector_exp_routes,
     select_bivector_exp_executor_family,
     select_bivector_exp_route,
     taylor_layouts,
@@ -18,6 +19,18 @@ from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
 from tests.helpers.policy import PreferRoute
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("signature", [(3, 0, 0), (0, 3, 0), (2, 1, 1), (0, 0, 3)])
+def test_bivector_square_preparation_matches_independent_products(signature):
+    from tests.helpers.small_oracle import SmallCliffordOracle
+
+    spec = AlgebraSpec(*signature)
+    layout = spec.layout((2,))
+    basis = layout.full(torch.eye(layout.dim, dtype=torch.float64))
+    expected = SmallCliffordOracle(*signature).product(basis, basis)[..., 0]
+    actual = build_bivector_squared_signs(layout, dtype=torch.float64, device="cpu")
+    torch.testing.assert_close(actual, expected)
 
 
 @pytest.mark.parametrize(

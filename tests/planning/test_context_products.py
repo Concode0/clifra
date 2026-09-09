@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from clifra.core._kernel.planning.layouts import ProductRequest
+from clifra.core._kernel.planning.unary import UnaryRequest
 from tests.planning._grade_plan_helpers import (
     DEVICE,
     AlgebraContext,
@@ -157,9 +158,10 @@ def test_plan_unary_rejects_foreign_signatures_with_cold_and_warm_caches(warm_ca
 def test_unary_executor_rejects_foreign_request_before_cache_lookup(cache):
     algebra = make_algebra(3, 0, 0, device=DEVICE, dtype=torch.float32)
     foreign = make_algebra(0, 3, 0, device=DEVICE, dtype=torch.float32)
-    values = torch.zeros(1, 3)
-    foreign_request = foreign._planner.unary_request(
-        values,
+    foreign_request = UnaryRequest.compact(
+        foreign.spec,
+        dtype=foreign.dtype,
+        device=foreign.device,
         op="reverse",
         input_layout=foreign.layout((1,)),
         output_layout=foreign.layout((1,)),

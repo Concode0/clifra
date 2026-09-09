@@ -6,6 +6,7 @@ import torch
 
 from clifra.analysis.experimental import SignatureProbeAnalyzer, SignatureProbeResult, signature
 from clifra.analysis.experimental.signature import _initialize_bivector_parameters, _pca_reduce, _SignatureProbe
+from clifra.core._kernel.basis import build_bivector_squared_signs
 from clifra.core.config import make_algebra
 
 pytestmark = pytest.mark.unit
@@ -172,7 +173,7 @@ def test_private_probe_forward_and_biased_initialization():
     data = torch.randn(5, 1, algebra.dim)
     assert probe(data).shape == data.shape
     _initialize_bivector_parameters(probe, algebra, "elliptic_weighted")
-    squares = algebra._planner.bivector_squared_signs(device=algebra.device, dtype=algebra.dtype)
+    squares = build_bivector_squared_signs(algebra.layout((2,)), device=algebra.device, dtype=algebra.dtype)
     energies = probe.rotor.bivector_parameters.detach().abs().mean(dim=0)
     assert energies[squares < 0].mean() > energies[squares > 0].mean()
     for bias in ("non_null_weighted", "uniform", "normal"):
@@ -255,7 +256,7 @@ def test_count_cap_does_not_invent_positive_evidence():
     analyzer = SignatureProbeAnalyzer()
     algebra = make_algebra(4, 1)
     probe = _SignatureProbe(algebra)
-    squares = algebra._planner.bivector_squared_signs(device=algebra.device, dtype=algebra.dtype)
+    squares = build_bivector_squared_signs(algebra.layout((2,)), device=algebra.device, dtype=algebra.dtype)
     with torch.no_grad():
         probe.rotor.bivector_parameters.copy_((squares > 0).expand_as(probe.rotor.bivector_parameters))
     candidate, summary = analyzer._map_bivector_parameters(probe, algebra, original_dim=3)

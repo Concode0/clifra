@@ -22,7 +22,6 @@ _CACHE_NAMES = (
     "_full_sandwich_action_executors",
     "_versor_action_plans",
     "_paired_bivector_action_plans",
-    "_bivector_signs_cache",
 )
 _ACTIONS = (
     "product_geometric_product",

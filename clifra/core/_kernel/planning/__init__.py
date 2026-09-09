@@ -16,7 +16,7 @@ from .exp import (
     BivectorExpPlan,
     build_bivector_exp_plan,
 )
-from .layouts import ProductRequest, build_product_request
+from .layouts import ProductRequest
 from .metric import SignatureNormSquaredPlan, build_signature_norm_squared_plan
 from .permutation import PseudoscalarProductPlan, build_pseudoscalar_product_plan
 from .planner import GradePlanner
@@ -37,7 +37,7 @@ from .product import (
 )
 from .resources import ResourceLimits
 from .tree import GradePathNode, GradePlanTree, build_grade_plan_tree
-from .unary import GradeUnaryOp, GradeUnaryPlan, UnaryRequest, build_unary_request
+from .unary import GradeUnaryOp, GradeUnaryPlan, UnaryRequest
 
 __all__ = [
     "GradePathNode",
@@ -71,7 +71,5 @@ __all__ = [
     "build_bivector_exp_plan",
     "build_signature_norm_squared_plan",
     "build_pseudoscalar_product_plan",
-    "build_product_request",
-    "build_unary_request",
     "select_product_route",
 ]

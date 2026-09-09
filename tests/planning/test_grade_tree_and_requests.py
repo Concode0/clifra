@@ -1,13 +1,13 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
+from clifra.core._kernel.planning import product
 from tests.planning._grade_plan_helpers import (
     AlgebraSpec,
     build_grade_plan_tree,
-    build_product_request,
-    build_unary_request,
     pytest,
-    torch,
 )
 
 pytestmark = pytest.mark.unit
@@ -21,7 +21,6 @@ def test_grade_plan_tree_groups_routes_without_runtime_partition_backend():
         right_grades=(1,),
         output_grades=(0, 2),
         op="geometric_product",
-        chunk_pair_limit=128,
     )
 
     assert tree.output_grades == (0, 2)
@@ -30,65 +29,24 @@ def test_grade_plan_tree_groups_routes_without_runtime_partition_backend():
     ]
     assert tree.path_count == 1
     assert tree.estimated_pairs == 16 * 16
-    assert tree.estimated_chunks == 2
-    assert tree.path_for_grades(1, 1) is tree.paths[0]
-    assert tree.path_for_grades(2, 1) is None
 
 
-def test_product_request_infers_declared_layouts_and_output_grades():
-    spec = AlgebraSpec(10, 4, 2)
-    layout = spec.layout((1,))
-    left = torch.zeros(2, layout.dim)
-    right = torch.zeros(2, layout.dim)
+def test_product_lowering_chunks_temporary_pairs_without_changing_buffers(monkeypatch):
+    tree = build_grade_plan_tree(AlgebraSpec(4, 1, 1), left_grades=(2,), right_grades=(2,))
+    expected = product.build_grade_product_plan_from_tree(tree, dtype=torch.float64)
+    original = product._operation_coefficients
+    temporary_pairs = []
 
-    request = build_product_request(
-        spec,
-        left,
-        right,
-        left_grades=(1,),
-        right_grades=(1,),
-        op="geometric_product",
-    )
+    def record(left, right, output_indices, **kwargs):
+        temporary_pairs.append(output_indices.numel())
+        return original(left, right, output_indices, **kwargs)
 
-    assert request.left_grades == (1,)
-    assert request.right_grades == (1,)
-    assert request.output_grades == (0, 2)
-    assert request.left_uses_compact_storage
-    assert request.right_uses_compact_storage
-
-
-def test_product_request_detects_compact_lane_tensors_from_layout_shape():
-    spec = AlgebraSpec(6, 0, 0)
-    layout = spec.layout((1,))
-    left = torch.zeros(2, layout.dim)
-    right = torch.zeros(2, layout.dim)
-
-    request = build_product_request(
-        spec,
-        left,
-        right,
-        left_layout=layout,
-        right_layout=layout,
-        output_grades=(0, 2),
-        op="geometric_product",
-    )
-
-    assert request.left_uses_compact_storage
-    assert request.right_uses_compact_storage
-
-
-def test_unary_request_infers_projection_layout_without_full_layout():
-    spec = AlgebraSpec(10, 4, 2)
-    layout = spec.layout((1,))
-    values = torch.zeros(2, layout.dim)
-
-    request = build_unary_request(
-        spec,
-        values,
-        op="grade_projection",
-        output_grades=(1,),
-    )
-
-    assert request.input_grades == (1,)
-    assert request.output_grades == (1,)
-    assert request.input_uses_compact_storage
+    monkeypatch.setattr(product, "_PRODUCT_CHUNK_PAIRS", 30)
+    monkeypatch.setattr(product, "_operation_coefficients", record)
+    actual = product.build_grade_product_plan_from_tree(tree, dtype=torch.float64)
+    assert len(temporary_pairs) > 1
+    assert max(temporary_pairs) <= 30
+    assert sum(temporary_pairs) == tree.estimated_pairs
+    for name, value in vars(expected).items():
+        if isinstance(value, torch.Tensor):
+            torch.testing.assert_close(getattr(actual, name), value)

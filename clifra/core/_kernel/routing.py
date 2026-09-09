@@ -35,7 +35,7 @@ class Selection:
         executor = self.provider.build(self.request, self.assessment)
         if not isinstance(executor, nn.Module):
             raise TypeError("provider.build must return an nn.Module")
-        from .execution.providers import BuiltinProvider
+        from .providers import BuiltinProvider
 
         if not isinstance(self.provider, BuiltinProvider) and self.family in {"product", "unary"}:
             executor = CompactExecutorAdapter(executor, self.request)
@@ -78,7 +78,7 @@ class ExecutorRouter:
             raise ValueError("duplicate executor family/route")
 
     def select(self, request, policy, limits=DEFAULT_RESOURCE_LIMITS):
-        from .execution.providers import BuiltinPreparation, BuiltinProvider
+        from .providers import BuiltinPreparation, BuiltinProvider
 
         candidates, selections, rejected = [], [], []
         for provider in self.providers:
@@ -159,7 +159,7 @@ class ExecutorRouter:
 
 
 def default_router():
-    from .execution.providers import builtin_providers
+    from .providers import builtin_providers
 
     return ExecutorRouter(builtin_providers())
 

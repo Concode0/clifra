@@ -92,7 +92,6 @@ ordering in application code.
 | Helper | Result |
 | --- | --- |
 | `algebra.layout(grades)` | A normalized `GradeLayout` for the algebra. |
-| `algebra.grade_indices(grades)` | Canonical blade indices for a grade set on the algebra device. |
 | `layout.positions_for_grades(grades)` | Compact positions occupied by the requested grades. |
 | `layout.indices_tensor()` | Canonical blade indices in compact-lane order. |
 | `layout.grade_indices_tensor()` | One grade number for each compact lane. |
@@ -102,12 +101,7 @@ ordering in application code.
 | `TensorContract.compact(...)` | A compact-storage contract for a layout. |
 | `TensorContract.canonical(...)` | A canonical-storage contract with explicit layout semantics. |
 | `contract.validate(values)` | Validation of the final coefficient axis. |
-| `contract.validate_input(values, channels=..., name=...)` | Validation of channel and coefficient axes at a layer boundary. |
 | `contract.to_compact(values)` / `to_canonical(values)` | Storage conversion under a fixed contract. |
-| `contract.grade_positions(grade)` | Grade positions in the contract's storage form. |
-| `resolve_layout(...)` / `resolve_contract(...)` | Normalization of explicit layout, grade, and storage arguments. |
-| `infer_contract(...)` | Storage inference from width at an external boundary, followed by validation. |
-| `compact_values(...)` / `canonical_values(...)` | Conversion at a public boundary when compact or canonical input is accepted. |
 
 `positions_for_grades` returns positions in compact storage, whereas
 `indices_tensor` returns canonical blade indices. Use the former to select lanes
@@ -144,7 +138,7 @@ class CompactVectorAdapter(nn.Module):
         spec = AlgebraSpec.from_algebra(algebra)
         self.n = spec.n
         self.layout = layout
-        self.contract = TensorContract.compact(spec, layout)
+        self.contract = TensorContract.compact(layout)
 
         positions = layout.positions_for_grades((1,), device=algebra.device)
         if positions.numel() != self.n:
@@ -167,8 +161,10 @@ class CompactVectorAdapter(nn.Module):
 The format keeps indices out of call sites, moves static lane discovery out of
 `forward`, and exposes `layout` and `contract` to downstream code. Helpers
 that support both storage forms should use separate contracts or require an
-explicit `LaneStorage`; shape-based inference should be limited to a public
-boundary and resolved immediately to a contract.
+explicit `TensorContract`. A layout declares compact storage; canonical storage
+requires `TensorContract.canonical(layout)`. Omitted input declarations mean the
+full basis. Tensor width validates the declaration and never selects semantics
+or storage.
 
 ## Static sparsity, dense tensor execution
 

@@ -6,14 +6,14 @@ from torch import nn
 
 from clifra.core import AlgebraContext, TensorContract
 from clifra.core._kernel.configuration import configured_algebra
-from clifra.core._kernel.execution.providers import (
+from clifra.core._kernel.planning.layouts import ProductRequest
+from clifra.core._kernel.planning.policy import PolicyEvaluation
+from clifra.core._kernel.planning.resources import ResourceLimits
+from clifra.core._kernel.providers import (
     _exp_child,
     action_execution_request,
     product_execution_request,
 )
-from clifra.core._kernel.planning.layouts import ProductRequest
-from clifra.core._kernel.planning.policy import PolicyEvaluation
-from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core._kernel.routing import ExecutorRouter
 from clifra.core.executors import Assessment, ExecutorRequest, Rejected
 

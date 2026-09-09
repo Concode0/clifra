@@ -7,8 +7,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from clifra.core._kernel.basis import expand_output_grades
+import torch
+
+from clifra.core._kernel.basis import expand_output_grades, operation_coefficient
 from clifra.core._kernel.contracts import _check_contract_spec
+from clifra.core._kernel.planning.policy import environment_extensions
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import TensorContract
 
@@ -202,7 +205,122 @@ def _select_paired_action_route(algebra, **parameters):
 
 
 def _select_action_route(algebra, operation, parameters):
-    from clifra.core._kernel.execution.providers import action_execution_request
+    from clifra.core._kernel.providers import action_execution_request
 
     request = action_execution_request(algebra, operation, **parameters)
     return algebra._planner.router.select(request, algebra._planner.policy, algebra._planner.limits)
+
+
+def _basis_bits_tuple(index: int, n: int) -> tuple[int, ...]:
+    return tuple(bit for bit in range(n) if index & (1 << bit))
+
+
+def _scalar_action_positions(input_layout: GradeLayout, output_layout: GradeLayout) -> torch.Tensor:
+    positions: list[int] = []
+    for output_position, output_index in enumerate(output_layout.basis_indices):
+        if output_index != 0:
+            continue
+        for input_position, input_index in enumerate(input_layout.basis_indices):
+            if input_index == 0:
+                positions.append(output_position * input_layout.dim + input_position)
+    return torch.tensor(positions, dtype=torch.long)
+
+
+def _graded_action_plan_tensors(
+    input_layout: GradeLayout,
+    output_layout: GradeLayout,
+    *,
+    grade: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    flat_positions: list[int] = []
+    row_indices: list[tuple[int, ...]] = []
+    col_indices: list[tuple[int, ...]] = []
+    input_items = [
+        (input_position, _basis_bits_tuple(input_index, input_layout.spec.n))
+        for input_position, input_index in enumerate(input_layout.basis_indices)
+        if input_index.bit_count() == grade
+    ]
+    for output_position, output_index in enumerate(output_layout.basis_indices):
+        if output_index.bit_count() != grade:
+            continue
+        output_bits = _basis_bits_tuple(output_index, input_layout.spec.n)
+        for input_position, input_bits in input_items:
+            flat_positions.append(output_position * input_layout.dim + input_position)
+            row_indices.append(output_bits)
+            col_indices.append(input_bits)
+
+    if not flat_positions:
+        empty = torch.empty(0, dtype=torch.long)
+        return empty, torch.empty(0, grade, dtype=torch.long), torch.empty(0, grade, dtype=torch.long)
+    return (
+        torch.tensor(flat_positions, dtype=torch.long),
+        torch.tensor(row_indices, dtype=torch.long),
+        torch.tensor(col_indices, dtype=torch.long),
+    )
+
+
+def _action_extensions(algebra, *, input_layout, output_layout, parameter_layout, intermediate_lanes: int = 0):
+    device_type = getattr(getattr(algebra, "device", None), "type", str(getattr(algebra, "device", "cpu")))
+    dtype = getattr(algebra, "dtype", None)
+    dtype_bytes = 4 if dtype is None else torch.finfo(dtype).bits // 8
+    return {
+        **environment_extensions(algebra, device_type, dtype_bytes),
+        "layout.input_lanes": input_layout.dim,
+        "layout.output_lanes": output_layout.dim,
+        "action.parameter_lanes": parameter_layout.dim,
+        "action.intermediate_lanes": intermediate_lanes,
+        "action.full_lanes": algebra.dim,
+    }
+
+
+def build_bivector_vector_generator_buffers(bivector_layout, *, dtype, device):
+    lane_positions: list[int] = []
+    flat_positions: list[int] = []
+    coefficients: list[float] = []
+    vector_layout = bivector_layout.spec.layout((1,))
+    vector_positions = {index: position for position, index in enumerate(vector_layout.basis_indices)}
+    for bivector_position, bivector_index in enumerate(bivector_layout.basis_indices):
+        for input_position, input_index in enumerate(vector_layout.basis_indices):
+            output_index = bivector_index ^ input_index
+            output_position = vector_positions.get(output_index)
+            if output_position is None:
+                continue
+            coefficient = -0.5 * operation_coefficient(
+                bivector_index,
+                input_index,
+                bivector_layout.spec.p,
+                bivector_layout.spec.q,
+                bivector_layout.spec.r,
+                "commutator_product",
+            )
+            if coefficient == 0.0:
+                continue
+            lane_positions.append(bivector_position)
+            flat_positions.append(output_position * bivector_layout.spec.n + input_position)
+            coefficients.append(coefficient)
+    return (
+        torch.tensor(lane_positions, dtype=torch.long, device=device),
+        torch.tensor(flat_positions, dtype=torch.long, device=device),
+        torch.tensor(coefficients, dtype=dtype, device=device),
+    )
+
+
+def build_full_sandwich_action_buffers(layout, *, device=None, dtype=torch.float32):
+    dim = layout.spec.dim
+    indices = torch.arange(dim, dtype=torch.long, device=device)
+    cayley_indices = indices.unsqueeze(0) ^ indices.unsqueeze(1)
+    sign_rows: list[list[float]] = []
+    for left_index in range(dim):
+        row = []
+        for output_index in range(dim):
+            right_index = left_index ^ output_index
+            row.append(
+                operation_coefficient(
+                    left_index, right_index, layout.spec.p, layout.spec.q, layout.spec.r, "geometric_product"
+                )
+            )
+        sign_rows.append(row)
+    geometric_product_signs = torch.tensor(sign_rows, dtype=dtype, device=device)
+    output_indices = torch.arange(dim, dtype=torch.long, device=device).unsqueeze(0).expand(dim, dim)
+    left_sign_t = geometric_product_signs[cayley_indices, output_indices].T.contiguous()
+    return cayley_indices, left_sign_t, geometric_product_signs.T.contiguous()
