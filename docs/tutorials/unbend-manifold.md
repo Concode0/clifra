@@ -1,321 +1,135 @@
-# Train a Geometric Surface Model
+# Differentiate a Spatial Deformation
 
-The following $Cl(3, 0)$ experiment trains a rotor action followed by a learned
-lane gate to project a sampled surface toward the $e_1$–$e_2$ plane. The data
-formula, model, loss, optimizer, noise-sensitivity measurement, and surface plotting
-helper are included. Familiarity with PyTorch training loops is assumed; every
-clifra-specific object is introduced locally.
+A global rotor moves every point by the same rotation. A field of bivectors
+can rotate different parts of a surface by different amounts. Here we sample
+an elliptical cylinder, twist each cross-section around its axis, and learn
+the angle field from sparse point correspondences. The example composes a
+clifra action with a polynomial evaluated in PyTorch; both computations remain
+in the same autograd graph.
 
-The surface is a grid patch followed by a fixed global tilt of $0.55$ radians:
+The field is evaluated on persistent material coordinates: each point keeps
+its original height label throughout the calculation. This distinction matters
+when inverting a learned deformation. Negating the generator inverts the local
+action only if it is the same generator attached to the same point.
 
-```text
-z0 = 0.5 * x * y
-(x, y, z) = rotate_y(0.55) * (x, y, z0)
-```
-
-The grade-2 `VersorLayer` learns a bivector, exponentiates it to a rotor, and
-applies the planned isometric action. It can reduce the height contribution from
-the global tilt but cannot remove the remaining curvature. `BladeSelector` then
-learns positive per-lane gates that attenuate the residual height coordinate.
-
-![Sampled surface before projection](../assets/first-guide/manifold_original.png)
-
-![Projected surface representation](../assets/first-guide/manifold_latent.png)
-
-## Imports
+## Sample and twist a surface
 
 ```python
 import math
-
 import torch
+from clifra import make_algebra
 
-from clifra import CliffordModule, make_algebra
-from clifra.layers import BladeSelector, VersorLayer
-from clifra.optimizers import make_riemannian_optimizer
-```
-
-## Sample the Manifold
-
-$Cl(3, 0)$ has eight canonical lanes. `embed_vector` places Cartesian coordinates
-in the grade-1 subspace; `GradeLayout.compact` retrieves them without encoding
-canonical lane positions in the example. The fixed tilt gives the rotor a
-global height contribution to reduce before the selector attenuates the residual.
-
-```python
-def sample_patch(algebra, n: int = 24) -> tuple[torch.Tensor, tuple[int, int]]:
-    x = torch.linspace(-1.0, 1.0, n, device=algebra.device, dtype=algebra.dtype)
-    y = torch.linspace(-1.0, 1.0, n, device=algebra.device, dtype=algebra.dtype)
-    X, Y = torch.meshgrid(x, y, indexing="ij")
-    Z0 = 0.5 * X * Y
-
-    tilt = 0.55
-    cos_tilt = math.cos(tilt)
-    sin_tilt = math.sin(tilt)
-    X_tilted = cos_tilt * X + sin_tilt * Z0
-    Z_tilted = -sin_tilt * X + cos_tilt * Z0
-
-    xyz = torch.stack(
-        (X_tilted.reshape(-1), Y.reshape(-1), Z_tilted.reshape(-1)),
-        dim=-1,
-    )
-    return algebra.embed_vector(xyz).unsqueeze(1), (n, n)  # [N, C=1, 8]
-
-
-def vector_coordinates(algebra, values: torch.Tensor) -> torch.Tensor:
-    """Gather Cartesian vector coordinates from canonical multivectors."""
-    return algebra.layout((1,)).compact(values)
-
-
-def coordinate_component(algebra, values: torch.Tensor, axis: int) -> torch.Tensor:
-    """Return one Cartesian coordinate without using a basis-lane index."""
-    return vector_coordinates(algebra, values).select(-1, int(axis))
-```
-
-## Build the Model
-
-A grade-2 rotor action is followed by a blade selector. The selector starts as
-pass-through and learns which lanes to attenuate.
-
-```python
-class SurfaceProjection(CliffordModule):
-    """Apply a rotor action and filter residual lane energy."""
-
-    def __init__(self, algebra):
-        super().__init__(algebra)
-        full_layout = algebra.layout(range(algebra.n + 1))
-        self.rotor = VersorLayer(
-            algebra,
-            channels=1,
-            grade=2,
-            input_layout=full_layout,
-            output_layout=full_layout,
-        )
-        self.selector = BladeSelector(algebra, channels=1, layout=full_layout)
-
-    def forward(self, x):
-        return self.selector(self.rotor(x))
-
-    def selector_penalty(self):
-        return self.selector.weights.abs().mean()
-```
-
-## Define the Loss
-
-The loss has two terms:
-
-| Term | Purpose |
-| --- | --- |
-| `z_energy` | pushes the `e3` coordinate toward zero |
-| `selector_deviation` | penalizes selector logits away from the pass-through value |
-
-```python
-def loss_terms(model, noisy):
-    output = model(noisy)
-
-    z = coordinate_component(model.algebra, output, axis=2)
-    z_energy = z.square().mean()
-    selector_deviation = model.selector_penalty()
-    weighted_selector_deviation = 1.0e-3 * selector_deviation
-
-    loss = z_energy + weighted_selector_deviation
-    metrics = {
-        "loss": loss.detach(),
-        "z": z_energy.detach(),
-        "selector_deviation": selector_deviation.detach(),
-        "weighted_selector_deviation": weighted_selector_deviation.detach(),
-    }
-    return loss, output, metrics
-```
-
-## Train
-
-```python
 torch.manual_seed(7)
-
-algebra = make_algebra(3, 0, device="cpu", dtype=torch.float32)
-data, grid_shape = sample_patch(algebra)
-model = SurfaceProjection(algebra)
-optimizer = make_riemannian_optimizer(
-    model,
-    algebra,
-    optimizer="adam",
-    lr=0.03,
-    max_bivector_norm=1.2,
+algebra = make_algebra(3, 0, dtype=torch.float64)
+vectors = algebra.layout((1,))
+bivectors = algebra.layout((2,))
+action = algebra.plan_versor_action(
+    grade=2, input=vectors, parameter=bivectors, output=vectors,
 )
+heights = torch.linspace(-1, 1, 25, dtype=torch.float64)
+angles = torch.arange(40, dtype=torch.float64) * (2 * math.pi / 40)
+z, phi = torch.meshgrid(heights, angles, indexing="ij")
+surface = torch.stack((phi.cos(), 0.5 * phi.sin(), z), dim=-1)
+features = torch.stack((torch.ones_like(z), z, z.square(), z.pow(3)), dim=-1)
+true_coefficients = torch.tensor([0.15, 0.8, -0.25, 0.35], dtype=torch.float64)
 
-history = []
-for step in range(240):
-    vector_noise = torch.randn_like(vector_coordinates(algebra, data)) * 0.01
-    noisy = algebra.layout((1,)).full(vector_coordinates(algebra, data) + vector_noise)
+def generator_field(coefficients):
+    angle = features @ coefficients
+    zeros = torch.zeros_like(angle)
+    return torch.stack((angle, zeros, zeros), dim=-1)
+
+with torch.no_grad():
+    target = action(surface, generator_field(true_coefficients))
+assert surface.shape == target.shape == (25, 40, 3)
+```
+
+Only the $e_{12}$ lane is nonzero, so every action rotates the horizontal plane
+and leaves $e_3$ unchanged. The ellipse makes its orientation visible, unlike
+an unmarked circular cross-section. The angle varies cubically with height;
+four real coefficients describe the entire field.
+
+The two leading tensor axes index height and circumference. The generator
+field has matching leading axes, giving one bivector per surface point. All
+points use the same planned operation, with no per-point planning.
+
+## Learn from sparse correspondences
+
+Observe five height rings and eight points on each ring. These measurements
+constrain a cubic field, while the unobserved points test its interpolation.
+This is a correspondence problem: target points have known material labels.
+An unordered surface-matching objective would require a different loss and
+would introduce additional ambiguities.
+
+```python
+observed = torch.zeros(z.shape, dtype=torch.bool)
+observed[::6, ::5] = True
+coefficients = torch.nn.Parameter(torch.zeros(4, dtype=torch.float64))
+optimizer = torch.optim.Adam([coefficients], lr=0.05)
+
+for step in range(500):
     optimizer.zero_grad()
-    loss, output, metrics = loss_terms(model, noisy)
+    prediction = action(surface[observed], generator_field(coefficients)[observed])
+    loss = (prediction - target[observed]).square().mean()
     loss.backward()
     optimizer.step()
-    history.append({"step": step, **{key: float(value) for key, value in metrics.items()}})
-
-with torch.no_grad():
-    aligned = model.rotor(data)
-    projected = model.selector(aligned)
 ```
 
-## Inspect
+The matrix multiplication that evaluates the polynomial is ordinary PyTorch.
+clifra is responsible for the meaning of the resulting bivectors and their
+action on vectors. The fixed low-degree basis supplies smoothness; this
+example does not need a separate regularization term. A more flexible field
+would need enough observations or a suitable prior to determine behavior
+between samples.
 
-```python
-def measure(algebra, values, model=None):
-    metrics = {
-        "z": float(coordinate_component(algebra, values, axis=2).square().mean()),
-    }
-    if model is not None:
-        metrics["selector_deviation"] = float(model.selector_penalty().detach())
-    return {
-        key: round(value, 6)
-        for key, value in metrics.items()
-    }
-
-
-raw_metrics = measure(algebra, data)
-aligned_metrics = measure(algebra, aligned)
-projected_metrics = measure(algebra, projected, model)
-print("raw", raw_metrics)
-print("aligned", aligned_metrics)
-print("projected", projected_metrics)
-```
-
-Representative run:
-
-```text
-raw {'z': 0.122839}
-aligned {'z': 0.032819}
-projected {'z': 0.001267, 'selector_deviation': 0.277118}
-```
-
-The rotor reduces the contribution from the fixed tilt, bringing the height
-energy close to that of the original saddle. The selector then attenuates the
-residual height that a single global rotation cannot remove.
-
-Inspect the learned gate in vector coordinates rather than indexing canonical
-lanes:
+## Check interpolation and inversion
 
 ```python
 with torch.no_grad():
-    gates = 2.0 * torch.sigmoid(model.selector.weights)
-    vector_gates = algebra.layout((1,)).compact(gates)
-
-print("vector gates", vector_gates.squeeze())
+    learned_field = generator_field(coefficients)
+    deformed = action(surface, learned_field)
+    unseen_error = (deformed[~observed] - target[~observed]).square().mean()
+    assert unseen_error < 1e-8
+    torch.testing.assert_close(deformed[..., 2], surface[..., 2])
+    torch.testing.assert_close(
+        deformed[..., :2].square().sum(-1),
+        surface[..., :2].square().sum(-1),
+    )
+    restored = action(deformed, -learned_field)
+    torch.testing.assert_close(restored, surface)
 ```
 
-The $e_3$ gate is smaller than the $e_1$ and $e_2$ gates, so it attenuates most
-of the height variation. For finite logits, the sigmoid-based gates remain
-positive; this learned selector is therefore not an exact projection.
+Each local action preserves radius and height. It does not follow that a
+spatially varying field preserves the distance between arbitrary pairs of
+points: neighboring rings rotate by different angles. This deformation twists
+the surface while each individual vector undergoes an orthogonal action.
 
-## Noise Check
+The inverse above reuses `learned_field` with its sign reversed. For this field,
+height is unchanged, so reevaluating the polynomial at the deformed height
+would also work. A field depending on coordinates changed by its own action
+would require more care; pointwise invertibility alone does not establish a
+globally invertible deformation.
 
-```python
-def noise_test(model, data):
-    rows = []
-    for noise_std in [0.0, 0.01, 0.05, 0.1, 0.2]:
-        coordinates = vector_coordinates(model.algebra, data)
-        noisy_coordinates = coordinates + torch.randn_like(coordinates) * noise_std
-        noisy = model.algebra.layout((1,)).full(noisy_coordinates)
-        with torch.no_grad():
-            output = model(noisy)
-        rows.append({"noise": noise_std, **measure(model.algebra, output, model)})
-    return rows
+## Inspect the geometry
 
+The following optional block requires Matplotlib. Run it after the preceding
+blocks to compare the original surface, sparse observations, and the fitted
+field. The assertions above are independent of plotting.
 
-noise_rows = noise_test(model, data)
+```python title="Optional plotting"
+import matplotlib.pyplot as plt
+
+figure = plt.figure(figsize=(12, 4))
+for column, (title, values) in enumerate(
+    (("Original", surface), ("Target", target), ("Learned field", deformed)), start=1,
+):
+    axes = figure.add_subplot(1, 3, column, projection="3d")
+    xyz = values.detach().cpu().numpy()
+    axes.plot_wireframe(xyz[..., 0], xyz[..., 1], xyz[..., 2], rstride=2, cstride=4)
+    if column == 2:
+        samples = target[observed].cpu().numpy()
+        axes.scatter(samples[:, 0], samples[:, 1], samples[:, 2], color="black", s=8)
+    axes.set(title=title, xlabel="e1", ylabel="e2", zlabel="e3")
+    axes.set_box_aspect((2, 2, 2))
+figure.tight_layout()
+plt.show()
 ```
-
-![Training metrics](../assets/first-guide/training_metrics.png)
-
-![Noise sensitivity](../assets/first-guide/noise_robustness.png)
-
-## Plot
-
-The plotting code first gathers grade-1 coordinates through the layout. It does
-not depend on the canonical positions of $e_1$, $e_2$, or $e_3$. Both surfaces
-use the same coordinate bounds. Without shared bounds, Matplotlib expands the
-small residual $e_3$ range in the projected result and makes it appear much
-larger than it is.
-
-```python
-def xyz(algebra, values):
-    coordinates = vector_coordinates(algebra, values).detach().cpu()
-    if coordinates.ndim == 3:
-        coordinates = coordinates.squeeze(-2)
-    return coordinates.unbind(dim=-1)
-
-
-def shared_bounds(algebra, *values):
-    coordinates = torch.cat(
-        [vector_coordinates(algebra, value).reshape(-1, 3) for value in values],
-        dim=0,
-    )
-    lower = coordinates.amin(dim=0)
-    upper = coordinates.amax(dim=0)
-    padding = (upper - lower).clamp_min(1.0e-6) * 0.05
-    return tuple(
-        (float(lo - pad), float(hi + pad))
-        for lo, hi, pad in zip(lower, upper, padding)
-    )
-
-
-def plot_patch(algebra, values, grid_shape, title, path, bounds):
-    import matplotlib.pyplot as plt
-
-    x, y, z = xyz(algebra, values)
-    n0, n1 = grid_shape
-    fig = plt.figure(figsize=(6, 5))
-    ax = fig.add_subplot(111, projection="3d")
-    ax.plot_surface(
-        x.reshape(n0, n1),
-        y.reshape(n0, n1),
-        z.reshape(n0, n1),
-        cmap="viridis",
-        norm=plt.Normalize(vmin=bounds[2][0], vmax=bounds[2][1]),
-        linewidth=0,
-        alpha=0.88,
-    )
-    ax.set_xlim(*bounds[0])
-    ax.set_ylim(*bounds[1])
-    ax.set_zlim(*bounds[2])
-    ax.set_box_aspect(tuple(hi - lo for lo, hi in bounds))
-    ax.view_init(elev=28, azim=-60)
-    ax.set_title(title)
-    ax.set_xlabel("e1 / x")
-    ax.set_ylabel("e2 / y")
-    ax.set_zlabel("e3 / z")
-    fig.tight_layout()
-    fig.savefig(path, dpi=170)
-    plt.close(fig)
-
-
-bounds = shared_bounds(algebra, data, aligned, projected)
-plot_patch(
-    algebra,
-    data,
-    grid_shape,
-    "Tilted sampled surface",
-    "surface-original.png",
-    bounds,
-)
-plot_patch(
-    algebra,
-    projected,
-    grid_shape,
-    "Projected representation",
-    "surface-projected.png",
-    bounds,
-)
-```
-
-## Experiment components
-
-| Piece | Role |
-| --- | --- |
-| `make_algebra(3, 0)` | 3-D Euclidean Clifford algebra |
-| `algebra.embed_vector(xyz)` | Formula samples into full-lane multivectors |
-| `VersorLayer(..., grade=2)` | learned bivector that reduces the contribution from the fixed global tilt |
-| `BladeSelector` | learned lane gate that suppresses residual curved height |
-| `coordinate_component(..., axis=2)` | z-energy pressure without a basis-lane literal |
-| `model.selector_penalty()` | selector-logit regularization toward pass-through |

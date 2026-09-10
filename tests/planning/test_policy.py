@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError, dataclass
 import pytest
 import torch
 
-from clifra.core import AlgebraContext, TensorContract
+from clifra.core import AlgebraContext, ResourceLimits, TensorContract
 from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.planning.policy import (
     PlanCandidate,
@@ -13,7 +13,6 @@ from clifra.core._kernel.planning.policy import (
     ProductFacts,
     select_policy_route,
 )
-from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core.executors import ExecutorRequest
 from tests.planning._grade_plan_helpers import select_product_route
 

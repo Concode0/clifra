@@ -1,29 +1,27 @@
 # Explanations
 
-These chapters develop the design of clifra from tensor representation through
-geometric parameterization, numerical execution, and PyTorch integration.
+These pages describe the mathematical representations and execution semantics
+of the public library.
 
-1. [Layout, Storage, and `TensorContract`](layout-storage-contracts.md) explains
-   how clifra represents a selected set of blades as an ordinary dense tensor.
-2. [Planning Policy as Dependency Injection](planning-policy-injection.md)
-   explains resource limits and executor selection.
-3. [Geometric Parameterization](clifra-methodology.md) describes geometric
-   objects as learnable coordinate systems.
-4. [Why Bivector Coordinate Fields Work](transformation-fields.md) derives the
-   local grade-1 generator, ordered sampled field map, differentiable
-   objective, and indexed inversion semantics.
-5. [Bivector Exponential Methods](bivector-exponential.md) separates
-   exact low-dimensional formulas, matrix exponentiation, and spectral-local
-   approximation.
-6. [Optimization for Geometric Parameters](optimizer-dispatch.md) explains the
-   built-in parameter dispatch and how to connect quasi-Newton, higher-order,
-   or tangent-space methods.
-7. [Signatures and Algebraic Behavior](signatures-and-learning.md) distinguishes
-   signed Clifford forms from positive coefficient-lane energy and relates both
-   to differentiation.
-8. [Using clifra with PyTorch](clifra-and-pytorch.md) explains how clifra's
-   algebraic machinery and the surrounding PyTorch system divide the work.
+- [Layouts, Storage, and Tensor Contracts](layout-storage-contracts.md)
+  defines basis order, compact coefficients, storage declarations, and axes.
+- [Products, Grades, and Blade Geometry](products-and-geometry.md)
+  states product and involution conventions and the domain of blade operations.
+- [Signatures and Algebraic Behavior](signatures-and-learning.md)
+  distinguishes signed forms from coefficient-space quantities and explains
+  their gradients and conditioning.
+- [Planned Execution and Resources](planning-policy-injection.md)
+  separates fixed contracts, feasibility budgets, and executor selection.
+- [Tensor Composition and PyTorch Ownership](clifra-and-pytorch.md)
+  covers broadcasting, autograd, modules, placement, and compilation.
 
-The chapters are independent of the tutorials. Each introduces the definitions
-needed for its own argument; the [API reference](../reference/index.md) provides
-the corresponding public interfaces.
+[Geometric Representations and Parameters](clifra-methodology.md) compares
+vectors, blades, mixed-grade values, bivectors, and rotors.
+[Optimization and Geometric Updates](optimizer-dispatch.md) starts from
+ordinary coefficient updates and explains the assumptions of specialized
+helpers.
+
+[Bivector Exponentials and Actions](bivector-exponential.md) develops one
+specialized operation in depth, including finite closures, numerical
+evaluation, and induced actions. It builds on the same layouts and planning
+contracts as the other operations.

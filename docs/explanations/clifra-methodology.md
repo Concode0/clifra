@@ -1,53 +1,106 @@
-# Geometric Parameterization
+# Geometric Representations and Parameters
 
-clifra supports both individual Clifford operations and differentiable geometric models in PyTorch. A recurring pattern in clifra is to represent a geometric object's generating coordinates directly and construct its action with the algebra.
+A layout defines the coefficient space. The same tensor representation can be
+used as fixed data, a differentiable input, or a PyTorch parameter. Its grade
+does not determine whether it is a model weight, a sample, or an operand.
 
-Under this pattern, a model may learn a bivector that generates a rotor, a
-vector that determines a reflection, or coefficients in a declared mixture of
-grades. The learned quantity can therefore be the geometric generator rather
-than an unconstrained tensor representing the resulting transformation.
+The operation gives the coefficients their role. A vector may enter a product,
+define a reflection normal, or be projected onto a blade. A mixed-grade value
+can be added, reversed, or multiplied without interpreting it as a geometric
+transformation.
 
-`VersorLayer` and `MultiVersorLayer` currently support `grade=1` reflection
-parameters and `grade=2` rotor parameters. Other grade layouts remain available
-to planned products and project-specific layers; they are not accepted as
-versor-layer parameter grades.
+## Vectors, blades, and mixed grades
 
-## From coordinates to an action
+A grade-1 layout contains the \(n\) vector coefficients. Its signed square
+comes from the signature; its coefficient length comes from ordinary Euclidean
+coordinates. Choosing one as a normalization rule does not make it the other.
 
-A typical construction has four stages:
+A simple grade-\(k\) blade \(A=a_1\wedge\cdots\wedge a_k\) represents an oriented
+subspace with scale. Constructing it from vector factors ensures
+decomposability, although dependent factors can produce zero. Storing arbitrary
+grade-\(k\) coefficients is more general: a homogeneous multivector need not be
+a simple blade. A layout declaration alone cannot establish the assumptions
+required for a blade inverse or subspace projection.
 
-1. **Declare an algebra.** The signature states how basis directions square and
-   therefore which geometry the products express.
-2. **Declare a layout.** The selected grades define the coordinate space of the
-   object being represented or learned.
-3. **Generate an action.** Clifford products, exponentials, reverses, and
-   sandwich actions turn those coordinates into a transformation.
-4. **Learn through the action.** PyTorch autograd differentiates the loss through
-   the planned tensor program and back to the coordinates.
+A mixed-grade layout is a direct sum of coefficient spaces. For instance,
+grades 0 and 1 store a scalar and vector in one tensor. Reversal, projection,
+and geometric multiplication each give this value a well-defined meaning
+without additional parameter constraints.
 
-For a bivector $B$, a rotor can be written
+```python
+import torch
+from clifra import make_algebra
+
+algebra = make_algebra(3, 0)
+vectors = algebra.layout((1,))
+scalars = algebra.layout((0,))
+mixed = algebra.layout((0, 1))
+v = torch.tensor([1.0, 2.0, 0.0])
+a = mixed.convert(torch.tensor([2.0]), scalars) + mixed.convert(v, vectors)
+assert a.shape == (4,)
+square = algebra.geometric_product(
+    a, a, left=mixed, right=mixed, output=mixed,
+)
+torch.testing.assert_close(square, torch.tensor([9.0, 4.0, 8.0, 0.0]))
+```
+
+Here \((2+v)^2=4+4v+v^2=9+4v\). The output selection retains the scalar and
+vector terms. This calculation neither needs a full multivector tensor nor
+introduces a transformation parameter.
+
+## Bivectors and explicit rotors
+
+A bivector is a grade-2 value. It can represent an oriented area, enter a
+commutator, or generate an action. In dimensions four and above, a general
+bivector can contain several independent plane components; it need not be a
+single simple blade.
+
+Exponentiation is one specialized use. For a bivector \(B\),
 
 \[
-R = \exp(-B/2), \qquad x' = R x \widetilde{R}.
+R=\exp(-B/2),\qquad \widetilde R=\exp(B/2),\qquad R\widetilde R=1.
 \]
 
-The parameter is $B$, rather than an arbitrary dense matrix or a stored rotor
-whose constraints must be repaired after every update. The exponential and
-sandwich product construct the action at each forward pass. The model therefore
-learns the plane generator of the transformation in a fixed grade-2 coordinate
-space.
+The identity follows from \(\widetilde B=-B\) and the commuting exponential
+factors. Generator coordinates are useful when varying an action smoothly.
+Explicit even-grade rotor coefficients are useful when composing, comparing,
+or exporting group elements. An arbitrary even multivector is not necessarily
+a rotor.
 
-In clifra, the signature, selected grades, and action are explicit modeling
-choices rather than properties hidden inside a full multivector representation.
+These representations are not interchangeable coordinate systems. The action
+identifies \(R\) with \(-R\), generator coordinates can be periodic, and a
+product of rotors need not have a unique bivector logarithm. Adding generators
+implements composition only when they commute. See
+[Bivector Exponentials and Actions](bivector-exponential.md) for the operation
+and its numerical evaluation.
 
-## Layout is part of the hypothesis
+## Parameters and constraints
 
-A layout does more than reduce storage. Selecting grade 1 places the
-coefficients in the vector subspace of the chosen algebra. Selecting grade 2
-places them in the bivector subspace of oriented plane elements. Selecting
-several grades permits a mixed-grade multivector object. The meaning of those
-coordinates then depends on the operation or layer applied to that layout.
+Any declared coefficient tensor can be a PyTorch parameter. A shared product
+operand of shape `[lanes]` broadcasts across samples; separate operands of
+shape `[samples, lanes]` receive separate gradients. Parameter ownership adds
+no Clifford semantics beyond the declaration and the operations using it.
 
-For learned models, the layout therefore becomes part of the model hypothesis.
-Narrowing it can make the representation interpretable and computationally
-tractable, but it also excludes components. clifra keeps this choice explicit.
+Constraints follow the represented object. Ordinary mixed-grade coefficients
+may need no adjustment. A blade built from vector factors preserves
+decomposability under changes to those factors, but can become singular.
+A reflection normal must stay non-null for the exact reflection.
+An additive update to a stored rotor need not preserve rotor membership,
+whereas a bivector always defines its mathematical exponential.
+
+A coefficient penalty constrains a representation. A signed invariant,
+projection residual, or transformed-value loss constrains a calculation.
+Choose these explicitly rather than treating every coefficient tensor as a
+generator or every grade as a manifold.
+
+## Composition and invariants
+
+A sum or product combines represented values; an output layout selects grades.
+An intermediate projection can remove terms needed later, so a narrow result
+cannot always replace the complete value in another expression.
+
+An exact reflection or rotor action preserves the signature-sensitive vector
+form. A subsequent coordinate gate or generic tensor map need not preserve it.
+Likewise, a coefficient normalization changes scale but does not certify blade
+simplicity or a signed invariant. Mathematical claims should refer to the
+complete calculation being used.

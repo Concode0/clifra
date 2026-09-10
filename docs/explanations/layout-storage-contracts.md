@@ -9,6 +9,20 @@ clifra makes this distinction explicit. A layout identifies which blades a
 tensor represents; storage determines how those coefficients occupy the final
 tensor axis; a tensor contract binds the two declarations together.
 
+## Basis and lane order
+
+Basis blades use increasing bitmask order. Bit $i-1$ denotes $e_i$;
+the set bits give the ordered product of basis vectors. In $Cl(3,0)$ the
+canonical order is
+
+\[
+1,\ e_1,\ e_2,\ e_{12},\ e_3,\ e_{13},\ e_{23},\ e_{123}.
+\]
+
+A compact layout retains this order after selecting grades. Lanes are not
+grouped by grade: a layout of grades 1 and 2 has order
+$e_1,e_2,e_{12},e_3,e_{13},e_{23}$.
+
 ## Layout is semantic structure
 
 `AlgebraSpec(p, q, r)` fixes the signature and the canonical basis. A
@@ -107,114 +121,36 @@ ordering in application code.
 `indices_tensor` returns canonical blade indices. Use the former to select lanes
 from a compact tensor and the latter only when a canonical index is required.
 
-`algebra.embed_vector` is a specialized convenience function. It maps ordinary
-vector coordinates to canonical full storage. `ProjectiveEmbedding` and
-`ConformalEmbedding` provide layout-aware adapters for their respective models.
-Use `layout.convert`, `compact`, or `full` when the source already consists of
-Clifford coefficients.
+## Tensor axes and composition
 
-## Format for project-specific helpers
+The final axis holds Clifford coefficients. Leading axes are ordinary tensor
+dimensions. For a product, shapes `[batch, 1, left_lanes]` and
+`[channels, right_lanes]` broadcast to
+`[batch, channels, output_lanes]`.
 
-A reusable helper should fix or expose its tensor contract. For an `nn.Module`,
-store the layout and contract on the module and register lane positions or masks
-as buffers. A stateless function should accept an explicit layout or contract;
-if the output contract is not fixed by its API, return it with the tensor.
+With `pairwise=True`, the penultimate axes are explicit item axes:
+`[..., L, left_lanes]` and `[..., R, right_lanes]` produce
+`[..., L, R, output_lanes]`. Remaining prefixes broadcast normally.
 
-The final axis remains the Clifford coefficient axis. Leading batch, sample,
-and channel axes should pass through unchanged. Allocate outputs with
-`values.new_zeros` or an equivalent tensor method so device and dtype are
-preserved.
+A layout passed to an operation declares compact storage. Use
+`TensorContract.canonical(layout)` for canonical storage with that layout.
+Omitted input declarations mean the full basis. Width validates a declaration;
+it never selects the layout or storage mode.
 
-```python
-import torch
-import torch.nn as nn
+Compact tensors compose directly with PyTorch. Addition requires aligned lane
+meanings; use `target.convert(values, source)` before combining different
+layouts. Scalar multiplication and leading-axis reshaping preserve the layout
+when they leave coefficient positions intact.
 
-from clifra.core import AlgebraSpec, GradeLayout, TensorContract
+## Storage and computation
 
-
-class CompactVectorAdapter(nn.Module):
-    def __init__(self, algebra, layout: GradeLayout) -> None:
-        super().__init__()
-        spec = AlgebraSpec.from_algebra(algebra)
-        self.n = spec.n
-        self.layout = layout
-        self.contract = TensorContract.compact(layout)
-
-        positions = layout.positions_for_grades((1,), device=algebra.device)
-        if positions.numel() != self.n:
-            raise ValueError("layout must contain the complete grade-1 basis")
-        self.register_buffer("_vector_positions", positions)
-
-    def embed(self, coordinates: torch.Tensor) -> torch.Tensor:
-        if coordinates.shape[-1] != self.n:
-            raise ValueError(f"expected {self.n} coordinates")
-        output = coordinates.new_zeros(
-            *coordinates.shape[:-1], self.contract.lane_dim
-        )
-        return output.index_copy(-1, self._vector_positions, coordinates)
-
-    def extract(self, values: torch.Tensor) -> torch.Tensor:
-        self.contract.validate(values)
-        return torch.index_select(values, -1, self._vector_positions)
-```
-
-The format keeps indices out of call sites, moves static lane discovery out of
-`forward`, and exposes `layout` and `contract` to downstream code. Helpers
-that support both storage forms should use separate contracts or require an
-explicit `TensorContract`. A layout declares compact storage; canonical storage
-requires `TensorContract.canonical(layout)`. Omitted input declarations mean the
-full basis. Tensor width validates the declaration and never selects semantics
-or storage.
-
-## Static sparsity, dense tensor execution
-
-`GradeLayout` represents statically known sparsity. Unlike a dynamic format such
-as COO or CSR, the algebra and grade declaration determine its structure before
-tensor values arrive. Planning then uses it to build the required interactions:
-
-1. The left, right, and output layouts determine possible grade paths.
-2. Metric-zero and projection-zero products are removed from the realized plan.
-3. Blade positions and product coefficients become registered tensor buffers.
-4. Runtime execution gathers active lanes, multiplies them, and reduces them
-   with ordinary PyTorch tensor operations.
-
-The execution model has two properties:
-
-- **Sparse structural cost:** inactive blades and impossible grade paths do not
-  need coefficient storage or runtime interactions.
-- **Dense numerical representation:** batch and channel axes remain ordinary
-  dense tensors, so broadcasting, autograd, modules, device placement, and
-  compilation remain available.
-
-The product executor therefore works with a compact dense coefficient axis and
-uses the structure computed during planning. For a planned product, its
-equivalent hot path is conceptually:
-
-```text
-gather declared left lanes
-gather declared right lanes
-multiply by fixed signature coefficients
-reduce into declared output lanes
-```
-
-Full all-grade products may instead select a full-table executor. That route is
-only meaningful when both inputs and the output are canonical all-grade
-layouts; executor policy decides whether its dense table is preferable to the
-grade-planned route.
-
-## Storage and computation limits
-
-Layouts remove work that the declaration proves unnecessary. A vector-to-vector
-operation projected to scalars and bivectors need not allocate arbitrary grades.
-A bivector field need not carry a $2^n$-wide parameter tensor merely because
-its exponential may later produce several even grades.
+Layouts describe static grade structure, independent of coefficient values.
+Products can exclude absent blades, impossible grade paths, and metric-zero
+interactions before execution. Compact storage remains a dense tensor with
+ordinary broadcasting and autograd.
 
 Clifford algebra's combinatorial growth still applies. A request for all grades
-has $2^n$ lanes, and a narrow output can still require many input pairs. Some
-operations, notably general bivector exponentiation, may need a larger
-intermediate representation than their inputs. Planning limits and execution
-policies make these costs explicit; declared costs can still be large.
-
-The default representation should use the narrowest layout required by the
-operation. Preserve the contract at module boundaries and expand only at an
-operation that requires canonical storage or additional grades.
+has $2^n$ lanes, and a narrow output can require many input pairs. General
+bivector exponentiation may need a larger intermediate representation than its
+input. See [Bivector Exponentials and Actions](bivector-exponential.md) for the
+distinction between storing an exponential and applying its action.

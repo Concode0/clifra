@@ -6,9 +6,9 @@ vector:
 \[
 e_i^2 =
 \begin{cases}
-+1 & i < p,\\
--1 & p \le i < p + q,\\
-0 & p + q \le i < p + q + r.
++1 & 1 \le i \le p,\\
+-1 & p < i \le p + q,\\
+0 & p + q < i \le p + q + r.
 \end{cases}
 \]
 
@@ -28,11 +28,11 @@ It is positive definite and independent of metric signs. It measures the size
 of a coefficient tensor in its declared layout. `lane_energy`, `lane_norm`,
 `lane_distance`, and the per-grade lane functions use this geometry.
 
-A Clifford form is built from algebraic products. For example, a signature norm
-squared is a scalar projection such as
+A Clifford form is built from algebraic products. `signature_norm_squared`
+computes
 
 \[
-Q(x) = \langle \widetilde{x}x\rangle_0,
+Q(x) = \langle x\widetilde{x}\rangle_0,
 \]
 
 with signs determined by the signature and blade grades. Depending on the form
@@ -43,7 +43,7 @@ fundamental rather than exceptional.
 | Quantity | Signature-sensitive | Positive definite | Typical use |
 | --- | --- | --- | --- |
 | Lane energy | No | Yes | Coefficient scale, regularization, stable distances |
-| Per-grade lane energy | No | Yes | Grade distribution and diagnostics |
+| Per-grade lane energy | No | On the selected grade | Grade distribution and diagnostics |
 | Signature or conjugate scalar form | Yes | No in general | Algebraic invariants and metric-aware constraints |
 | Magnitude derived with `abs` | Yes, before `abs` | Nonnegative, but not a norm in every signature | Stable scale based on a signed form |
 
@@ -91,54 +91,60 @@ and therefore the path taken by learning, while leaving the model's Clifford
 product unchanged. An indefinite algebra can therefore use a positive
 coefficient-space objective and still retain its original signature.
 
-## Algebra and optimization geometry
+Use lane quantities for coefficient scale and distances. Use a signed form
+for a signature-sensitive invariant or constraint. Taking `abs` of a signed
+form yields a nonnegative quantity but does not make it a positive-definite
+norm.
 
-Keep three layers of claims distinct:
+```python
+import torch
+from clifra import make_algebra
 
-1. **Algebraic definition.** Exact product, reverse, projection, and exact
-   exponential routes implement the declared Clifford operations up to ordinary
-   floating-point error.
-2. **Numerical method.** Clamps, null fallbacks, filtered eigengradients, and
-   spectral truncation define how difficult cases are computed stably.
-3. **Learning objective.** Lane losses, signed invariants, regularizers, and
-   domain constraints define what the model is trained to prefer.
+algebra = make_algebra(1, 1)
+vectors = algebra.layout((1,))
+x = torch.tensor([1.0, 1.0])
+assert algebra.lane_energy(x, input=vectors).item() == 2.0
+assert algebra.signature_norm_squared(x, input=vectors).item() == 0.0
+```
 
-A positive coordinate-space loss leaves the Clifford product in the forward
-program unchanged. An invariant form of the Clifford algebra and an
-optimization geometry on its coefficients are different definitions and should
-be presented accordingly.
+This nonzero vector is null for the signed form. Its coefficient energy
+remains positive.
 
-The same distinction applies to numerical safeguards. Taking the absolute value
-before a square root yields a stable magnitude-like scalar while the underlying
-form remains indefinite. A Euclidean fallback near a null vector avoids division
-by zero without certifying unit signed norm.
+## Scalar forms and output axes
 
-## Scope of approximate exponentials
+`scalar_product(A, B)` computes $\langle AB\rangle_0$.
+`conjugate_scalar_form(A, B)` computes $\langle\overline A B\rangle_0$,
+where the bar is Clifford conjugation, not complex conjugation. Reversal,
+conjugation, and no involution give different signs. Even in a Euclidean
+signature, the scalar part of a bivector square is negative while its
+coefficient energy is positive.
 
-For spectral-local bivector exponentiation, the backward pass is the derivative
-of the implemented local computation. Near repeated eigenvalues, a filtered
-eigendecomposition suppresses unstable inverse spectral gaps. If plane truncation occurs, the forward computation is truncated and the backward pass differentiates that truncated computation.
+Lane dot products and distances align layouts by blade identity before
+comparing coefficients. Lane energies and scalar forms preserve all leading
+axes and return a final singleton axis. Per-grade energy returns $n+1$
+entries indexed by grade, including zeros for grades absent from the layout.
+That final axis is a list of grade measurements, not a multivector layout.
 
-This remains a valid differentiable numerical method, but identities that
-depend on the exact full exponential must be validated to the required tolerance
-for that method. The algebraic target and its numerical approximation remain
-distinct.
+For zero input, every grade energy is zero. `lane_grade_distribution` divides
+by total energy plus `eps`, so its entries sum to slightly less than one for
+nonzero data and to zero for all-zero data. It is a stabilized coefficient
+summary, not a probability distribution inferred from the algebra.
 
-## Choosing a quantity for learning
+## Numerical behavior at zero and near null values
 
-Use lane geometry when the intended statement concerns coefficient scale,
-regularization, or comparison in a stable positive space. Use a signed Clifford
-form when the intended statement concerns the metric, an algebraic invariant,
-or a geometric constraint. In an indefinite or degenerate signature, decide how
-negative and null cases should affect the application rather than applying
-`abs` without interpreting it.
+`lane_energy` is a polynomial in real coefficients. `lane_norm` takes its
+square root, which has a nonsmooth norm point at the zero vector. No epsilon
+is added by that helper. If a differentiable objective needs smooth behavior
+there, squared coefficient energy often expresses the intended penalty
+without a square root.
 
-For a complete model, verify both levels independently:
+Signed cancellation is a separate issue. Large coefficients can produce a
+small signed form in an indefinite algebra, making relative error large.
+Inversion divides by such a form and can magnify that error. Strict geometry
+rejects an exactly zero denominator; it does not set a conditioning threshold.
+Stabilized geometry changes the denominator near zero, and autograd follows
+that changed numerical expression.
 
-- compare planned algebraic operations with an exact reference where feasible;
-- test the model-level invariant or scientific constraint actually claimed;
-- monitor lane-scale diagnostics for numerical conditioning;
-- characterize approximation and gradient behavior in the operating regime.
-
-The separation preserves the meaning of the declared signature while permitting
-a positive coordinate-space objective.
+Compare quantities in the precision and range used by the application.
+Coefficient energy can reveal large values hidden by signed cancellation;
+the signed form still determines the algebraic invariant being checked.

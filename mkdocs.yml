@@ -49,19 +49,43 @@ nav:
   - Tutorials:
       - Overview: tutorials/index.md
       - First Clifford Product: tutorials/first-clifford-product.md
-      - Layouts and Planned Execution: tutorials/layouts-and-plans.md
-      - Learn a Geometric Transformation: tutorials/learn-geometric-transform.md
-      - Train a Geometric Surface Model: tutorials/unbend-manifold.md
+      - Layouts, Storage, and Tensor Composition: tutorials/layouts-and-plans.md
+      - Planned Differentiation: tutorials/planned-differentiation.md
+      - Bivector Exponentials and Induced Actions: tutorials/exponentials-and-actions.md
+      - Fit a Rotation with PyTorch: tutorials/learn-geometric-transform.md
+      - Differentiate a Spatial Deformation: tutorials/unbend-manifold.md
+  - How-to Guides:
+      - Overview: how-to/index.md
+      - Define signatures and layouts: how-to/signatures-and-layouts.md
+      - Convert between compact and canonical storage: how-to/storage-conversion.md
+      - Work with leading dimensions and broadcasting: how-to/broadcasting.md
+      - Use pairwise operations: how-to/pairwise-operations.md
+      - Plan and reuse products: how-to/products.md
+      - Use unary and grade operations: how-to/unary-and-grades.md
+      - Compute norms, energies, and signed forms correctly: how-to/signed-quantities.md
+      - Reflect vectors and multivectors: how-to/reflections.md
+      - Project, reject, and invert safely: how-to/blade-geometry.md
+      - Materialize a bivector exponential: how-to/bivector-exponential.md
+      - Apply a bivector-generated action without materializing the rotor: how-to/induced-actions.md
+      - Compose explicit rotor operations: how-to/rotor-composition.md
+      - Put planned operations inside nn.Module: how-to/modules.md
+      - Compile Clifford computations: how-to/compilation.md
+      - Optimize Clifford parameters: how-to/optimizer-updates.md
+      - Set resource limits: how-to/resource-limits.md
+      - Understand and control planned execution: how-to/planned-execution.md
+      - Provide a custom executor: how-to/custom-executors.md
+      - Analyze spectra, commutators, and transformations: how-to/analysis.md
+      - Use experimental analysis: how-to/experimental-analysis.md
   - Explanations:
       - Overview: explanations/index.md
-      - Layout, Storage, and TensorContract: explanations/layout-storage-contracts.md
-      - Planning Policy as Dependency Injection: explanations/planning-policy-injection.md
-      - Geometric Parameterization: explanations/clifra-methodology.md
-      - Why Bivector Coordinate Fields Work: explanations/transformation-fields.md
-      - Bivector Exponential Methods: explanations/bivector-exponential.md
-      - Optimization for Geometric Parameters: explanations/optimizer-dispatch.md
+      - Layouts, Storage, and Tensor Contracts: explanations/layout-storage-contracts.md
+      - Products, Grades, and Blade Geometry: explanations/products-and-geometry.md
       - Signatures and Algebraic Behavior: explanations/signatures-and-learning.md
-      - Using clifra with PyTorch: explanations/clifra-and-pytorch.md
+      - Planned Execution and Resources: explanations/planning-policy-injection.md
+      - Tensor Composition and PyTorch Ownership: explanations/clifra-and-pytorch.md
+      - Geometric Representations and Parameters: explanations/clifra-methodology.md
+      - Optimization and Geometric Updates: explanations/optimizer-dispatch.md
+      - Bivector Exponentials and Actions: explanations/bivector-exponential.md
   - API Reference: reference/index.md
   - Benchmarks:
       - Overview: benchmarks/index.md

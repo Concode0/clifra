@@ -1,159 +1,58 @@
 # API Reference
 
-This page is generated from clifra's source docstrings. Public documented
-modules, classes, methods, functions, and attributes are included once from
-their defining modules. Private names and undocumented implementation details
-are omitted.
+The reference is generated from public source modules. Layouts and tensor
+contracts declare coefficient meaning; planned operations retain those
+declarations for repeated execution.
 
-## Algebra and Runtime
+## Algebra and representation
 
 ::: clifra.core.config
 
+::: clifra.core.algebra
+    options:
+      show_if_no_docstring: true
+      members:
+        - AlgebraContext
+
+::: clifra.core.layout
+
+::: clifra.core.tensors
+
 ::: clifra.core.formatting
 
-::: clifra.core.foundation.basis
+## Planned operations and modules
 
-::: clifra.core.foundation.device
+::: clifra.core.resources.ResourceLimits
 
-::: clifra.core.foundation.host
+::: clifra.core.operation
 
-::: clifra.core.foundation.layout
+::: clifra.core.module
 
-::: clifra.core.foundation.manifold
+## Executors
 
-::: clifra.core.foundation.module
-
-::: clifra.core.foundation.numerics
-
-::: clifra.core.runtime.algebra
-
-::: clifra.core.runtime.energy
-
-::: clifra.core.runtime.forms
-
-::: clifra.core.runtime.metric
-
-::: clifra.core.runtime.tensors
-
-## Planning
-
-::: clifra.core.planning.action
-
-::: clifra.core.planning.exp
-
-::: clifra.core.planning.layouts
-
-::: clifra.core.planning.metric
-
-::: clifra.core.planning.permutation
-
-::: clifra.core.planning.planner
-
-::: clifra.core.planning.policy
-
-::: clifra.core.planning.product
-
-::: clifra.core.planning.tree
-
-::: clifra.core.planning.unary
-
-## Execution
-
-::: clifra.core.execution.action
-
-::: clifra.core.execution.attention
-
-::: clifra.core.execution.exp
-
-::: clifra.core.execution.handles
-
-::: clifra.core.execution.metric
-
-::: clifra.core.execution.permutation
-
-::: clifra.core.execution.product
-
-::: clifra.core.execution.unary
-
-## Functional Operations and Criteria
-
-::: clifra.functional.activation
-
-::: clifra.functional.loss
-
-::: clifra.functional.orthogonality
-
-::: clifra.functional.products
-
-::: clifra.criterion.loss
-
-::: clifra.criterion.orthogonality
-
-## Layers
-
-::: clifra.layers.adapters.conformal
-
-::: clifra.layers.adapters.projective
-
-::: clifra.layers.blocks.attention
-
-::: clifra.layers.primitives.activation
-
-::: clifra.layers.primitives.linear
-
-::: clifra.layers.primitives.multi_versor
-
-::: clifra.layers.primitives.normalization
-
-::: clifra.layers.primitives.product
-
-::: clifra.layers.primitives.projection
-
-::: clifra.layers.primitives.reflection
-
-::: clifra.layers.primitives.rotor_gadget
-
-::: clifra.layers.primitives.versor
+::: clifra.core.executors
 
 ## Optimization
 
-::: clifra.optimizers.riemannian
+::: clifra.optimizers.updates
 
 ## Analysis
 
-These interfaces provide experimental geometric diagnostics. Their outputs
-describe implemented tensor and coefficient-space calculations. Statistical
-inference and causal, metric, or symmetry conclusions require separate methods
-and evidence.
-
-::: clifra.analysis
-    options:
-      members:
-        - AnalysisConstants
-        - SamplingConfig
-        - AnalysisConfig
-        - DimensionResult
-        - SignatureEstimate
-        - SpectralResult
-        - TransformationDiagnosticsResult
-        - CommutatorResult
-        - AnalysisReport
-
 ::: clifra.analysis.commutator
-
-::: clifra.analysis.dimension
-
-::: clifra.analysis.geodesic
-
-::: clifra.analysis.pipeline
-
-::: clifra.analysis.sampler
-
-::: clifra.analysis.signature
 
 ::: clifra.analysis.spectral
 
-::: clifra.analysis.symmetry
+::: clifra.analysis.transformation
+
+## Experimental analysis
+
+These interfaces describe exploratory procedures rather than stable algebraic
+contracts. See [Use experimental analysis](../how-to/experimental-analysis.md)
+for their assumptions and interpretation.
+
+::: clifra.analysis.experimental.signature
+
+::: clifra.analysis.experimental.neighborhood
 
 ## Utilities
 

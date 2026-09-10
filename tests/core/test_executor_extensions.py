@@ -6,7 +6,7 @@ import pytest
 import torch
 from torch import nn
 
-from clifra import AlgebraContext, ExecutorRegistry, TensorContract, make_algebra
+from clifra import AlgebraContext, ExecutorRegistry, ResourceLimits, TensorContract, make_algebra
 from clifra.core.executors import Assessment, ExecutorRequest, Rejected
 
 
@@ -217,6 +217,22 @@ def test_external_resource_rejection_falls_through_without_build():
     assert [event for event, *_ in oversized] == ["assess"]
     assert [event for event, *_ in first] == ["assess", "build"]
     assert second == []
+
+
+def test_public_budget_filters_external_assessment_before_build():
+    oversized, feasible = [], []
+    registry = ExecutorRegistry(
+        (
+            ExternalScalarProvider(oversized, identity=("product", "too_large"), pairs=11),
+            ExternalScalarProvider(feasible, identity=("product", "fits"), pairs=10),
+        )
+    )
+    algebra = make_algebra(3, registry=registry, resource_limits=ResourceLimits(max_pairs=10))
+    scalar = algebra.layout((0,))
+    product = algebra.plan_product(left=scalar, right=scalar, output=scalar)
+    assert [event for event, *_ in oversized] == ["assess"]
+    assert [event for event, *_ in feasible] == ["assess", "build"]
+    torch.testing.assert_close(product(torch.tensor([2.0]), torch.tensor([3.0])), torch.tensor([6.0]))
 
 
 @pytest.mark.parametrize("change", [{"lanes": -1}, {"pairs": 1.5}, {"lanes": True}, {"pairs": float("nan")}])

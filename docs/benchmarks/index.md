@@ -6,6 +6,9 @@ The suite measures eager forward, backward, startup, and cumulative behavior. `b
 
 Run `20260818T070256.028981Z-e8ca8b8652` on `macOS-26.5.2-arm64-arm-64bit` with PyTorch `2.10.0` and `5` Torch threads.
 
+These artifacts record the August 2026 implementation. Route names and timings
+describe that run; they have not been regenerated for the current API.
+
 - successful rows: `15882`
 - skipped cases: `0`
 - errors: `0`

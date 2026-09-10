@@ -1,26 +1,33 @@
 # clifra
 
-clifra provides layout-first Clifford algebra tools for PyTorch. It represents
-geometric values as tensors, plans algebra operations from explicit grade
-layouts, and exposes the resulting work as reusable PyTorch modules. It can be
-used as a Clifford algebra library, a geometric deep-learning toolkit, or the
-foundation of a separate research or domain-specific system.
+clifra is a differentiable Clifford algebra computation layer for PyTorch.
+Signatures and layouts give tensor coefficients their mathematical meaning.
+Operations act on those tensors directly or can be planned for reuse.
 
-## Choose a Path
+A vector in $Cl(3,0)$ has three coefficients. Its geometric product with another
+vector has a scalar part and a bivector part:
 
-| I want to... | Start here |
-| --- | --- |
-| learn clifra from the beginning | [First Clifford Product](tutorials/first-clifford-product.md) |
-| understand layouts, planning, or learnable geometry | [Explanations](explanations/index.md) |
-| look up a public interface or tensor contract | [API Reference](reference/index.md) |
-| inspect performance and numerical profiles | [Benchmarks](benchmarks/index.md) |
+```python
+import torch
+from clifra import make_algebra
 
-## Benchmark Suite
+algebra = make_algebra(3, 0)
+vectors = algebra.layout((1,))
+a = torch.tensor([1.0, 0.0, 0.0])
+b = torch.tensor([0.0, 1.0, 0.0])
+ab = algebra.geometric_product(a, b, left=vectors, right=vectors)
+# [0, 1, 0, 0]: coefficients of 1, e12, e13, e23
+```
 
-The configured benchmark separates full-layout measurements through dimension
-8 from compact-layout measurements through dimension 63. It records setup,
-cold-call, forward and backward timing distributions, throughput, tensor
-statistics, cumulative error, and the complete execution context.
+The final axis holds coefficients in the declared layout. Leading dimensions
+broadcast as ordinary PyTorch dimensions; autograd differentiates the executed
+tensor operations.
 
-See [Benchmarks](benchmarks/index.md) for the matrix, commands, graphs, and raw
-artifacts.
+The [tutorials](tutorials/index.md) introduce coefficient tensors, layouts,
+broadcasting, and planned differentiation, followed by geometric applications.
+The [how-to guides](how-to/index.md) cover individual tasks, including strict
+blade geometry, resource budgets, compilation, and executor extensions.
+
+The [explanations](explanations/index.md) develop representation, products,
+signed forms, numerical behavior, and execution semantics. The
+[API reference](reference/index.md) documents the stable public interfaces.

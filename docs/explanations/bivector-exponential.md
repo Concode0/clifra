@@ -1,4 +1,4 @@
-# Bivector Exponential Methods
+# Bivector Exponentials and Actions
 
 The exponential of a bivector $B$ is the even multivector
 
@@ -6,7 +6,9 @@ The exponential of a bivector $B$ is the even multivector
 \exp(B) = \sum_{k=0}^{\infty}\frac{B^k}{k!}.
 \]
 
-Its occupied grades and the cost of evaluating it depend on the dimension, signature, and algebraic structure of $B$. clifra selects a static executor from the algebra specification, layouts, dtype, device, and exponential policy.
+Its occupied grades and evaluation cost depend on the dimension, signature,
+and algebraic structure of $B$. Planning selects an executor from the algebra,
+layouts, dtype, and device.
 
 ## Finite closures
 
@@ -36,8 +38,7 @@ S(s)=
 \end{cases}
 \]
 
-This covers all bivectors for $n\leq3$ and is implemented by
-`closed_simple`.
+This covers all bivectors for $n\leq3$.
 
 ### Biquadratic closure
 
@@ -54,153 +55,152 @@ so the exponential closes over
 1,\quad B,\quad K,\quad BK.
 \]
 
-`closed_biquadratic` evaluates the four scalar coefficients from the two roots
+The closed formula evaluates the four scalar coefficients from the two roots
 of the resulting quadratic relation. Real and complex root pairs use the same
 finite closure with different scalar coefficient formulas.
 
-## General representations
+## Materializing the exponential
 
-### Left-multiplication matrix
+`algebra.bivector_exp(B, input=bivectors)` returns coefficients of $\exp(B)$.
+There is no implicit minus sign or half-angle factor. Compact grade-2 input
+defaults to an even-grade output layout. A full-basis input is first projected
+to grade 2.
 
-`left_matrix_exp` represents left multiplication by $B$ on the even
-subalgebra. If $L_B$ is that operator and $e_0$ represents the scalar identity,
-then
+An explicit output layout selects coefficients of the exponential; it does
+not redefine multiplication inside the power series. In particular,
+repeatedly projecting each power to a narrow output would generally give
+a different result.
+
+Beyond finite closures, built-in methods use Taylor evaluation with scaling
+and squaring or exponentiate the left-multiplication operator on the even
+subalgebra. Materialized built-in exponentials support
+dimensions 2 through 12, subject to resource limits. The Taylor path requires
+coefficient L1 norm at most 65,536.
+
+A compact input or narrow output does not guarantee compact intermediates.
+The full even subalgebra has $2^{n-1}$ lanes.
+
+## General numerical evaluation
+
+For a submultiplicative coefficient L1 norm \(\beta=\sum_i|b_i|\), the
+Taylor remainder after degree \(m\) obeys
+
+\[
+\left\|\exp(B)-\sum_{j=0}^m\frac{B^j}{j!}\right\|_1
+\le e^\beta\frac{\beta^{m+1}}{(m+1)!}.
+\]
+
+The normalized basis metric factors have magnitude at most one, so this
+coefficient norm bounds the product as required. The estimate describes
+polynomial truncation before floating-point roundoff.
+
+The Taylor implementation scales \(B\) until its L1 norm is at most one,
+evaluates a polynomial, and squares back:
+
+\[
+\exp(B)=\left[\exp(B/2^s)\right]^{2^s}.
+\]
+
+It uses degree 12 for float32 and degree 18 for float64, with at most 16
+squarings under the stated input envelope. The small-input path can evaluate
+only grades needed by the requested output. Scaling and squaring can require
+the full even representation, because intermediate grades contribute to later
+products. Squaring propagates both polynomial error and roundoff; the simple
+remainder estimate is not an error bound for the complete computed result.
+
+Alternatively, let \(L_B\) represent left multiplication by \(B\) on the even
+subalgebra and let \(e_0\) be its scalar-identity coordinate vector. Then
 
 \[
 \exp(B)=\exp(L_B)e_0.
 \]
 
-The executor applies `torch.matrix_exp` and maps the resulting column into the
-requested output layout. The operator has $2^{n-1}$ lanes for a full even
-algebra. `cpu_matrix_exp` uses the same construction on CPU for matrix cases
-that are unavailable on MPS.
+Here \(e_0\) denotes the scalar coordinate, not a Clifford generating vector.
+The operator has \(2^{n-1}\) rows and columns. Its matrix exponential provides
+a reference construction but carries the corresponding storage and interaction
+cost. The current materialized matrix route executes on CPU and returns
+coefficients to the input device through differentiable transfers.
 
-### Spectral-local representation
+## Removable limits and conditioning
 
-For an eligible definite signature, clifra maps $B$ to a skew generator $G$ on
-the nondegenerate vector space. The symmetric problem based on $-G^2$ identifies
-invariant plane pairs. The executor then:
+The finite closures contain expressions such as
+\(\sin(\sqrt{-s})/\sqrt{-s}\), whose limit at zero is one. Evaluating this as a
+literal quotient loses both the value and useful gradients at zero.
+Biquadratic coefficients also contain divided differences that subtract nearly
+equal values near repeated roots.
 
-1. selects up to four plane pairs;
-2. reconstructs a simple bivector on each selected plane;
-3. evaluates each simple exponential;
-4. multiplies the commuting factors in a bounded local even algebra;
-5. lifts the requested grades into the ambient output layout.
-
-Supported degenerate signatures add a local null ideal to this construction.
-The null-ideal dimension is capped at four, and its mixed and nilpotent terms
-are evaluated inside the local algebra.
-
-The cost of `spectral_local` depends on the retained local dimension rather
-than the full ambient even algebra. It is exact when the retained planes and
-null block contain the complete active structure. If additional planes are
-present, it evaluates the exponential of the retained local component.
-
-## Executor selection
-
-| Family | Normal selection | Result |
-| --- | --- | --- |
-| `closed_simple` | $n\leq3$ | Exact scalar-bivector closure. |
-| `closed_biquadratic` | $4\leq n\leq5$ | Exact scalar, bivector, and grade-4 closure. |
-| `spectral_local` | Eligible higher-dimensional cases | Exact for a complete retained spectrum; otherwise truncated. |
-| `left_matrix_exp` | Matrix fallback | Exponential of the represented full even operator. |
-| `cpu_matrix_exp` | MPS matrix fallback | The matrix construction executed on CPU. |
-
-The spectral-local eligibility rules are:
-
-- the signature is definite on its nondegenerate part;
-- the dtype is neither `float16` nor `bfloat16`;
-- the nondegenerate space contains at least one plane;
-- the null dimension does not exceed four;
-- degenerate and truncated-degenerate handling are enabled when required;
-- on devices other than MPS, the dimension reaches the policy transition,
-  which defaults to 10.
-
-Dimensions at or below five always use a finite closure. An ineligible
-higher-dimensional case uses a matrix executor. A mixed positive/negative
-signature is currently a matrix case.
-
-The transition dimension and spectral limits are policy inputs. They determine
-the executor family during planning; runtime tensor values do not change the selected family.
-
-## Coefficient evaluation near repeated roots
-
-The closed and spectral-local formulas contain removable limits and divided
-differences. Direct evaluation near a repeated root can subtract nearly equal
-values before dividing by a small invariant. clifra uses a fixed Taylor
-polynomial in that region.
-
-Let $u=\operatorname{finfo}(\text{dtype}).\mathrm{eps}$. If the first omitted
-Taylor term is approximately $x^m/D$ and direct roundoff is amplified as
-$u/x^k$, the representations have comparable error near
+The implementation uses polynomial expansions near these removable limits,
+with thresholds derived from dtype epsilon and the omitted coefficient terms.
+For example, balancing a first omitted term \(x^m/D\) against roundoff
+amplification \(u/x^k\) gives a transition scale
 
 \[
-x_{\mathrm{cut}}=(uD)^{1/(m+k)}.
+x_{\mathrm{cut}}=(uD)^{1/(m+k)},\qquad
+u=\operatorname{finfo}(\mathrm{dtype}).\mathrm{eps}.
 \]
 
-The executor derives each cutoff from its dtype and coefficient formula.
-Float32 therefore uses a wider Taylor interval than float64. The polynomial
-degree and cutoff are fixed for a planned executor, so this treatment does not
-introduce data-dependent iteration.
+This explains why lower precision calls for a wider polynomial interval.
+The thresholds stabilize scalar coefficient evaluation; they do not change
+the Clifford exponential into a low-rank approximation.
 
-These cutoffs govern scalar coefficient evaluation only. Product roundoff,
-eigenspace conditioning, backend kernels, and spectral truncation remain
-separate sources of error in the complete result.
+Large hyperbolic generators can produce large exponential coefficients.
+Finite closure does not prevent overflow, and a finite input does not
+guarantee a representable output. General materialized routes require float32
+or float64; device support can impose additional restrictions. MPS does not
+support float64 output, and some methods use CPU transfers for unsupported
+operations.
 
-## Truncation and diagnostics
+## Applying the induced action
 
-Let $|\theta_1|\geq\cdots\geq|\theta_M|$ be the plane-angle magnitudes and let
-$k$ be the retained plane count. clifra reports two complementary summaries:
+A grade-2 versor action uses the convention
 
 \[
-\operatorname{GVC}
-=\frac{\sum_{i=1}^{k}\theta_i^2}
-       {\sum_{i=1}^{M}\theta_i^2},
-\qquad
-T=\sum_{i=k+1}^{M}|\theta_i|.
+R=\exp(-B/2),\qquad x'=Rx\widetilde R.
 \]
 
-Geometric variance captured (GVC) measures relative spectral concentration.
-The tail-angle sum $T$ measures the absolute size of the omitted plane angles.
-Neither quantity alone is an error bound for an arbitrary downstream
-calculation.
+For a vector, define $G(B)x=-\tfrac12(Bx-xB)$. The same action is
 
-`spectral_exp_angle_diagnostics` computes these values from a supplied angle
-spectrum. `spectral_exp_uniform_tail_stress` reports the static case in which a
-fixed norm is distributed uniformly across all available planes. The former is
-suited to measured generators; the latter is a capacity stress case.
+\[
+x'=\exp(G(B))x.
+\]
 
-Diagnostics should retain relevant batch, layer, or channel axes until the
-desired aggregation is chosen. The diagnostic API detaches its input and is
-intended for analysis rather than as a differentiable training objective.
+Here $G(B)$ is an $n\times n$ matrix. Exponentiating it and lifting its
+action to the requested grades avoids materializing all coefficients of $R$.
 
-## Backward behavior
+```python
+import torch
+from clifra import make_algebra
 
-The closed and matrix executors differentiate their tensor programs directly.
-The spectral-local executor uses a filtered symmetric eigendecomposition. Its
-backward replaces unstable inverse gaps near repeated eigenvalues with a finite
-convention for the locally non-unique eigenspace.
+algebra = make_algebra(3, 0)
+vectors = algebra.layout((1,))
+bivectors = algebra.layout((2,))
+action = algebra.plan_versor_action(
+    grade=2, input=vectors, parameter=bivectors, output=vectors,
+)
+x = torch.tensor([1.0, 0.0, 0.0])
+B = torch.tensor([torch.pi / 2, 0.0, 0.0])
+rotated = action(x, B)
+assert torch.allclose(rotated, torch.tensor([0.0, 1.0, 0.0]), atol=1e-6)
+```
 
-When planes are truncated, backward differentiates the retained computation.
-It does not add derivatives for omitted spectral components. Forward and
-gradient comparisons with a matrix-exponential reference should therefore use
-the same retained-spectrum assumptions.
+If \(M=\exp(G(B))\), its grade-\(k\) action is the exterior power
+\(\bigwedge^k M\): apply \(M\) to each vector factor and take their wedge.
+In a basis, its coefficients are \(k\times k\) minors of \(M\).
+This explains grade preservation and why compact actions can avoid the
+exponentially large rotor representation. High-grade lifts still have
+combinatorial cost.
 
-## Operating principles
+For the vector metric matrix \(\eta=\operatorname{diag}(1,\ldots,-1,\ldots,0,\ldots)\),
+the induced generator satisfies \(G^\mathsf{T}\eta+\eta G=0\), hence
+\(M^\mathsf{T}\eta M=\eta\) in exact arithmetic. With an indefinite or
+degenerate signature this does not mean preserving Euclidean coefficient
+length. The exponential matrix remains invertible, including for a
+degenerate metric.
 
-clifra applies the following rules to bivector exponentiation:
+The action preserves grades; an explicit output declaration selects which
+grades to retain. Use `bivector_exp` when the exponential's coefficients are
+needed and `versor_action` when applying the generated transformation.
 
-1. **Plan statically.** Executor selection belongs to planning and is determined
-   from structural inputs and policy, not inferred mathematical intent.
-2. **Use finite closure when available.** Low-dimensional exact formulas avoid
-   constructing a larger operator.
-3. **Bound local work explicitly.** Spectral-local plane and null dimensions are
-   planned limits, and truncation is part of that executor's result semantics.
-4. **Separate numerical conditioning from method selection.** Dtype-derived
-   coefficient cutoffs stabilize a selected formula without changing executor
-   families.
-5. **Differentiate the executed map.** Each backward path corresponds to the
-   exact or truncated forward computation that produced the result.
-6. **Measure approximation at the workload boundary.** When spectral truncation
-   is enabled, inspect both retained spectral concentration and absolute tail
-   magnitude on representative inputs.
+PyTorch differentiates the executed numerical map. Floating-point error,
+large generator magnitudes, and backend support affect numerical behavior
+even when the mathematical operation is fixed.

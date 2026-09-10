@@ -10,12 +10,11 @@ from clifra.core import (
     AlgebraSpec,
     CliffordModule,
     Layout,
+    ResourceLimits,
     TensorContract,
     make_algebra,
     make_algebra_from_config,
 )
-from clifra.core._kernel.configuration import configured_algebra
-from clifra.core._kernel.planning.resources import ResourceLimits
 
 
 def test_public_core_exports_foundational_contracts():
@@ -27,6 +26,7 @@ def test_public_core_exports_foundational_contracts():
         "ExecutorRegistry",
         "Layout",
         "PlannedOperation",
+        "ResourceLimits",
         "TensorContract",
         "make_algebra",
     } <= set(core.__all__)
@@ -134,7 +134,7 @@ class _OwnedCliffordModule(CliffordModule):
 
 def test_clifford_module_movement_forks_shared_context_and_preserves_tuning():
     limits = ResourceLimits(max_lanes=128, max_pairs=1024)
-    shared = configured_algebra(3, resource_limits=limits)
+    shared = make_algebra(3, resource_limits=limits)
     first, second = _OwnedCliffordModule(shared), _OwnedCliffordModule(shared)
 
     first.to(dtype=torch.float64)
@@ -144,7 +144,7 @@ def test_clifford_module_movement_forks_shared_context_and_preserves_tuning():
     assert shared.dtype == second.algebra.dtype == torch.float32
     assert first.algebra.dtype == torch.float64
     assert first.algebra.registry is shared.registry
-    assert first.algebra._resource_limits is limits
+    assert first.algebra.resource_limits is limits
     assert first.algebra._planner.limits is limits
 
 

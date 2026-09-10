@@ -1,82 +1,87 @@
-# Learn a Geometric Transformation
+# Fit a Rotation with PyTorch
 
-A grade-2 `VersorLayer` can learn the rotation from $e_1$ to $e_2$ in
-$Cl(2, 0)$. The example contains the complete data, model, optimizer, training
-loop, and numerical acceptance condition. The parameter is a bivector; the
-forward pass exponentiates it and applies the corresponding rotor action.
+Fit a rotation in $Cl(3,0)$ from point correspondences. A bivector supplies
+three generator coefficients, in the order $e_{12},e_{13},e_{23}$. The planned
+action turns those coefficients into a length-preserving transformation;
+PyTorch supplies the parameter, coordinate loss, and optimizer. This is one
+use of differentiation through a planned operation: the training loop acts on
+ordinary tensors and does not change the operation's contracts.
 
-## Prepare the Target
+## Construct a correspondence problem
 
 ```python
 import torch
-
 from clifra import make_algebra
-from clifra.layers import VersorLayer
-from clifra.optimizers import make_riemannian_optimizer
 
 torch.manual_seed(7)
-
-algebra = make_algebra(2, 0, device="cpu")
-layout = algebra.layout()
-
-x = algebra.embed_vector(torch.tensor([[1.0, 0.0]])).unsqueeze(1)
-target = algebra.embed_vector(torch.tensor([[0.0, 1.0]])).unsqueeze(1)
-vector_layout = algebra.layout((1,))
-```
-
-Both tensors have shape `[batch=1, channels=1, lanes=4]`.
-
-![Input direction, target direction, and the learned grade-2 action](../assets/tutorials/learned-geometric-transform.png)
-
-## Build the Layer and Optimizer
-
-```python
-model = VersorLayer(
-    algebra,
-    channels=1,
-    grade=2,
-    input_layout=layout,
-    output_layout=layout,
+algebra = make_algebra(3, 0, dtype=torch.float64)
+vectors = algebra.layout((1,))
+bivectors = algebra.layout((2,))
+action = algebra.plan_versor_action(
+    grade=2, input=vectors, parameter=bivectors, output=vectors,
 )
-optimizer = make_riemannian_optimizer(model, algebra, lr=0.08)
+points = torch.randn(32, 3, dtype=torch.float64)
+true_generator = torch.tensor([0.6, -0.35, 0.25], dtype=torch.float64)
+with torch.no_grad():
+    targets = action(points, true_generator)
 ```
 
-Grade-2 parameters are tagged as `spin`. The optimizer updates their bivector
-coordinates and applies the configured norm guard; the layer's exponential map
-constructs the rotor used by the action.
+The single generator broadcasts across all 32 points. This is a global
+rotation about the origin: it has no translation, scaling, or deformation
+parameters. The points span three dimensions, so the correspondences constrain
+the rotation. A single vector would leave rotation about its own axis
+undetermined.
 
-## Train
+## Fit the generator
 
 ```python
-for step in range(120):
+generator = torch.nn.Parameter(torch.zeros(3, dtype=torch.float64))
+optimizer = torch.optim.Adam([generator], lr=0.06)
+initial_loss = (action(points, generator) - targets).square().mean().detach()
+
+for step in range(240):
     optimizer.zero_grad()
-    prediction = model(x)
-    loss = (prediction - target).square().mean()
+    prediction = action(points, generator)
+    loss = (prediction - targets).square().mean()
     loss.backward()
     optimizer.step()
-
-with torch.no_grad():
-    prediction = model(x)
-    final_loss = (prediction - target).square().mean()
-
-print("loss", float(final_loss))
-print("prediction", prediction.squeeze())
 ```
 
-With the fixed seed, the loss falls below `1e-4` and the compact vector
-coordinates approach the target:
+Each optimizer step updates three ordinary real coefficients. Autograd
+differentiates the induced action with respect to them; there is no need to
+optimize a separate matrix and repair its orthogonality after each update.
+The parameterization restricts the fit to the action's geometric family.
+
+The loss is squared Euclidean distance between vector coordinates. That is a
+suitable residual here because the signature is Euclidean and the point
+correspondences are known. It is not a general prescription to minimize a
+signature-sensitive quadratic form, which may be negative or vanish for a
+nonzero residual.
+
+## Validate the transformation
+
+Check held-out points and a geometric invariant, rather than accepting only a
+falling training loss.
 
 ```python
-assert float(final_loss) < 1.0e-4
-prediction_vector = vector_layout.compact(prediction)
-target_vector = vector_layout.compact(target)
-assert torch.allclose(prediction_vector, target_vector, atol=1.0e-2)
+with torch.no_grad():
+    fitted = action(points, generator)
+    final_loss = (fitted - targets).square().mean()
+    held_out = torch.randn(16, 3, dtype=torch.float64)
+    expected = action(held_out, true_generator)
+    actual = action(held_out, generator)
+    assert final_loss < initial_loss * 1e-6
+    torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
+    torch.testing.assert_close(actual.square().sum(-1), held_out.square().sum(-1))
+    torch.testing.assert_close(action(actual, -generator), held_out)
 ```
 
-This is the smallest example of clifra's learnable-geometric-object approach:
-the model does not learn four unrelated output coefficients. It learns a plane
-parameter whose algebraic action transforms the input.
+The recovered action matters more than exact recovery of the generator.
+Exponential coordinates are not globally unique, and large rotations can
+produce equivalent transformations from different coefficients. Starting near
+zero and fitting a moderate rotation keeps this example in a simple local
+regime; arbitrary initializations need not have the same optimization behavior.
 
-The [geometric surface tutorial](unbend-manifold.md) places the same
-parameterization in a larger experiment with a learned lane gate,
-regularization, noise-sensitivity measurements, and surface plots.
+A module can register both the generator and the planned action as attributes,
+then use ordinary `model.parameters()` and `.to()`. No additional abstraction
+is required for this three-parameter fit.

@@ -10,10 +10,12 @@ from .formatting import Multivector, basis_blade_label, format_multivector
 from .layout import AlgebraSpec, GradeLayout, Layout
 from .module import CliffordModule
 from .operation import PlannedOperation
+from .resources import ResourceLimits
 from .tensors import LaneStorage, TensorContract
 
 __all__ = [
     "ExecutorRegistry",
+    "ResourceLimits",
     "AlgebraContext",
     "AlgebraConfig",
     "make_algebra",

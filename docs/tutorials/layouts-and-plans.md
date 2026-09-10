@@ -1,70 +1,88 @@
-# Layouts and Planned Execution
+# Layouts, Storage, and Tensor Composition
 
-Compact grade layouts retain only the basis blades required by an operation.
-The following $Cl(3, 0)$ example includes the algebra construction, layout
-declarations, product plan, execution, and storage conversion. It does not
-depend on state from the previous tutorial.
+A layout defines the coefficient space. Storage determines how its coefficients
+occupy a tensor's final axis. Leading axes remain ordinary PyTorch axes: they
+can describe samples, channels, grids, or any other application structure.
 
-## Declare the Layouts
+## Choose the coefficient space
 
 ```python
 import torch
+from clifra import TensorContract, make_algebra
 
-from clifra import format_multivector, make_algebra
-
-algebra = make_algebra(3, 0, device="cpu")
+algebra = make_algebra(3, 0)
 vectors = algebra.layout((1,))
-scalar_and_bivector = algebra.layout((0, 2))
-
+products = algebra.layout((0, 2))
 assert vectors.dim == 3
-assert scalar_and_bivector.dim == 4
+assert products.dim == 4
 ```
 
-`vectors` stores only $e_1$, $e_2$, and $e_3$. The output layout stores the
-scalar plus the three bivector lanes.
+Basis blades follow increasing bitmask order. Bit zero represents $e_1$, bit
+one $e_2$, and bit two $e_3$. The canonical basis is therefore
+$1,e_1,e_2,e_{12},e_3,e_{13},e_{23},e_{123}$, not grade order.
+A compact layout filters this ordering to its selected grades. The vector lanes
+are $e_1,e_2,e_3$; the product lanes are $1,e_{12},e_{13},e_{23}$.
 
-## Plan Once
+Two arrays of the same width can mean different things. Width three could
+describe vectors or bivectors in this algebra, so operations need declarations
+rather than guessing a layout from tensor shape.
 
 ```python
-vector_product = algebra.plan_product(
-    op="gp",
-    left_layout=vectors,
-    right_layout=vectors,
-    output_layout=scalar_and_bivector,
+product = algebra.plan_product(
+    op="geometric_product", left=vectors, right=vectors, output=products,
 )
+a = torch.tensor([1.0, 0.0, 0.0])
+b = torch.tensor([0.0, 1.0, 0.0])
+result = product(a, b)
+assert torch.equal(result, torch.tensor([0.0, 1.0, 0.0, 0.0]))
 ```
 
-Planning resolves basis interactions, output positions, signs, and executor
-selection before the data arrives. The returned handle is a normal callable
-PyTorch module.
+## Convert storage explicitly
 
-## Execute on Compact Tensors
+Compact storage holds only the selected lanes. Canonical storage has $2^n$
+lanes, placing those same coefficients at their full-basis positions and zeros
+elsewhere. Conversion does not change the mathematical value.
 
 ```python
-left = torch.tensor([[1.0, 0.0, 0.0]])
-right = torch.tensor([[0.0, 1.0, 0.0]])
+canonical = products.full(result)
+assert canonical.shape == (8,)
+assert canonical[3] == 1  # e12 has bitmask 3
+assert torch.equal(products.compact(canonical), result)
 
-result = vector_product(left, right)
-
-assert result.shape == (1, scalar_and_bivector.dim)
-print(format_multivector(algebra, result, layout=scalar_and_bivector))
+canonical_product = algebra.plan_product(
+    op="geometric_product",
+    left=TensorContract(vectors, storage="canonical"),
+    right=TensorContract(vectors, storage="canonical"),
+    output=TensorContract(products, storage="canonical"),
+)
+assert torch.equal(canonical_product(vectors.full(a), vectors.full(b)), canonical)
 ```
 
-The output is `e12`. Reuse `vector_product` for every tensor that follows the
-same layouts, dtype, and device.
+Passing a layout directly declares compact storage. `TensorContract` makes the
+storage choice explicit while retaining the same semantic layout. Prefer
+compact storage when the computation needs only a few grades; a canonical
+array allocates all basis lanes even when most are zero.
 
-## Convert Between Storage Forms
+## Compose leading dimensions
+
+Broadcasting follows PyTorch's usual rules on every axis before the coefficient
+axis. A singleton axis can create all point-to-direction products with the
+same operation.
 
 ```python
-canonical = scalar_and_bivector.full(result)
-compact_again = scalar_and_bivector.compact(canonical)
+points = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+directions = torch.eye(3)
+all_products = product(points[:, None, :], directions[None, :, :])
+assert all_products.shape == (2, 3, 4)
+assert torch.equal(all_products[0, 1], result)
 
-assert canonical.shape == (1, algebra.dim)
-assert torch.equal(compact_again, result)
+# Pool over directions, leaving one multivector per point.
+pooled = all_products.mean(dim=1)
+assert pooled.shape == (2, 4)
 ```
 
-The layout gives both representations the same semantic meaning. Only their
-physical last-axis widths differ.
-
-The same layout contract can be attached to PyTorch layers. A minimal trained
-case appears in [Learn a Geometric Transformation](learn-geometric-transform.md).
+Stacking, indexing, concatenating along sample axes, and reducing those axes
+are ordinary tensor operations. Changing the final axis can change the
+coefficient meaning, so it requires a matching layout rather than just a new
+shape. The next tutorial examines what the reusable `product` has fixed and
+what remains dynamic in [Planned Differentiation](planned-differentiation.md).

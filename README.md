@@ -1,109 +1,56 @@
 # clifra
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.4+-ee4c2c.svg)](https://pytorch.org/)
 [![Docs](https://img.shields.io/badge/docs-MkDocs-brightgreen)](https://concode0.github.io/clifra/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18939518.svg)](https://doi.org/10.5281/zenodo.18939518)
 
-Layout-first Clifford algebra tools for PyTorch.
-
-clifra keeps Clifford structure explicit in tensor code. An algebra context owns the signature, grade layouts, planning policy, and reusable operation plans. Compact and full-lane tensors use the same layout semantics, while planned products, metrics, exponentials, and geometric actions run through ordinary PyTorch tensor operations. Direct operations, PyTorch modules, diagnostics, and code in research/ share the same algebra and layout machinery.
-
-[Documentation](https://concode0.github.io/clifra/) · [API Reference](https://concode0.github.io/clifra/reference/) · [Benchmarks](https://concode0.github.io/clifra/benchmarks/)
-
-## What clifra provides
-
-- **Layouts and tensor contracts.** Signatures, grade layouts, and compact or full-lane storage make the Clifford meaning of a tensor explicit.
-
-- **Planned Clifford operations.** Products, unary operations, metric forms, bivector exponentials, and versor actions can be planned once and reused. Planning policies and resource limits select among supported execution routes.
-
-- **Functions and PyTorch modules.** Stateless helpers cover algebraic and coefficient-level operations, while reusable modules provide Clifford-linear maps, products, versor and reflection actions, normalization, activations, and attention.
-
-- **Analysis and optimization tools.** Analysis modules cover dimension, signature, spectral, symmetry, transformation, and commutator diagnostics. Optimizer helpers provide manifold tags, parameter grouping, tangent projection, and retractions.
-
-## Install
+clifra is a differentiable Clifford algebra computation layer for PyTorch.
+Signatures and grade layouts describe ordinary coefficient tensors; operations
+can be planned once and reused.
 
 ```bash
 uv add clifra
 ```
 
-## Quick start
-
-This example uses explicit planning to make clifra's execution model visible: layouts and execution choices are resolved into a reusable operation. For ordinary call sites, direct algebra methods are the concise default and planner-backed calls reuse the algebra's internal caches.
-
 ```python
 import torch
-
 from clifra import make_algebra
 
-algebra = make_algebra(3, 0, device="cpu")
+algebra = make_algebra(3, 0)
 vectors = algebra.layout((1,))
-products = algebra.plan_product(
-    op="gp",
-    left_layout=vectors,
-    right_layout=vectors,
-    output_layout=algebra.layout((0, 2)),
+product = algebra.plan_product(
+    left=vectors,
+    right=vectors,
+    output=algebra.layout((0, 2)),
 )
 
-left = torch.randn(8, vectors.dim)
-right = torch.randn(8, vectors.dim)
-out = products(left, right)
+left = torch.randn(8, vectors.dim, requires_grad=True)
+right = torch.randn(vectors.dim)
+out = product(left, right)  # [8, 4]: scalar, e12, e13, e23
+out.square().mean().backward()
 ```
 
-## Research with clifra
+The inputs store three vector coefficients each. The product broadcasts over
+the leading dimension and returns four scalar-and-bivector coefficients.
 
-`research/` contains experimental systems built on clifra's public primitives and kept outside the installed package API.
+A signature defines basis products. A layout selects coefficient lanes, and a
+tensor contract declares compact or canonical storage. Planned operations fix
+these declarations while coefficient values and leading tensor dimensions
+remain ordinary PyTorch inputs.
 
-**Transformation Fields** is an experimental subsystem for differentiable fields of Clifford-generated local actions over persistent sampling domains.
+[Tutorials](https://concode0.github.io/clifra/tutorials/) · [How-to guides](https://concode0.github.io/clifra/how-to/) · [Explanations](https://concode0.github.io/clifra/explanations/) · [API reference](https://concode0.github.io/clifra/reference/)
 
-### Sparse-Constraint Continuum Threading
-
-The example optimizes a material-space SE(3) transformation field using three sparse, material-tagged gate constraints and one tip pose, producing a collision-free continuum configuration. No target centerline is supplied. The field is optimized on 210 points and evaluated directly on a 2,340-point discretization without retraining. Rigid cross-sections and analytic inversion come from the representation itself.
-
-![result](docs/assets/sparse_continuum_threading_result.png)
-
-```bash
-uv run --group viz research/transformation_fields/examples/sparse_continuum_threading.py
-```
-
-## Development and contribution
-
-Install development dependencies:
+## Development
 
 ```bash
 uv sync --group dev
-```
-
-Run checks:
-
-```bash
 uv run --group dev ruff check .
 uv run --group dev pytest tests/ -n12 -q --tb=short
-uv run --group dev pytest tests/ --hypothesis-profile=full -n12 -q --tb=short
-```
-
-Docs:
-
-```bash
-uv sync --group docs
-uv run --group docs mkdocs serve
 uv run --group docs mkdocs build
 ```
 
-Visualization dependencies used by research examples:
-
-```bash
-uv sync --group viz
-```
-
-### Contribution
-
-Found a problem or want to propose a change? Please open an Issue first,
-especially before a PR, so the scope is clear.
-
-For direct contact, email: nemonanconcode@gmail.com
-
+Please open an issue before proposing a substantial change.
+Contact: nemonanconcode@gmail.com.
 
 ## Citation
 
