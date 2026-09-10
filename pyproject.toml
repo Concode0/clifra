@@ -1,7 +1,7 @@
 [project]
 name = "clifra"
-version = "1.4.0"
-description = "A PyTorch framework for Clifford geometric algebra deep learning"
+version = "2.0.0"
+description = "clifra: Layout-first Clifford algebra tools for PyTorch"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -72,7 +72,6 @@ line-length = 120
 indent-width = 4
 extend-exclude = [
     "assets",
-    "benchmarks",
     "data",
     "dist",
     "outputs",
