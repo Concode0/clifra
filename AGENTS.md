@@ -2,48 +2,54 @@
 
 ## Project Structure & Module Organization
 
-`clifra/core/` is the source of truth for algebra layouts, planning, execution,
-runtime tensor contracts, and foundation types. Keep these contracts explicit
-and stable.
+`clifra/core/` is the source of truth for Clifford algebra semantics, layouts, tensor contracts, planning, resource feasibility, and execution.
 
-`clifra/layers/`, `clifra/functional/`, `clifra/criterion/`, and
-`clifra/optimizers/` build on core contracts. Reuse core algebra semantics and
-planning machinery rather than reimplementing them in higher-level modules.
+Keep the core model explicit:
 
-Documentation lives in `docs/`; runnable research systems and demonstrations
-live in `research/`; benchmark harnesses and generated benchmark artifacts live
-under `benchmarks/`.
+```text
+mathematical request
+→ planning
+→ feasible route
+→ selected executor
+→ tensor execution
+```
+
+Planning owns route selection; executors execute fixed prepared tensor computations and must not re-plan.
+
+`clifra/analysis/` and `clifra/optimizers/` build on core contracts rather than duplicating algebra semantics. Exploratory analysis belongs in `clifra/analysis/experimental/`.
+
+Documentation lives in `docs/`; runnable demonstrations and research systems live in `research/`; internal performance and qualification tooling lives under `benchmarks/`.
 
 ## Build, Test, and Development Commands
 
-Use `uv` for project tooling. Run Python and project commands through `uv run`;
-use `uv sync` for environment synchronization.
+Use `uv` for project tooling.
 
 ```bash
 uv sync --group dev
+
 uv run --group dev pytest tests/ -n12 -q --tb=short
 uv run --group dev pytest tests/planning/ -n12 -q --tb=short
+uv run --group dev pytest tests/ --hypothesis-profile=full -n12 -q --tb=short
+
 uv run --group dev ruff check .
+uv run --group dev ruff format .
 uv run --group docs mkdocs build
 ```
 
-Prefer focused tests while iterating, then run the full suite before handing off
-a cross-cutting change. Property tests use Hypothesis; the full profile is:
+Do focused tests while iterating, then run the full suite before handing off cross-cutting changes.
 
-```bash
-uv run --group dev pytest tests/ --hypothesis-profile=full -n12 -q --tb=short
-```
+## Coding Style & Architecture
 
-Use fewer pytest workers when the execution environment is resource-constrained.
+Ruff is the source of truth for Python linting conventions.
 
-## Coding Style & Naming Conventions
+Preserve explicit layouts, compact/canonical storage, and tensor contracts. The final axis contains Clifford coefficients; leading axes remain ordinary PyTorch dimensions and broadcasting.
 
-Run `uv run --group dev ruff check .` on touched work. Ruff is the source of
-truth for Python linting conventions.
+Do not infer algebraic meaning from tensor width, channels, names, or application structure.
 
-Respect module boundaries: add algebra semantics, layouts, plans, executors, and
-shared tensor-contract behavior to `clifra/core/`. Do not duplicate core
-semantics in higher-level modules.
+Keep `DefaultPolicy` small, deterministic, structural, and device-independent. Benchmarks may reveal broad route trends, but must not introduce runtime calibration, fitted cost models, backend-specific tuning tables, or autotuning.
 
-Preserve compact/canonical storage and tensor contracts rather than
-introducing ad-hoc shape conventions.
+Prefer small local executor optimizations over new abstraction layers. Preserve mathematical behavior, autograd, dtype/device semantics, broadcasting, and compile compatibility.
+
+Tests should protect mathematical and public behavior, not private cache identities, exact planner metadata, or historical implementation structure.
+
+When benchmark or backend qualification exposes a real correctness issue, reduce it to a focused test.
