@@ -15,6 +15,7 @@ from ._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS
 from ._kernel.planning.unary import UnaryRequest, normalize_unary_op
 from .layout import AlgebraSpec, GradeLayout, Layout
 from .operation import PlannedOperation
+from .resources import ResourceLimits
 from .tensors import TensorContract
 
 Declaration = Layout | TensorContract | None
@@ -28,7 +29,17 @@ class AlgebraContext:
     Semantic layouts are never inferred from tensor widths.
     """
 
-    def __init__(self, p: int, q: int = 0, r: int = 0, *, device="cpu", dtype=torch.float32, registry=None):
+    def __init__(
+        self,
+        p: int,
+        q: int = 0,
+        r: int = 0,
+        *,
+        device="cpu",
+        dtype=torch.float32,
+        registry=None,
+        resource_limits: ResourceLimits | None = None,
+    ):
         self.spec = AlgebraSpec(p, q, r)
         self.p, self.q, self.r = self.spec.p, self.spec.q, self.spec.r
         self.n, self.dim = self.spec.n, self.spec.dim
@@ -36,7 +47,9 @@ class AlgebraContext:
         self._device = torch.device(resolve_device(device) if str(device) == "auto" else device)
         self._dtype = resolve_dtype(dtype)
         self._planning_policy = DEFAULT_PLANNING_POLICY
-        self._resource_limits = DEFAULT_RESOURCE_LIMITS
+        if resource_limits is not None and not isinstance(resource_limits, ResourceLimits):
+            raise TypeError("resource_limits must be a ResourceLimits")
+        self._resource_limits = DEFAULT_RESOURCE_LIMITS if resource_limits is None else resource_limits
         from .executors import ExecutorRegistry
 
         if registry is not None and not isinstance(registry, ExecutorRegistry):
@@ -44,6 +57,11 @@ class AlgebraContext:
         self._registry = ExecutorRegistry.default() if registry is None else registry
         self._planner = GradePlanner(self)
         self._sync_eps()
+
+    @property
+    def resource_limits(self) -> ResourceLimits:
+        """Immutable static allocation budget used when planning operations."""
+        return self._resource_limits
 
     @property
     def registry(self):
@@ -81,11 +99,17 @@ class AlgebraContext:
         return torch.empty((), device=self.device, dtype=self.dtype)
 
     def _copy_with_placement(self, device, dtype):
-        copied = AlgebraContext(self.p, self.q, self.r, device=device, dtype=dtype, registry=self.registry)
+        copied = AlgebraContext(
+            self.p,
+            self.q,
+            self.r,
+            device=device,
+            dtype=dtype,
+            registry=self.registry,
+            resource_limits=self.resource_limits,
+        )
         copied._planning_policy = self._planning_policy
-        copied._resource_limits = self._resource_limits
         copied._planner.policy = copied._planning_policy
-        copied._planner.limits = copied._resource_limits
         return copied
 
     def _sync_eps(self):

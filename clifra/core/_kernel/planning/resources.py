@@ -7,21 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
-@dataclass(frozen=True)
-class ResourceLimits:
-    """User-configurable static allocation boundaries."""
-
-    warn_lanes: int = 2048
-    max_lanes: int = 4096
-    warn_pairs: int = 1_000_000
-    max_pairs: int = 8_000_000
-
-    def __post_init__(self) -> None:
-        values = (self.warn_lanes, self.max_lanes, self.warn_pairs, self.max_pairs)
-        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
-            raise ValueError("resource limits must be non-negative integers")
-
+from clifra.core.resources import ResourceLimits
 
 DEFAULT_RESOURCE_LIMITS = ResourceLimits()
 

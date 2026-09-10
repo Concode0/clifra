@@ -17,10 +17,12 @@ from clifra.core.formatting import Multivector, format_multivector
 from clifra.core.layout import AlgebraSpec, GradeLayout, Layout
 from clifra.core.module import CliffordModule
 from clifra.core.operation import PlannedOperation
+from clifra.core.resources import ResourceLimits
 from clifra.core.tensors import LaneStorage, TensorContract
 
 __all__ = [
     "ExecutorRegistry",
+    "ResourceLimits",
     "__version__",
     "AlgebraConfig",
     "AlgebraContext",

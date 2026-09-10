@@ -10,6 +10,7 @@ import torch
 from ._kernel.device import resolve_dtype
 from .algebra import AlgebraContext
 from .executors import ExecutorRegistry
+from .resources import ResourceLimits
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,11 @@ class AlgebraConfig:
     device: str = "cpu"
     dtype: torch.dtype = torch.float32
     registry: ExecutorRegistry | None = None
+    resource_limits: ResourceLimits | None = None
+
+    def __post_init__(self):
+        if self.resource_limits is not None and not isinstance(self.resource_limits, ResourceLimits):
+            raise TypeError("resource_limits must be a ResourceLimits")
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any], **overrides):
@@ -34,9 +40,16 @@ class AlgebraConfig:
 
 
 def make_algebra(
-    p: int, q: int = 0, r: int = 0, *, device="cpu", dtype=torch.float32, registry: ExecutorRegistry | None = None
+    p: int,
+    q: int = 0,
+    r: int = 0,
+    *,
+    device="cpu",
+    dtype=torch.float32,
+    registry: ExecutorRegistry | None = None,
+    resource_limits: ResourceLimits | None = None,
 ) -> AlgebraContext:
-    return AlgebraContext(p, q, r, device=device, dtype=dtype, registry=registry)
+    return AlgebraContext(p, q, r, device=device, dtype=dtype, registry=registry, resource_limits=resource_limits)
 
 
 def make_algebra_from_config(config: Mapping[str, Any] | AlgebraConfig, **overrides) -> AlgebraContext:
