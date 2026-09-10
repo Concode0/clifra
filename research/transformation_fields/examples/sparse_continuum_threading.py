@@ -1,14 +1,16 @@
 # clifra (C) 2026 Eunkyum Kim
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sparse-Constraint Continuum Threading with Transformation Fields."""
+"""Sparse geometric constraints induce a transferable continuum deformation."""
 
 from __future__ import annotations
 
+import argparse
+import json
 import math
-import random
 import sys
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from clifra.core.algebra import AlgebraContext
+from clifra import AlgebraContext
 from research.transformation_fields import (
     CoordinateFieldInput,
     GeneratorSubspace,
@@ -69,6 +71,7 @@ class Config:
         }
     )
     output_dir: Path = Path("outputs/sparse_continuum_threading")
+    live: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,7 +85,7 @@ class RingObstacle:
 
 @dataclass(frozen=True)
 class Scene:
-    """Only sparse constraints survive scene construction."""
+    """Sparse gate, tip, and obstacle geometry."""
 
     rings: tuple[RingObstacle, ...]
     gate_s: torch.Tensor
@@ -111,10 +114,6 @@ class RobotSamples:
         )
 
     @property
-    def sections(self) -> int:
-        return int(self.xyz.shape[0])
-
-    @property
     def point_count(self) -> int:
         return int(self.xyz[..., 0].numel())
 
@@ -128,6 +127,14 @@ class FitState:
     loss: torch.Tensor
     final_coordinates: torch.Tensor
     metrics: dict[str, torch.Tensor]
+
+
+@dataclass(frozen=True)
+class OptimizationResult:
+    history: list[float]
+    best_step: int
+    best_loss: float
+    final_history_loss: float
 
 
 _RING_COLORS = ("#ef8354", "#8f6ccf", "#35a7a0")
@@ -146,7 +153,7 @@ def _linear_interp(samples_s: torch.Tensor, samples: torch.Tensor, query_s: torc
 
 
 def build_scene(config: Config, *, device: torch.device, dtype: torch.dtype) -> Scene:
-    """Derive three gate poses, a tip pose, and rod length from a local sketch."""
+    """Construct the sparse gate/tip problem geometry."""
 
     knots = torch.tensor(
         [
@@ -173,8 +180,7 @@ def build_scene(config: Config, *, device: torch.device, dtype: torch.dtype) -> 
         )
     )
 
-    # This Hermite sketch is discarded here. It only assigns material gate
-    # identities and total rod length; no sampled curve reaches optimization.
+    # The Hermite sketch assigns material gate identities and total rod arc length.
     pieces: list[torch.Tensor] = []
     for index in range(knots.shape[0] - 1):
         p0, p1 = knots[index], knots[index + 1]
@@ -370,8 +376,7 @@ class SparseThreadingObjective:
         self.gate_indices = torch.stack([torch.argmin(torch.abs(robot.section_s - value)) for value in scene.gate_s])
 
     def __call__(self, field_model: InvertibleBivectorField) -> FitState:
-        # Every point on one cross-section has the same s and therefore receives
-        # the same composed SE(3) action. Nothing here fits individual vertices.
+        # A shared material s gives every point on a section the same composed action.
         final = field_model(self.robot.field_input)
         centers = final[..., 0, :]
         frames = section_frame(final)
@@ -502,10 +507,14 @@ class LiveView:
         import matplotlib.pyplot as plt
 
         self.plt = plt
-        plt.ion()
+        self._last_event_time = 0.0
+        self.closed = False
         self.figure = plt.figure(figsize=(11.5, 7.4))
-        self.figure.canvas.manager.set_window_title("Sparse-Constraint Continuum Threading")
+        self.interactive = self.figure.canvas.required_interactive_framework is not None
+        if self.figure.canvas.manager is not None:
+            self.figure.canvas.manager.set_window_title("Sparse-Constraint Continuum Threading")
         self.axis = self.figure.add_subplot(111, projection="3d")
+        self.figure.canvas.mpl_connect("close_event", self._mark_closed)
         for ring in scene.rings:
             x, y, z = torus_mesh(ring)
             self.axis.plot_surface(x, y, z, color=ring.color, alpha=0.68, linewidth=0.1, shade=True)
@@ -546,11 +555,11 @@ class LiveView:
         self.axis.set_zlim(-0.17, 0.62)
         self.axis.set_box_aspect((1.55, 0.85, 0.8))
         self.axis.legend(loc="upper left", fontsize=8)
-        self.title = self.figure.suptitle(
+        self.figure.suptitle(
             "Three gates + one tip pose → a full continuum configuration",
             fontsize=15,
         )
-        self.subtitle = self.figure.text(
+        self.figure.text(
             0.5,
             0.925,
             "Material-space SE(3) field · no target-curve supervision",
@@ -567,46 +576,46 @@ class LiveView:
             fontsize=9,
         )
         self.figure.subplots_adjust(left=0.03, right=0.97, bottom=0.075, top=0.89)
-        plt.show(block=False)
+        if self.interactive:
+            plt.show(block=False)
         self.figure.canvas.draw_idle()
         self.pump_events()
 
     def pump_events(self) -> None:
-        self.figure.canvas.flush_events()
-        self.plt.pause(0.001)
+        if self.closed or not self.interactive:
+            return
+        now = time.monotonic()
+        if now - self._last_event_time < 0.05:
+            return
+        self._last_event_time = now
+        try:
+            self.figure.canvas.flush_events()
+        except (RuntimeError, SystemError):
+            self.closed = True
 
-    def update(self, step: int, state: FitState) -> None:
+    def update(self, step: int | str, state: FitState) -> None:
+        if self.closed:
+            return
         _set_line3d(self.current_line, _to_numpy(state.final_coordinates[:, 0]))
         metrics = state.metrics
+        label = f"step {step:4d}" if isinstance(step, int) else str(step)
         self.status.set_text(
-            f"step {step:4d} · loss {metrics['loss'].item():.2e} · "
+            f"{label} · loss {metrics['loss'].item():.2e} · "
             f"gate {metrics['gate_offset'].item():.4f} · tip {metrics['tip_position_error'].item():.4f} · "
             f"orientation {math.degrees(metrics['tip_orientation_error'].item()):.1f}° · "
             f"clearance {metrics['minimum_clearance'].item():+.4f}"
         )
-        self.figure.canvas.draw_idle()
+        try:
+            self.figure.canvas.draw_idle()
+        except (RuntimeError, SystemError):
+            self.closed = True
 
-    def finalize(self, dense_final: torch.Tensor, report: dict[str, Any], path: Path) -> None:
-        _set_line3d(self.current_line, robot_wire(dense_final))
-        self.current_line.set_linewidth(1.35)
-        self.current_line.set_label("dense field evaluation")
-        self.axis.legend(loc="upper left", fontsize=8)
-        self.title.set_text("Threaded configuration discovered from sparse constraints")
-        self.subtitle.set_text("Zero-shot dense resampling · analytic inverse · structural cross-section rigidity")
-        coarse, dense = report["coarse"], report["dense"]
-        self.status.set_text(
-            f"3 gates + 1 tip pose · clearance {coarse['minimum_clearance']:+.4f} coarse / "
-            f"{dense['minimum_clearance']:+.4f} dense · {report['optimization_sample_count']} → "
-            f"{report['dense_sample_count']} points · 0 retraining"
-        )
-        self.figure.canvas.draw()
-        self.figure.canvas.flush_events()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.figure.savefig(path, dpi=190)
+    def _mark_closed(self, _event: Any) -> None:
+        self.closed = True
 
     def keep_open(self) -> None:
-        self.plt.ioff()
-        self.plt.show()
+        if self.interactive and not self.closed:
+            self.plt.show(block=True)
 
 
 def _progress_line(step: int, steps: int, state: FitState) -> str:
@@ -624,18 +633,23 @@ def optimize_field(
     field_model: InvertibleBivectorField,
     objective: SparseThreadingObjective,
     config: Config,
-    view: LiveView,
-) -> FitState:
+    initial_state: FitState,
+    view: LiveView | None = None,
+) -> OptimizationResult:
     optimizer = torch.optim.Adam(field_model.parameters(), lr=config.learning_rate)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
         T_max=config.optimization_steps,
         eta_min=config.learning_rate * config.minimum_learning_rate_fraction,
     )
-    with torch.no_grad():
-        state = objective(field_model)
-    print(_progress_line(0, config.optimization_steps, state))
-    view.update(0, state)
+    state = initial_state
+    print(_progress_line(0, config.optimization_steps, initial_state))
+    if view is not None:
+        view.update(0, state)
+    history = [float(state.loss)]
+    best_step = 0
+    best_loss = history[0]
+    best_parameters = field_model.latent_coordinates.detach().clone()
 
     for step in range(1, config.optimization_steps + 1):
         optimizer.zero_grad(set_to_none=True)
@@ -647,24 +661,40 @@ def optimize_field(
         optimizer.step()
         scheduler.step()
 
-        # GUI input is serviced every iteration; geometry changes less often.
-        view.pump_events()
+        if view is not None:
+            view.pump_events()
         should_report = step % config.log_every == 0 or step == config.optimization_steps
-        should_draw = step % config.live_every == 0 or step == config.optimization_steps
+        should_draw = view is not None and (step % config.live_every == 0 or step == config.optimization_steps)
         if should_report or should_draw:
             with torch.no_grad():
                 state = objective(field_model)
+            value = float(state.loss)
             if should_report:
                 print(_progress_line(step, config.optimization_steps, state))
             if should_draw:
+                assert view is not None
                 view.update(step, state)
 
+        if not (should_report or should_draw):
+            with torch.no_grad():
+                state = objective(field_model)
+            value = float(state.loss)
+        history.append(value)
+        if value < best_loss:
+            best_step = step
+            best_loss = value
+            best_parameters.copy_(field_model.latent_coordinates.detach())
+
     with torch.no_grad():
-        return objective(field_model)
+        final_history_loss = history[-1]
+        field_model.latent_coordinates.copy_(best_parameters)
+    return OptimizationResult(history, best_step, best_loss, final_history_loss)
 
 
 def acceptance_checks(report: dict[str, Any]) -> dict[str, bool]:
-    coarse, dense = report["coarse"], report["dense"]
+    coarse = report["primary"]
+    dense = report["validation"]["dense"]
+    transfer = report["validation"]["dense_transfer"]
     numerical = 1e-12
     return {
         "sparse threading": (
@@ -677,11 +707,10 @@ def acceptance_checks(report: dict[str, Any]) -> dict[str, bool]:
             and coarse["tip_orientation_error"] < 0.25
             and dense["tip_orientation_error"] < 0.25
         ),
-        "collision-free final configuration": (
-            coarse["minimum_clearance"] >= 0.0 and dense["minimum_clearance"] >= 0.0
-        ),
-        "rod geometry": (
-            coarse["maximum_axial_strain"] < 0.11
+        "collision-free rod remains geometrically valid": (
+            coarse["minimum_clearance"] >= 0.0
+            and dense["minimum_clearance"] >= 0.0
+            and coarse["maximum_axial_strain"] < 0.11
             and dense["maximum_axial_strain"] < 0.11
             and coarse["maximum_curvature"] < 30.0
             and dense["maximum_curvature"] < 30.0
@@ -694,45 +723,159 @@ def acceptance_checks(report: dict[str, Any]) -> dict[str, bool]:
             and coarse["cross_section_rigidity_error"] < numerical
             and dense["cross_section_rigidity_error"] < numerical
         ),
-        "zero-shot dense transfer": (
-            report["additional_optimization_steps"] == 0 and report["coarse_dense_centerline_discrepancy"] < 0.03
-        ),
+        "zero-shot dense transfer": transfer["coarse_dense_centerline_discrepancy"] < 0.03,
     }
 
 
 def print_report(report: dict[str, Any]) -> None:
-    coarse, dense = report["coarse"], report["dense"]
+    coarse = report["primary"]
+    validation = report["validation"]
+    dense = validation["dense"]
+    transfer = validation["dense_transfer"]
+    optimization = report["optimization"]
     print("\nSPARSE CONTINUUM THREADING\n")
-    print("constraints    3 gates + 1 tip pose")
     print(
-        f"fit            gate {coarse['gate_offset']:.4f} | tip {coarse['tip_position_error']:.4f} | "
-        f"orientation {math.degrees(coarse['tip_orientation_error']):.1f}°"
+        f"primary      gate {coarse['gate_offset']:.4f} m | tip {coarse['tip_position_error']:.4f} m | "
+        f"clearance {coarse['minimum_clearance']:+.4f} m"
     )
     print(
-        f"dense fit      gate {dense['gate_offset']:.4f} | tip {dense['tip_position_error']:.4f} | "
-        f"orientation {math.degrees(dense['tip_orientation_error']):.1f}°"
-    )
-    print(f"clearance      {coarse['minimum_clearance']:+.4f} coarse | {dense['minimum_clearance']:+.4f} dense")
-    print(
-        f"rod            strain {coarse['maximum_axial_strain']:.3f} | "
-        f"curvature {coarse['maximum_curvature']:.2f} | base {coarse['base_drift']:.4f}"
+        f"validation   {validation['optimization_sample_count']}→{validation['dense_sample_count']} points | "
+        f"gate {dense['gate_offset']:.4f} m | transfer Δ {transfer['coarse_dense_centerline_discrepancy']:.4f} m"
     )
     print(
-        f"structure      rigidity {dense['cross_section_rigidity_error']:.1e} | "
-        f"inverse {dense['inverse_reconstruction_error']:.1e}"
+        f"numerical    inverse {dense['inverse_reconstruction_error']:.1e} | "
+        f"rigidity {dense['cross_section_rigidity_error']:.1e} | strain {dense['maximum_axial_strain']:.3f}"
     )
     print(
-        f"resampling     {report['optimization_sample_count']} → {report['dense_sample_count']} points | "
-        f"0 retraining | discrepancy {report['coarse_dense_centerline_discrepancy']:.4f}\n"
+        f"optimization best {optimization['best_loss']:.3e} at {optimization['best_step']} | "
+        f"final {optimization['final_history_loss']:.3e}\n"
     )
     for name, passed in report["checks"].items():
         print(f"[{'PASS' if passed else 'FAIL'}] {name}")
-    print(f"\nRESULT: {'SUCCESS' if all(report['checks'].values()) else 'FAILED CHECKS'}")
 
 
-def run(config: Config) -> dict[str, Any]:
-    random.seed(config.seed)
-    np.random.seed(config.seed)
+def save_result(config: Config, scene: Scene, dense_final: torch.Tensor) -> Path:
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=(14.8, 7.2))
+    FigureCanvasAgg(figure)
+    geometry_axis = figure.add_axes((0.025, 0.015, 0.95, 0.86), projection="3d")
+    final_wire = robot_wire(dense_final, max_sections=72)
+    geometry_axis.plot(*final_wire.T, color="#174a6e", linewidth=1.35, alpha=0.98, label="dense configuration")
+    for ring in scene.rings:
+        x, y, z = torus_mesh(ring, major_samples=72, tube_samples=14)
+        geometry_axis.plot_surface(
+            x,
+            y,
+            z,
+            color=ring.color,
+            alpha=0.88,
+            linewidth=0.12,
+            edgecolor=(0.18, 0.18, 0.18, 0.18),
+            shade=True,
+            antialiased=True,
+        )
+    geometry_axis.scatter([0.0], [0.0], [0.0], s=45, color="#111827", marker="s", depthshade=True)
+    geometry_axis.set_xlabel("x [m]")
+    geometry_axis.set_ylabel("y [m]")
+    geometry_axis.set_zlabel("z [m]")
+    geometry_axis.set_xlim(-0.05, 1.18)
+    geometry_axis.set_ylim(-0.34, 0.34)
+    geometry_axis.set_zlim(-0.10, 0.57)
+    geometry_axis.set_box_aspect((1.55, 0.92, 0.9))
+    geometry_axis.view_init(elev=19, azim=-111)
+    geometry_axis.set_proj_type("persp", focal_length=0.82)
+    geometry_axis.legend(loc="upper left", fontsize=9, frameon=False)
+    figure.suptitle("Sparse-constraint continuum threading", fontsize=17, fontweight="bold", y=0.985)
+    figure.text(
+        0.5,
+        0.925,
+        "Zero-shot dense material-field evaluation through three solid gates",
+        ha="center",
+        color="#4b5563",
+        fontsize=10,
+    )
+    output_path = config.output_dir / "result.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_path, dpi=185)
+    return output_path
+
+
+def save_diagnostics(config: Config, optimization: OptimizationResult, report: dict[str, Any]) -> Path:
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=(14.8, 4.8), constrained_layout=True)
+    FigureCanvasAgg(figure)
+    axes = figure.subplots(1, 3)
+    history_axis, transfer_axis, integrity_axis = axes
+    history = np.asarray(optimization.history)
+    history_axis.semilogy(history, color="#264653", linewidth=2.0)
+    history_axis.scatter(
+        [optimization.best_step], [optimization.best_loss], color="#e76f51", s=26, zorder=3, label="restored best"
+    )
+    history_axis.set_title("Optimization", fontweight="bold")
+    history_axis.set_xlabel("Adam step")
+    history_axis.set_ylabel("objective")
+    history_axis.grid(alpha=0.22)
+    history_axis.legend(fontsize=8, frameon=False)
+
+    dense = report["validation"]["dense"]
+    transfer = report["validation"]["dense_transfer"]
+    labels = ("gate", "tip", "coarse→dense", "base")
+    values_mm = 1000.0 * np.array(
+        (
+            dense["gate_offset"],
+            dense["tip_position_error"],
+            transfer["coarse_dense_centerline_discrepancy"],
+            dense["base_drift"],
+        )
+    )
+    transfer_axis.bar(labels, values_mm, color=("#e76f51", "#2a9d8f", "#8f6ccf", "#94a3b8"))
+    transfer_axis.set_title("Dense spatial errors", fontweight="bold")
+    transfer_axis.set_ylabel("distance [mm]")
+    transfer_axis.tick_params(axis="x", rotation=18)
+    transfer_axis.grid(axis="y", alpha=0.22)
+
+    normalized = np.array(
+        (
+            dense["gate_orientation_error"] / 0.35,
+            dense["tip_orientation_error"] / 0.25,
+            dense["maximum_axial_strain"] / 0.11,
+            dense["maximum_curvature"] / 30.0,
+            dense["base_drift"] / 0.012,
+        )
+    )
+    integrity_axis.barh(
+        ("gate angle", "tip angle", "strain", "curvature", "base drift"),
+        normalized,
+        color="#35a7a0",
+    )
+    integrity_axis.axvline(1.0, color="#111827", linestyle="--", linewidth=1.3, label="acceptance limit")
+    integrity_axis.set_title("Dense acceptance margins", fontweight="bold")
+    integrity_axis.set_xlabel("fraction of limit")
+    integrity_axis.grid(axis="x", alpha=0.22)
+    integrity_axis.legend(fontsize=8, frameon=False)
+
+    figure.suptitle("Continuum threading diagnostics", fontsize=16, fontweight="bold")
+    figure.text(
+        0.5,
+        0.015,
+        f"{report['validation']['optimization_sample_count']}→{report['validation']['dense_sample_count']} points · "
+        "no retraining · analytic inverse · rigid cross-sections",
+        ha="center",
+        color="#4b5563",
+        fontsize=9,
+    )
+    figure.get_layout_engine().set(rect=(0.0, 0.06, 1.0, 0.92))
+    output_path = config.output_dir / "diagnostics.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_path, dpi=185)
+    return output_path
+
+
+def run(config: Config = Config()) -> dict[str, Any]:
     torch.manual_seed(config.seed)
     device = torch.device("cpu")
     dtype = torch.float64
@@ -741,39 +884,87 @@ def run(config: Config) -> dict[str, Any]:
     robot = build_robot(config.optimization_sections, config.surface_samples, scene, config)
     field_model = build_field(config, device=device, dtype=dtype)
     objective = SparseThreadingObjective(config, robot, scene)
-    view = LiveView(scene, robot)
-
-    print("optimizing a material-space SE(3) field from 3 gates + 1 tip pose")
+    with torch.no_grad():
+        initial_state = objective(field_model)
     print(
-        f"seed {config.seed} · init scale {config.init_scale:.0e} · {config.rbf_controls} RBF controls · "
-        f"{config.path_steps} composition stages · {robot.point_count} optimization points"
+        f"setup         3 gates + 1 tip pose | {config.rbf_controls} RBF controls | "
+        f"{robot.point_count} optimization points | seed {config.seed}"
     )
-    optimize_field(field_model, objective, config, view)
+    view = LiveView(scene, robot) if config.live else None
+    optimization = optimize_field(field_model, objective, config, initial_state, view)
+    with torch.no_grad():
+        restored_state = objective(field_model)
+    if view is not None:
+        view.update("restored best", restored_state)
     coarse_report, coarse_final = verify_final(field_model, robot, scene)
 
     # The learned material field is evaluated at new s values and denser
     # cross-sections directly. No field parameter or optimizer is touched.
     dense_robot = build_robot(config.dense_sections, config.dense_surface_samples, scene, config)
     dense_report, dense_final = verify_final(field_model, dense_robot, scene)
-    report: dict[str, Any] = {
-        "coarse": coarse_report,
-        "dense": dense_report,
-        "optimization_sample_count": robot.point_count,
-        "dense_sample_count": dense_robot.point_count,
-        "additional_optimization_steps": 0,
+    transfer = {
         "coarse_dense_centerline_discrepancy": coarse_dense_shape_error(robot, coarse_final, dense_robot, dense_final),
     }
+    report: dict[str, Any] = {
+        "experiment": "sparse_continuum_threading",
+        "algebra": "Cl(4,1)",
+        "signature": "++++-",
+        "problem": {
+            "constraints": "three gate poses and one tip pose",
+            "field": "material-coordinate RBF SE(3) generator field",
+            "optimization_sections": config.optimization_sections,
+            "optimization_surface_samples": config.surface_samples,
+            "optimizer_visible_target_curve": False,
+        },
+        "optimization": {
+            "algorithm": "Adam with cosine learning-rate decay",
+            "steps": config.optimization_steps,
+            "initial_loss": optimization.history[0],
+            "best_step": optimization.best_step,
+            "best_loss": optimization.best_loss,
+            "final_history_loss": optimization.final_history_loss,
+            "history": optimization.history,
+        },
+        "primary": coarse_report,
+        "validation": {
+            "kind": "zero-shot dense material and cross-section resampling",
+            "uses_optimizer": False,
+            "optimization_sample_count": robot.point_count,
+            "dense_sample_count": dense_robot.point_count,
+            "dense": dense_report,
+            "dense_transfer": transfer,
+        },
+        "limitations": [
+            "The model is kinematic; strain and curvature are geometric diagnostics rather than constitutive mechanics.",
+            "The sparse gate and tip poses are prescribed exactly in a synthetic scene.",
+        ],
+    }
     report["checks"] = acceptance_checks(report)
-    result_path = config.output_dir / "result.png"
-    view.finalize(dense_final, report, result_path)
+    report_path = config.output_dir / "report.json"
+    result_path = save_result(config, scene, dense_final)
+    diagnostics_path = save_diagnostics(config, optimization, report)
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print_report(report)
-    print(f"\nfigure: {result_path}")
-    view.keep_open()
+    print("\nARTIFACTS")
+    print(f"result       {result_path}")
+    print(f"diagnostics  {diagnostics_path}")
+    print(f"report       {report_path}")
+    if view is not None:
+        view.keep_open()
     return report
 
 
+def _parse_args() -> Config:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--steps", type=int, default=Config.optimization_steps)
+    parser.add_argument("--output-dir", type=Path, default=Config.output_dir)
+    parser.add_argument("--live", action="store_true", help="show an interactive optimization view")
+    args = parser.parse_args()
+    return replace(Config(), optimization_steps=args.steps, output_dir=args.output_dir, live=args.live)
+
+
 def main() -> None:
-    run(Config())
+    run(_parse_args())
 
 
 if __name__ == "__main__":
