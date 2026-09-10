@@ -87,6 +87,12 @@ nav:
       - Optimization and Geometric Updates: explanations/optimizer-dispatch.md
       - Bivector Exponentials and Actions: explanations/bivector-exponential.md
   - API Reference: reference/index.md
+  - Research:
+      - Transformation Fields: research/index.md
+      - Experiments:
+          - Sparse-Constraint Continuum Threading: research/sparse_continuum_threading.md
+          - Continuous-Time PGA LiDAR Deskewing: research/pga-lidar-deskewing.md
+          - Relativistic Beamline Inverse Design: research/relativistic-beamline.md
   - Benchmarks:
       - Overview: benchmarks/index.md
 
