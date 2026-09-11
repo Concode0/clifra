@@ -52,4 +52,4 @@ jobs:
         run: uv sync --group dev
 
       - name: Run tests
-        run: uv run --group dev pytest tests/ --hypothesis-profile="$HYPOTHESIS_PROFILE" -n 2 -q --tb=short
+        run: uv run --group dev --group viz pytest tests/ --hypothesis-profile="$HYPOTHESIS_PROFILE" -n 2 -q --tb=short
