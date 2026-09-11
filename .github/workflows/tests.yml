@@ -37,7 +37,6 @@ jobs:
     timeout-minutes: 15
     env:
       HYPOTHESIS_PROFILE: ${{ (github.event_name == 'schedule' || github.event.inputs.profile == 'full') && 'full' || 'standard' }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -53,4 +52,4 @@ jobs:
         run: uv sync --group dev
 
       - name: Run tests
-        run: uv run --group dev pytest tests/ --hypothesis-profile="$HYPOTHESIS_PROFILE" -n 2 --durations=20 -q --tb=short
+        run: uv run --group dev pytest tests/ --hypothesis-profile="$HYPOTHESIS_PROFILE" -n 2 -q --tb=short
