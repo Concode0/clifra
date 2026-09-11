@@ -6,7 +6,7 @@ authors:
     email: "nemonanconcode@gmail.com"
 title: "clifra: Layout-first Clifford algebra tools for PyTorch"
 version: 2.0.0
-date-released: 2026-09-10
+date-released: 2026-09-11
 url: "https://github.com/Concode0/clifra"
 repository-code: "https://github.com/Concode0/clifra"
 doi: "10.5281/zenodo.18939518"
