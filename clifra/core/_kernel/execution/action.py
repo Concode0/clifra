@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 
 from clifra.core._kernel.contracts import _check_contract_spec
-from clifra.core._kernel.numerics import eps_like, signed_clamp_min
+from clifra.core._kernel.numerics import _matrix_exp_singleton_workaround, eps_like, signed_clamp_min
 from clifra.core.layout import GradeLayout
 from clifra.core.tensors import TensorContract
 
@@ -229,8 +229,8 @@ class VersorVectorMatrixExecutor(nn.Module):
             # MPS has no native matrix exponential; use the same differentiable
             # CPU bridge as materialized Clifford matrix exponentials.
             if matrix.device.type == "mps":
-                return torch.matrix_exp(matrix.cpu()).to(matrix.device)
-            return torch.matrix_exp(matrix)
+                return _matrix_exp_singleton_workaround(matrix.cpu()).to(matrix.device)
+            return _matrix_exp_singleton_workaround(matrix)
         signs = self.metric_signs
         signature_norm_squared = (weights * weights * signs).sum(dim=-1, keepdim=True)
         scale = signature_norm_squared.abs().clamp_min(eps_like(signature_norm_squared)).sqrt()

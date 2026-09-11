@@ -8,6 +8,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from clifra.core._kernel.numerics import _matrix_exp_singleton_workaround
+
 
 class TaylorPolynomial(nn.Module):
     """Horner evaluation with statically pruned intermediate grade contracts."""
@@ -115,7 +117,7 @@ class BivectorExpExecutor(nn.Module):
         if self.route == "left_matrix_exp":
             matrix_values = values.to(device=self.operator_eye.device)
             columns = self.left_product.forward_compact(matrix_values.unsqueeze(-2), self.operator_eye)
-            result = torch.matrix_exp(columns.transpose(-1, -2))[..., :, 0]
+            result = _matrix_exp_singleton_workaround(columns.transpose(-1, -2))[..., :, 0]
             return self._project(result).to(device=values.device)
         return self._taylor(values)
 

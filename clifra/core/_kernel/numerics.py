@@ -10,6 +10,16 @@ import torch
 DEFAULT_EPS_MULTIPLIER = 32.0
 
 
+def _matrix_exp_singleton_workaround(matrix: torch.Tensor) -> torch.Tensor:
+    # See: https://github.com/pytorch/pytorch/issues/196592
+    n = matrix.shape[-1]
+    if n > 1 and matrix.numel() == n * n:
+        # Upstream PyTorch singleton-batch matrix_exp workaround.
+        pair = matrix.reshape(1, n, n).expand(2, n, n)
+        return torch.matrix_exp(pair)[:1].reshape(matrix.shape)
+    return torch.matrix_exp(matrix)
+
+
 def eps_for(dtype: torch.dtype, *, multiplier: float = 1.0, min_value: float = 0.0) -> float:
     """Return a floating-point epsilon scaled for ``dtype``."""
     try:
