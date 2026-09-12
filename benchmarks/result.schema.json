@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Concode0/clifra/benchmarks/result.schema.json",
+  "title": "clifra internal benchmark artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at_utc", "campaign", "rows"],
+  "properties": {
+    "schema_version": {"const": "4.0.0"},
+    "generated_at_utc": {"type": "string", "format": "date-time"},
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seed",
+        "request_count",
+        "checkpoint_rows_reused",
+        "ordering",
+        "execution_strategy",
+        "provenance_scope",
+        "pruned"
+      ],
+      "properties": {
+        "seed": {"type": "integer", "minimum": 0},
+        "request_count": {"type": "integer", "minimum": 0},
+        "checkpoint_rows_reused": {"type": "integer", "minimum": 0},
+        "ordering": {"type": "string"},
+        "execution_strategy": {"const": "in_process"},
+        "provenance_scope": {"type": "string"},
+        "pruned": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "rows": {"type": "array", "items": {"$ref": "#/$defs/row"}}
+  },
+  "$defs": {
+    "nullableString": {"type": ["string", "null"]},
+    "error": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["type", "message"],
+      "properties": {
+        "type": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layout_kind", "grades", "layout_dim", "basis_indices", "storage", "lane_dim"],
+      "properties": {
+        "layout_kind": {"type": "string"},
+        "grades": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "layout_dim": {"type": "integer", "minimum": 0},
+        "basis_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "storage": {"enum": ["compact", "canonical"]},
+        "lane_dim": {"type": "integer", "minimum": 0}
+      }
+    },
+    "summary": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["median_ns", "min_ns", "dispersion"],
+      "properties": {
+        "median_ns": {"type": "number", "minimum": 0},
+        "min_ns": {"type": "number", "minimum": 0},
+        "dispersion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mad_ns", "p25_ns", "p75_ns", "iqr_ns"],
+          "properties": {
+            "mad_ns": {"type": "number", "minimum": 0},
+            "p25_ns": {"type": "number", "minimum": 0},
+            "p75_ns": {"type": "number", "minimum": 0},
+            "iqr_ns": {"type": "number", "minimum": 0}
+          }
+        }
+      }
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "ok"}}},
+          "then": {
+            "properties": {
+              "timing": {
+                "properties": {
+                  "samples_ns": {"minItems": 1},
+                  "summary_ns": {"type": "object"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"status": {"enum": ["failed", "unsupported"]}}},
+          "then": {
+            "properties": {
+              "timing": {
+                "properties": {
+                  "samples_ns": {"maxItems": 0},
+                  "summary_ns": {"type": "null"}
+                }
+              }
+            }
+          }
+        }
+      ],
+      "required": [
+        "schema_version",
+        "row_id",
+        "request_fingerprint",
+        "case_id",
+        "family",
+        "operation",
+        "signature",
+        "ordinary_leading_input_shapes",
+        "semantic_parameters",
+        "dtype",
+        "device",
+        "seed",
+        "backend",
+        "contracts",
+        "backend_metadata",
+        "timing",
+        "status",
+        "error",
+        "provenance"
+      ],
+      "properties": {
+        "schema_version": {"const": "4.0.0"},
+        "row_id": {"type": "string"},
+        "request_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "case_id": {"type": "string"},
+        "family": {"type": "string"},
+        "operation": {"type": "string"},
+        "signature": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p", "q", "r"],
+          "properties": {
+            "p": {"type": "integer", "minimum": 0},
+            "q": {"type": "integer", "minimum": 0},
+            "r": {"type": "integer", "minimum": 0}
+          }
+        },
+        "ordinary_leading_input_shapes": {
+          "type": "array",
+          "items": {"type": "array", "items": {"type": "integer", "minimum": 1}}
+        },
+        "semantic_parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action_grade", "generator_structure", "value_scale"],
+          "properties": {
+            "action_grade": {"type": ["integer", "null"]},
+            "generator_structure": {"type": "string"},
+            "value_scale": {"type": "number", "minimum": 0}
+          }
+        },
+        "dtype": {"type": "string"},
+        "device": {"type": "string"},
+        "seed": {"type": "integer", "minimum": 0},
+        "backend": {"type": "string"},
+        "contracts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inputs", "output"],
+          "properties": {
+            "inputs": {
+              "type": "array",
+              "items": {"anyOf": [{"$ref": "#/$defs/contract"}, {"type": "null"}]}
+            },
+            "output": {"anyOf": [{"$ref": "#/$defs/contract"}, {"type": "null"}]}
+          }
+        },
+        "backend_metadata": {"type": ["object", "null"]},
+        "timing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "stage_semantics",
+            "clock",
+            "synchronization",
+            "warmup_count",
+            "samples_ns",
+            "summary_ns"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "construction_setup",
+                "planning_preparation",
+                "first_invocation",
+                "steady_forward",
+                "forward_backward"
+              ]
+            },
+            "stage_semantics": {"type": "string"},
+            "clock": {"const": "time.perf_counter_ns"},
+            "synchronization": {"type": "string"},
+            "warmup_count": {"type": "integer", "minimum": 0},
+            "samples_ns": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+            "summary_ns": {"$ref": "#/$defs/summary"}
+          }
+        },
+        "status": {"enum": ["ok", "failed", "unsupported"]},
+        "error": {"$ref": "#/$defs/error"},
+        "provenance": {
+          "type": "object",
+          "required": ["captured_at_utc", "process_id", "git", "versions", "os", "device", "threads", "executable"]
+        }
+      }
+    }
+  }
+}
