@@ -468,7 +468,7 @@ def _assess_action(request, route):
     if operation == "linear":
         if route != "graded_linear":
             return Rejected("requires_linear_action")
-        _, resources = _linear_action_structure(inputs, output)
+        _, resources = _linear_action_structure(inputs, output, device=request.device)
         preparation = ActionPreparation(None)
         return _accepted(preparation, resources)
     if operation == "sandwich":
@@ -517,6 +517,7 @@ def _assess_action(request, route):
             inputs,
             output,
             generator_layout=parameter if grade == 2 else None,
+            device=request.device,
         )
         if grade == 1:
             resources = ResourceRequirements(resources.lanes, resources.pairs + 2 * spec.n**2 + spec.n)
@@ -559,6 +560,8 @@ def _build_action(request, route, preparation):
         VersorVectorMatrixExecutor,
     )
     from .planning.action import (
+        _direct_action_grade,
+        _direct_action_plan_tensors,
         _graded_action_plan_tensors,
         _scalar_action_positions,
         build_full_sandwich_action_buffers,
@@ -569,9 +572,18 @@ def _build_action(request, route, preparation):
 
     def graded_action():
         grades = tuple(grade for grade in inputs.grades if grade > 0 and grade in output.grades)
+        direct_grades = tuple(grade for grade in grades if _direct_action_grade(inputs, output, grade, request.device))
         grade_buffers = tuple(
             (grade, *_graded_action_plan_tensors(inputs, output, grade=grade))
             for grade in (() if inputs.grades == output.grades == (1,) else grades)
+            if grade not in direct_grades
+        )
+        direct_buffers = tuple(
+            (
+                grade,
+                _direct_action_plan_tensors(inputs.spec, grade, dtype=request.dtype, device=request.device),
+            )
+            for grade in direct_grades
         )
         return GradedLinearActionExecutor(
             input_layout=inputs,
@@ -580,6 +592,7 @@ def _build_action(request, route, preparation):
             grade_buffers=tuple(
                 (grade, *(buffer.to(request.device) for buffer in buffers)) for grade, *buffers in grade_buffers
             ),
+            direct_buffers=direct_buffers,
         )
 
     def full_action():

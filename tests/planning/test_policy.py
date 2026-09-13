@@ -1,18 +1,22 @@
 import warnings
-from dataclasses import FrozenInstanceError, dataclass
+from dataclasses import FrozenInstanceError, dataclass, replace
+from math import comb
 
 import pytest
 import torch
 
 from clifra.core import AlgebraContext, ResourceLimits, TensorContract
 from clifra.core._kernel.configuration import configured_algebra
+from clifra.core._kernel.planning.action import _linear_action_structure
 from clifra.core._kernel.planning.policy import (
+    ActionFacts,
     PlanCandidate,
     PolicyCoverageError,
     PolicyEvaluation,
     ProductFacts,
     select_policy_route,
 )
+from clifra.core._kernel.providers import BuiltinProvider, action_execution_request
 from clifra.core.executors import ExecutorRequest
 from tests.planning._grade_plan_helpers import select_product_route
 
@@ -55,6 +59,53 @@ def test_family_facts_are_immutable_and_nonnegative():
         facts.interactions = 4
     with pytest.raises(ValueError, match="non-negative integer"):
         ProductFacts(-1)
+    with pytest.raises(ValueError, match="non-negative integer"):
+        ActionFacts(exterior_work=-1)
+
+
+def test_action_facts_are_semantic_and_independent_of_prepared_backend():
+    algebra = AlgebraContext(8)
+    layout = algebra.layout((0, 2, 4))
+    generator = algebra.layout((2,))
+    cpu_facts, cpu_resources = _linear_action_structure(layout, layout, generator_layout=generator, device="cpu")
+    mps_facts, mps_resources = _linear_action_structure(layout, layout, generator_layout=generator, device="mps")
+
+    def direct_work(grade):
+        return sum(comb(8, step + 1) * comb(8, grade - step - 1) * (8 - grade + step + 1) for step in range(grade))
+
+    assert cpu_facts == mps_facts
+    assert cpu_resources != mps_resources
+    assert cpu_facts.generator_terms == 8 * 7
+    assert cpu_facts.exterior_entries == 1 + comb(8, 2) ** 2 + comb(8, 4) ** 2
+    assert cpu_facts.exterior_work == sum(
+        min(comb(8, grade) ** 2 * (2 if grade == 2 else grade**3), direct_work(grade)) for grade in (2, 4)
+    )
+    assert not hasattr(cpu_facts, "minor_entries")
+    assert not hasattr(cpu_facts, "determinant_work")
+
+    vector_facts, _ = _linear_action_structure(algebra.layout((1,)), algebra.layout((1,)))
+    assert vector_facts.exterior_entries == 8**2
+    assert vector_facts.exterior_work == 0
+
+
+def test_action_facts_with_nested_exp_are_device_independent_for_supported_placements():
+    algebra = AlgebraContext(4)
+    layout = algebra.layout((0, 2, 4))
+    request = action_execution_request(
+        algebra,
+        "versor",
+        grade=2,
+        input_layout=layout,
+        output_layout=layout,
+        parameter_layout=algebra.layout((2,)),
+    )
+    for route in ("vector_matrix", "rotor_product"):
+        provider = BuiltinProvider(("action", route))
+        facts = [
+            provider.assess(replace(request, device=torch.device(device))).preparation.facts
+            for device in ("cpu", "mps", "cuda")
+        ]
+        assert facts[0] == facts[1] == facts[2]
 
 
 def test_dtype_replanning_uses_request_context():

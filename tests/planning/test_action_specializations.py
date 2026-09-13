@@ -8,7 +8,9 @@ from itertools import permutations
 import pytest
 import torch
 
+from clifra.core import AlgebraContext
 from clifra.core.layout import AlgebraSpec
+from clifra.core.tensors import TensorContract
 from tests.planning._grade_plan_helpers import _planned_full_sandwich, _planned_graded_action
 
 pytestmark = pytest.mark.unit
@@ -152,6 +154,120 @@ def test_induced_action_explicit_minors_gradcheck():
     executor = _planned_graded_action(layout, layout, dtype=torch.float64)
     matrix = torch.randn(1, 6, 6, dtype=torch.float64, requires_grad=True)
     assert torch.autograd.gradcheck(executor.coefficients, (matrix,), fast_mode=True)
+
+
+@pytest.mark.parametrize("n,grade,batch", [(8, 4, 2), (10, 5, 1), (12, 3, 1)])
+@pytest.mark.parametrize("kind", ["dense", "singular", "zero"])
+def test_direct_exterior_action_matches_independent_minors(n, grade, batch, kind):
+    spec = AlgebraSpec(n - 2, 1, 1)
+    layout = spec.layout((grade,))
+    executor = _planned_graded_action(layout, layout, dtype=torch.float64)
+    assert grade in executor._direct_grades
+    matrix = torch.randn(batch, n, n, dtype=torch.float64)
+    if kind == "singular":
+        matrix[:, -1] = matrix[:, 0]
+    elif kind == "zero":
+        matrix.zero_()
+    values = torch.randn(batch, layout.dim, dtype=torch.float64)
+    axes = torch.tensor(
+        tuple(tuple(axis for axis in range(n) if blade & (1 << axis)) for blade in layout.basis_indices)
+    )
+    minors = matrix[:, axes[:, None, :, None], axes[None, :, None, :]]
+    coefficients = torch.linalg.det(minors)
+    expected = coefficients.matmul(values.unsqueeze(-1)).squeeze(-1)
+    torch.testing.assert_close(executor.execute(values, matrix), expected, atol=2e-10, rtol=2e-10)
+    if n == 8 and kind == "dense":
+        torch.testing.assert_close(executor.coefficients(matrix), coefficients, atol=2e-10, rtol=2e-10)
+
+
+def test_direct_exterior_action_broadcast_autograd_and_fullgraph():
+    spec = AlgebraSpec(6, 1, 1)
+    layout = spec.layout((4,))
+    executor = _planned_graded_action(layout, layout, dtype=torch.float64)
+    assert executor._direct_grades == (4,)
+    matrix = torch.randn(1, 2, 8, 8, dtype=torch.float64, requires_grad=True)
+    values = torch.randn(3, 1, layout.dim, dtype=torch.float64, requires_grad=True)
+    reference = executor.execute(values, matrix)
+    compiled = torch.compile(executor.execute, fullgraph=True, backend="aot_eager")
+    actual = compiled(values, matrix)
+    torch.testing.assert_close(actual, reference)
+    seed = torch.randn_like(reference)
+    for found, expected in zip(
+        torch.autograd.grad(actual, (values, matrix), seed),
+        torch.autograd.grad(reference, (values, matrix), seed),
+    ):
+        torch.testing.assert_close(found, expected)
+
+
+def test_direct_exterior_action_gradcheck_and_gradgradcheck_at_singular_map():
+    layout = AlgebraSpec(6).layout((3,))
+    executor = _planned_graded_action(layout, layout, dtype=torch.float64)
+    assert executor._direct_grades == (3,)
+    matrix = torch.zeros(6, 6, dtype=torch.float64)
+    matrix[:3, :3] = torch.eye(3, dtype=torch.float64)
+    matrix.requires_grad_()
+    values = torch.randn(layout.dim, dtype=torch.float64, requires_grad=True)
+
+    def fn(weights, operand):
+        return executor.execute(operand, weights).sum()
+
+    assert torch.autograd.gradcheck(fn, (matrix, values), fast_mode=True)
+    assert torch.autograd.gradgradcheck(fn, (matrix, values), fast_mode=True)
+
+
+def test_direct_exterior_action_canonical_storage_matches_compact():
+    spec = AlgebraSpec(8)
+    layout = spec.layout((4,))
+    algebra = AlgebraContext(8, dtype=torch.float64)
+    values = torch.randn(2, layout.dim, dtype=torch.float64, requires_grad=True)
+    matrix = torch.randn(1, 8, 8, dtype=torch.float64, requires_grad=True)
+    compact = algebra.plan_linear_action(input=layout, output=layout)(values, matrix)
+    canonical = algebra.plan_linear_action(
+        input=TensorContract.canonical(layout), output=TensorContract.canonical(layout)
+    )(layout.full(values), matrix)
+    torch.testing.assert_close(canonical, layout.full(compact))
+    seed = torch.randn_like(compact)
+    for found, expected in zip(
+        torch.autograd.grad(canonical, (values, matrix), layout.full(seed)),
+        torch.autograd.grad(compact, (values, matrix), seed),
+    ):
+        torch.testing.assert_close(found, expected)
+
+
+@pytest.mark.parametrize("n,grade", [(8, 4), (10, 5)])
+def test_direct_exterior_action_mps_forward_and_vjp(n, grade):
+    if "mps" not in DEVICES:
+        pytest.skip("MPS unavailable")
+    spec = AlgebraSpec(n)
+    layout = spec.layout((grade,))
+    executor = _planned_graded_action(layout, layout, device="mps")
+    assert executor._direct_grades == (grade,)
+    matrix_cpu = (0.2 * torch.randn(1, n, n)).requires_grad_()
+    values_cpu = torch.randn(1, layout.dim, requires_grad=True)
+    axes = torch.tensor(
+        tuple(tuple(axis for axis in range(n) if blade & (1 << axis)) for blade in layout.basis_indices)
+    )
+    minors = matrix_cpu[:, axes[:, None, :, None], axes[None, :, None, :]]
+    expected = torch.linalg.det(minors).matmul(values_cpu.unsqueeze(-1)).squeeze(-1)
+    matrix_mps = matrix_cpu.detach().to("mps").requires_grad_()
+    values_mps = values_cpu.detach().to("mps").requires_grad_()
+    actual = executor.execute(values_mps, matrix_mps)
+    torch.testing.assert_close(actual.cpu(), expected, atol=2e-4, rtol=2e-4)
+    if n == 8:
+        compiled = torch.compile(executor.execute, fullgraph=True, backend="aot_eager")
+        torch.testing.assert_close(compiled(values_mps, matrix_mps), actual)
+    seed = torch.randn_like(expected)
+    for found, reference in zip(
+        torch.autograd.grad(actual, (values_mps, matrix_mps), seed.to("mps")),
+        torch.autograd.grad(expected, (values_cpu, matrix_cpu), seed),
+    ):
+        torch.testing.assert_close(found.cpu(), reference, atol=3e-4, rtol=3e-4)
+    for low_rank in (torch.zeros(n, n), 0.2 * torch.outer(torch.randn(n), torch.randn(n))):
+        singular = low_rank.to("mps").requires_grad_()
+        transformed = executor.execute(values_mps.detach(), singular)
+        torch.testing.assert_close(transformed, torch.zeros_like(transformed), atol=2e-6, rtol=0)
+        (gradient,) = torch.autograd.grad(transformed.sum(), singular)
+        torch.testing.assert_close(gradient, torch.zeros_like(gradient), atol=2e-5, rtol=0)
 
 
 @pytest.mark.parametrize("n,dtype", [(3, torch.float32), (6, torch.float64), (8, torch.float32)])

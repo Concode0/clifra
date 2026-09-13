@@ -33,6 +33,9 @@ class GradedLinearActionExecutor(nn.Module):
         output_layout: GradeLayout,
         scalar_flat_positions: torch.Tensor,
         grade_buffers: tuple[tuple[int, torch.Tensor, torch.Tensor, torch.Tensor], ...],
+        direct_buffers: tuple[
+            tuple[int, tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int, int, int], ...]], ...
+        ] = (),
     ):
         super().__init__()
         self.input_contract = TensorContract.compact(input_layout)
@@ -47,10 +50,62 @@ class GradedLinearActionExecutor(nn.Module):
         self.register_buffer("scalar_flat_positions", scalar_flat_positions, persistent=False)
         self._vector_only = input_layout.grades == output_layout.grades == (1,)
         self._grades = tuple(grade for grade in input_layout.grades if grade > 0 and grade in output_layout.grades)
+        self._direct_grade = (
+            input_layout.grades[0]
+            if input_layout.grades == output_layout.grades
+            and len(input_layout.grades) == 1
+            and input_layout.grades[0] > 0
+            else None
+        )
+        self._direct_grades = tuple(grade for grade, _ in direct_buffers)
+        self._direct_stage_shapes = {}
         for grade, flat_positions, row_indices, col_indices in grade_buffers:
             self.register_buffer(f"flat_positions_{grade}", flat_positions, persistent=False)
             self.register_buffer(f"row_indices_{grade}", row_indices, persistent=False)
             self.register_buffer(f"col_indices_{grade}", col_indices, persistent=False)
+        if self._direct_grades:
+            input_basis = self.input_layout.basis_indices
+            output_basis = self.output_layout.basis_indices
+            self._scalar_input_position = input_basis.index(0) if 0 in input_basis and 0 in output_basis else None
+            self._scalar_output_position = output_basis.index(0) if self._scalar_input_position is not None else None
+            self.register_buffer(
+                "scalar_output_position",
+                torch.tensor(
+                    [] if self._scalar_output_position is None else [self._scalar_output_position],
+                    dtype=torch.long,
+                    device=scalar_flat_positions.device,
+                ),
+                persistent=False,
+            )
+            for grade in self._grades:
+                self.register_buffer(
+                    f"input_positions_{grade}",
+                    torch.tensor(
+                        [position for position, blade in enumerate(input_basis) if blade.bit_count() == grade],
+                        dtype=torch.long,
+                        device=scalar_flat_positions.device,
+                    ),
+                    persistent=False,
+                )
+                self.register_buffer(
+                    f"output_positions_{grade}",
+                    torch.tensor(
+                        [position for position, blade in enumerate(output_basis) if blade.bit_count() == grade],
+                        dtype=torch.long,
+                        device=scalar_flat_positions.device,
+                    ),
+                    persistent=False,
+                )
+            for grade, stages in direct_buffers:
+                shapes = []
+                for step, (previous, row, col, signs, outputs, remaining, fan_in) in enumerate(stages):
+                    prefix = f"direct_{grade}_{step}"
+                    self.register_buffer(f"{prefix}_previous", previous, persistent=False)
+                    self.register_buffer(f"{prefix}_row", row, persistent=False)
+                    self.register_buffer(f"{prefix}_col", col, persistent=False)
+                    self.register_buffer(f"{prefix}_signs", signs, persistent=False)
+                    shapes.append((outputs, remaining, fan_in))
+                self._direct_stage_shapes[grade] = tuple(shapes)
 
     def forward(self, values: torch.Tensor, matrix: torch.Tensor) -> torch.Tensor:
         """Return output lanes in ``output_layout``."""
@@ -61,8 +116,44 @@ class GradedLinearActionExecutor(nn.Module):
 
     def execute(self, values: torch.Tensor, matrix: torch.Tensor) -> torch.Tensor:
         """Validation-free grade-lift action for prepared tensors."""
+        if self._direct_grades:
+            return self._execute_hybrid(values, matrix)
         coefficients = self.coefficients_unchecked(matrix)
         return torch.matmul(coefficients, values.unsqueeze(-1)).squeeze(-1)
+
+    def _direct_grade_matvec(self, values: torch.Tensor, matrices: torch.Tensor, grade: int) -> torch.Tensor:
+        state = values.unsqueeze(-2)
+        for step, (outputs, remaining, fan_in) in enumerate(self._direct_stage_shapes[grade]):
+            prefix = f"direct_{grade}_{step}"
+            previous = getattr(self, f"{prefix}_previous")
+            rows = getattr(self, f"{prefix}_row")
+            cols = getattr(self, f"{prefix}_col")
+            signs = getattr(self, f"{prefix}_signs")
+            selected = state.flatten(-2).index_select(-1, previous)
+            coefficients = matrices[..., rows, cols]
+            terms = selected * coefficients * signs
+            state = terms.reshape(*terms.shape[:-1], outputs, remaining, fan_in).sum(-1)
+        return state.squeeze(-1)
+
+    def _execute_hybrid(self, values: torch.Tensor, matrices: torch.Tensor) -> torch.Tensor:
+        if self._direct_grade is not None and self._direct_grade in self._direct_grades:
+            return self._direct_grade_matvec(values, matrices, self._direct_grade)
+        batch = torch.broadcast_shapes(values.shape[:-1], matrices.shape[:-2])
+        result = values.new_zeros(*batch, self.output_dim)
+        if self._scalar_input_position is not None:
+            scalar = values[..., self._scalar_input_position].broadcast_to(batch)
+            result = result.index_copy(-1, self.scalar_output_position, scalar.unsqueeze(-1))
+        for grade in self._grades:
+            part = values.index_select(-1, getattr(self, f"input_positions_{grade}"))
+            if grade in self._direct_grades:
+                transformed = self._direct_grade_matvec(part, matrices, grade)
+            else:
+                coefficients = self._grade_coefficients(matrices, grade)
+                width = getattr(self, f"output_positions_{grade}").numel()
+                coefficients = coefficients.reshape(*matrices.shape[:-2], width, width)
+                transformed = torch.matmul(coefficients, part.unsqueeze(-1)).squeeze(-1)
+            result = result.index_copy(-1, getattr(self, f"output_positions_{grade}"), transformed)
+        return result
 
     def coefficients(self, matrices: torch.Tensor) -> torch.Tensor:
         """Return lifted action coefficients for vector-space matrices."""
@@ -72,8 +163,17 @@ class GradedLinearActionExecutor(nn.Module):
 
     def coefficients_unchecked(self, matrices: torch.Tensor) -> torch.Tensor:
         """Validation-free lifted action coefficients for prepared matrices."""
+        if self._direct_grades:
+            # Explicit coefficient inspection necessarily asks for the dense
+            # matrix. Normal execution never takes this compatibility path.
+            eye = torch.eye(self.input_dim, dtype=matrices.dtype, device=matrices.device)
+            eye = eye.reshape(self.input_dim, *(1 for _ in matrices.shape[:-2]), self.input_dim)
+            return self._execute_hybrid(eye, matrices.unsqueeze(0)).movedim(0, -1)
         if self._vector_only:
             return matrices
+        if self._direct_grade is not None:
+            coefficients = self._grade_coefficients(matrices, self._direct_grade)
+            return coefficients.reshape(*matrices.shape[:-2], self.output_dim, self.input_dim)
         flat = matrices.new_zeros(*matrices.shape[:-2], self.output_dim * self.input_dim)
         if not self._grades:
             flat = flat + matrices.sum(dim=(-2, -1)).unsqueeze(-1) * 0.0

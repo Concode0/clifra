@@ -56,12 +56,17 @@ class BivectorExpFacts:
 
 @dataclass(frozen=True)
 class ActionFacts:
-    """Representation and child-product structure for one action route."""
+    """Route-level exterior-action and selected child-route structure.
+
+    ``exterior_entries`` counts a *conceptual* dense grade-preserving map;
+    it does not imply materialization. ``exterior_work`` is the smaller
+    device-independent structural count for compound and direct formulations,
+    not the work of the prepared backend kernel.
+    """
 
     generator_terms: int = 0
-    lifted_coefficients: int = 0
-    minor_entries: int = 0
-    determinant_work: int = 0
+    exterior_entries: int = 0
+    exterior_work: int = 0
     product_interactions: int = 0
     indexed_reduction_terms: int = 0
     exponential_route: str | None = None
@@ -70,9 +75,8 @@ class ActionFacts:
     def __post_init__(self) -> None:
         for name in (
             "generator_terms",
-            "lifted_coefficients",
-            "minor_entries",
-            "determinant_work",
+            "exterior_entries",
+            "exterior_work",
             "product_interactions",
             "indexed_reduction_terms",
         ):
@@ -173,9 +177,8 @@ class DefaultPolicy:
                 score = (
                     facts.generator_terms
                     + matrix_work
-                    + facts.lifted_coefficients
-                    + facts.minor_entries
-                    + facts.determinant_work
+                    + facts.exterior_entries
+                    + facts.exterior_work
                     + inputs.dim * output.dim
                 )
             elif route == "rotor_product":
