@@ -172,6 +172,58 @@ def test_taylor_mixed_batch_scaling_and_empty_batch():
     assert f(b[:0]).shape == (0, f.output_layout.dim)
 
 
+@pytest.mark.parametrize("signature", [(6, 0, 0), (3, 2, 1)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("crossing", [1, 16])
+@pytest.mark.parametrize("scaled_norm", [2.0, 8.0])
+def test_taylor_large_mixed_batch_matches_independent_reference_and_vjp(signature, dtype, crossing, scaled_norm):
+    algebra, f = executor(signature, dtype)
+    torch.manual_seed(621)
+    values = torch.randn(4, 8, f.input_layout.dim, dtype=dtype)
+    values = values / values.abs().sum(-1, keepdim=True)
+    scales = torch.full((32, 1), 0.5, dtype=dtype)
+    scales[:crossing] = scaled_norm
+    values = (values.reshape(32, -1) * scales).reshape(4, 8, -1).requires_grad_()
+    actual = f(values)
+    reference_values = values.detach().double().requires_grad_()
+    expected = bivector_exp_cpu_reference(
+        algebra,
+        reference_values,
+        input_layout=f.input_layout,
+        output_layout=f.output_layout,
+    )
+    direction = torch.randn_like(actual)
+    actual_gradient = torch.autograd.grad((actual * direction).sum(), values)[0]
+    expected_gradient = torch.autograd.grad((expected * direction.double()).sum(), reference_values)[0]
+    tolerance = 8e-5 if dtype == torch.float32 else 2e-11
+    torch.testing.assert_close(actual.double(), expected, atol=tolerance, rtol=tolerance)
+    torch.testing.assert_close(actual_gradient.double(), expected_gradient, atol=tolerance, rtol=tolerance)
+
+
+@pytest.mark.parametrize("batch", [16, 24])
+@pytest.mark.parametrize("grades", [(0,), (0, 2, 4, 6)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_taylor_sub_32_mixed_batch_matches_reference_and_vjp(batch, grades, dtype):
+    algebra, f = executor((6, 0, 0), dtype, grades=grades)
+    torch.manual_seed(190 + batch)
+    values = torch.randn(batch, f.input_layout.dim, dtype=dtype)
+    values = values / values.abs().sum(-1, keepdim=True)
+    scales = torch.full((batch, 1), 0.5, dtype=dtype)
+    scales[0] = 8.0
+    values = (values * scales).requires_grad_()
+    actual = f(values)
+    reference_values = values.detach().double().requires_grad_()
+    expected = bivector_exp_cpu_reference(
+        algebra, reference_values, input_layout=f.input_layout, output_layout=f.output_layout
+    )
+    direction = torch.randn_like(actual)
+    actual_gradient = torch.autograd.grad((actual * direction).sum(), values)[0]
+    expected_gradient = torch.autograd.grad((expected * direction.double()).sum(), reference_values)[0]
+    tolerance = 8e-5 if dtype == torch.float32 else 2e-11
+    torch.testing.assert_close(actual.double(), expected, atol=tolerance, rtol=tolerance)
+    torch.testing.assert_close(actual_gradient.double(), expected_gradient, atol=tolerance, rtol=tolerance)
+
+
 def test_taylor_scalar_inductor_forward_backward_and_envelope():
     _, f = executor(dtype=torch.float32, grades=(0,))
     compiled = torch.compile(f, backend="inductor", fullgraph=True)

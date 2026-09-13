@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 
@@ -48,6 +50,7 @@ class BivectorExpExecutor(nn.Module):
         bivector_grade4_product=None,
         polynomial=None,
         square=None,
+        taylor_work=(0, 0, 0),
     ):
         super().__init__()
         self.spec = plan.spec
@@ -66,6 +69,7 @@ class BivectorExpExecutor(nn.Module):
         self.bivector_grade4_product = bivector_grade4_product
         self.polynomial = polynomial
         self.square = square
+        self.taylor_work = tuple(int(work) for work in taylor_work)
         for name in (
             "bivector_squared_signs",
             "output_scalar_mask",
@@ -134,9 +138,34 @@ class BivectorExpExecutor(nn.Module):
         torch._assert_async(valid, "bivector_exp Taylor requires coefficient L1 norm <= 65536")
         if torch.compiler.is_compiling():
             return torch.cond((norm > 1).any(), self._scaled_taylor, self._plain_taylor, (values,))
-        if bool((norm > 1).any()):
-            return self._scaled_taylor(values)
-        return self._plain_taylor(values)
+        active = norm > 1
+        if not bool(active.any()):
+            return self._plain_taylor(values)
+        if values.device.type == "cpu" and not bool(active.all()):
+            plain_work, full_work, square_work = self.taylor_work
+            if full_work > 0:
+                unscaled = active.numel() - int(active.sum())
+                mantissa, exponent = math.frexp(float(norm.max()))
+                maximum_squares = exponent - int(mantissa == 0.5)
+                avoided_work = unscaled * (full_work - plain_work + maximum_squares * square_work)
+                # A conservative full-polynomial-equivalent guard amortizes
+                # the extra eager-CPU gather/scatter and child invocations.
+                if avoided_work >= 4 * full_work:
+                    return self._partitioned_taylor(values, active)
+        return self._scaled_taylor(values)
+
+    def _partitioned_taylor(self, values, active):
+        """Keep an eager CPU outlier from scaling every batch member."""
+        flat = values.reshape(-1, values.shape[-1])
+        active = active.reshape(-1)
+        scaled_positions = torch.nonzero(active).reshape(-1)
+        plain_positions = torch.nonzero(~active).reshape(-1)
+        scaled = self._scaled_taylor(flat.index_select(0, scaled_positions))
+        plain = self._plain_taylor(flat.index_select(0, plain_positions))
+        result = scaled.new_zeros(flat.shape[0], self.output_layout.dim)
+        result = result.index_copy(0, scaled_positions, scaled)
+        result = result.index_copy(0, plain_positions, plain)
+        return result.reshape(*values.shape[:-1], self.output_layout.dim)
 
     def _plain_taylor(self, values):
         degree = 18 if values.dtype == torch.float64 else 12

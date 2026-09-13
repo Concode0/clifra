@@ -406,6 +406,7 @@ def _build_exp(request, route, preparation):
         return cache[key]
 
     taylor = None
+    taylor_work = (0, 0, 0)
     schedules = {
         "output_12": preparation.polynomial_12,
         "output_18": preparation.polynomial_18,
@@ -436,6 +437,19 @@ def _build_exp(request, route, preparation):
             dtype=request.dtype,
             device=request.device,
         )
+        degree = 18 if request.dtype == torch.float64 else 12
+
+        def schedule_work(children):
+            return sum(child.facts.interactions + child.facts.indexed_reduction_terms for child in children)
+
+        plain = preparation.polynomial_18 if degree == 18 else preparation.polynomial_12
+        full = preparation.full_polynomial_18 if degree == 18 else preparation.full_polynomial_12
+        square_facts = preparation.square.facts
+        taylor_work = (
+            schedule_work(plain),
+            schedule_work(full),
+            square_facts.interactions + square_facts.indexed_reduction_terms,
+        )
 
     return BivectorExpExecutor(
         plan,
@@ -445,6 +459,7 @@ def _build_exp(request, route, preparation):
         bivector_grade4_product=build(preparation.bivector_grade4_product),
         polynomial=taylor,
         square=build(preparation.square),
+        taylor_work=taylor_work,
     )
 
 
