@@ -48,8 +48,22 @@ def _reference(matrix, input_layout, output_layout):
         ("cpu", (2,), (2,), "singular"),
         ("cpu", (3,), (3,), "zero"),
         ("cpu", (4,), (4,), "random"),
+        ("cpu", (5,), (5,), "random"),
+        ("cpu", (6,), (6,), "singular"),
         ("cpu", (0, 1, 2, 3), (0, 2, 3), "random"),
-        *([("mps", (2,), (2,), "singular")] if "mps" in DEVICES else []),
+        ("cpu", (1, 3, 4), (1, 3, 4), "random"),
+        *(
+            [
+                ("mps", (2,), (2,), "singular"),
+                ("mps", (4,), (4,), "random"),
+                ("mps", (5,), (5,), "random"),
+                ("mps", (5,), (5,), "singular"),
+                ("mps", (6,), (6,), "random"),
+                ("mps", (6,), (6,), "singular"),
+            ]
+            if "mps" in DEVICES
+            else []
+        ),
     ],
 )
 def test_induced_action_coefficients_and_gradients(device, grades, output_grades, kind):
@@ -67,6 +81,13 @@ def test_induced_action_coefficients_and_gradients(device, grades, output_grades
     actual = executor.coefficients(matrix)
     expected = _reference(reference_matrix, input_layout, output_layout)
     torch.testing.assert_close(actual.cpu().double(), expected, atol=2e-5, rtol=2e-5)
+    values = torch.randn(1, input_layout.dim, device=device)
+    torch.testing.assert_close(
+        executor.execute(values, matrix).cpu().double(),
+        expected.detach().matmul(values.cpu().double().unsqueeze(-1)).squeeze(-1),
+        atol=5e-5,
+        rtol=2e-5,
+    )
     seed = torch.randn_like(expected)
     (actual_grad,) = torch.autograd.grad(actual, matrix, seed.to(actual))
     (expected_grad,) = torch.autograd.grad(expected, reference_matrix, seed)
@@ -86,7 +107,7 @@ def test_induced_grade4_action_gradcheck_and_gradgradcheck():
     assert torch.autograd.gradgradcheck(fn, (matrix,))
 
 
-@pytest.mark.parametrize("grades", [(1,), (2,), (1, 2)])
+@pytest.mark.parametrize("grades", [(1,), (2,), (4,), (1, 2)])
 def test_induced_action_single_and_multi_compile(grades):
     spec = AlgebraSpec(6)
     layout = spec.layout(grades)
@@ -104,6 +125,26 @@ def test_induced_action_single_and_multi_compile(grades):
         expected_grad = torch.autograd.grad(expected, (values, matrices), seed)
         for actual, expected in zip(actual_grad, expected_grad):
             torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("grades", [(5,), (6,)])
+def test_induced_high_grade_mps_compile_and_gradients(grades):
+    if "mps" not in DEVICES:
+        pytest.skip("MPS unavailable")
+    spec = AlgebraSpec(6)
+    layout = spec.layout(grades)
+    executor = _planned_graded_action(layout, layout, device="mps")
+    matrices = torch.randn(2, 6, 6, device="mps", requires_grad=True)
+    values = torch.randn(2, layout.dim, device="mps", requires_grad=True)
+    compiled = torch.compile(executor.execute, fullgraph=True, backend="aot_eager")
+    expected = executor.execute(values, matrices)
+    actual = compiled(values, matrices)
+    torch.testing.assert_close(actual, expected)
+    seed = torch.randn_like(expected)
+    actual_grad = torch.autograd.grad(actual, (values, matrices), seed)
+    expected_grad = torch.autograd.grad(expected, (values, matrices), seed)
+    for found, reference in zip(actual_grad, expected_grad):
+        torch.testing.assert_close(found, reference)
 
 
 def test_induced_action_explicit_minors_gradcheck():

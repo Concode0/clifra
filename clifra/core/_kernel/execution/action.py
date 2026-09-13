@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import permutations
 
 import torch
 import torch.nn as nn
@@ -14,6 +15,12 @@ from clifra.core._kernel.contracts import _check_contract_spec
 from clifra.core._kernel.numerics import _matrix_exp_singleton_workaround, eps_like, signed_clamp_min
 from clifra.core.layout import GradeLayout
 from clifra.core.tensors import TensorContract
+
+_GRADE4_PERMUTATIONS = tuple(permutations(range(4)))
+_GRADE4_SIGNS = tuple(
+    -1 if sum(a > b for i, a in enumerate(permutation) for b in permutation[i + 1 :]) % 2 else 1
+    for permutation in _GRADE4_PERMUTATIONS
+)
 
 
 class GradedLinearActionExecutor(nn.Module):
@@ -85,29 +92,38 @@ class GradedLinearActionExecutor(nn.Module):
             if grade == 1:
                 continue
             positions = getattr(self, f"flat_positions_{grade}")
-            row_indices = getattr(self, f"row_indices_{grade}")
-            col_indices = getattr(self, f"col_indices_{grade}")
-            # Explicit cofactors preserve derivatives at singular minors,
-            # including the off-diagonal minors of the identity map.
-            if grade in (2, 3):
-                coefficients = _small_action_minors(matrices, row_indices, col_indices, grade)
-            else:
-                submatrix = matrices[..., row_indices.unsqueeze(-1), col_indices.unsqueeze(-2)]
-                coefficients = _ActionDeterminant.apply(submatrix)
+            coefficients = self._grade_coefficients(matrices, grade)
             flat = flat.index_copy(-1, positions, coefficients)
 
         return flat.reshape(*matrices.shape[:-2], self.output_dim, self.input_dim)
+
+    def _grade_coefficients(self, matrices: torch.Tensor, grade: int) -> torch.Tensor:
+        row_indices = getattr(self, f"row_indices_{grade}")
+        col_indices = getattr(self, f"col_indices_{grade}")
+        if grade == 1:
+            return matrices[..., row_indices[:, 0], col_indices[:, 0]]
+        # Explicit cofactors preserve derivatives at singular minors,
+        # including the off-diagonal minors of the identity map.
+        if grade in (2, 3):
+            return _small_action_minors(matrices, row_indices, col_indices, grade)
+        submatrix = matrices[..., row_indices.unsqueeze(-1), col_indices.unsqueeze(-2)]
+        return _ActionDeterminant.apply(submatrix)
 
     def _check_values(self, values: torch.Tensor) -> None:
         self.input_contract.validate(values, name="values")
 
 
 class _ActionDeterminant(torch.autograd.Function):
-    """LU forward with polynomial cofactor derivatives, also at singular maps."""
+    """Small determinant execution with polynomial derivatives at singular maps."""
 
     @staticmethod
     def forward(ctx, matrix):
         ctx.save_for_backward(matrix)
+        if matrix.device.type == "mps":
+            if matrix.shape[-1] == 4:
+                return _grade4_determinant(matrix)
+            if matrix.shape[-1] == 5 and matrix.numel() <= 2048 * 25:
+                return _grade5_determinant(matrix)
         return torch.linalg.det(matrix.reshape(-1, matrix.shape[-1], matrix.shape[-1])).reshape(matrix.shape[:-2])
 
     @staticmethod
@@ -116,6 +132,13 @@ class _ActionDeterminant(torch.autograd.Function):
         n = matrix.shape[-1]
         if n == 1:
             return gradient[..., None, None]
+        if n == 4:
+            return gradient[..., None, None] * _grade4_cofactors(matrix)
+        if matrix.device.type == "mps":
+            if n == 5 and matrix.numel() <= 2048 * 25:
+                return gradient[..., None, None] * _grade5_cofactors(matrix)
+            if n == 6 and matrix.numel() <= 64 * 36:
+                return gradient[..., None, None] * _grade6_cofactors(matrix)
         rows = []
         for i in range(n):
             without_row = torch.cat((matrix[..., :i, :], matrix[..., i + 1 :, :]), dim=-2)
@@ -125,6 +148,61 @@ class _ActionDeterminant(torch.autograd.Function):
                 cofactors.append((-1) ** (i + j) * _ActionDeterminant.apply(minor))
             rows.append(torch.stack(cofactors, dim=-1))
         return gradient[..., None, None] * torch.stack(rows, dim=-2)
+
+
+def _grade4_permutation_tensors(matrix: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    permutation_indices = torch.tensor(_GRADE4_PERMUTATIONS, dtype=torch.long, device=matrix.device)
+    signs = matrix.new_tensor(_GRADE4_SIGNS)
+    return permutation_indices, signs
+
+
+def _grade4_determinant(matrix: torch.Tensor) -> torch.Tensor:
+    """Evaluate 4x4 determinants as one batched polynomial."""
+    permutation_indices, signs = _grade4_permutation_tensors(matrix)
+    terms = matrix[..., 0, permutation_indices[:, 0]] * matrix[..., 1, permutation_indices[:, 1]]
+    terms = terms * matrix[..., 2, permutation_indices[:, 2]]
+    terms = terms * matrix[..., 3, permutation_indices[:, 3]]
+    return (terms * signs).sum(-1)
+
+
+def _grade4_cofactors(matrix: torch.Tensor) -> torch.Tensor:
+    """Return every 4x4 cofactor without recursive determinant launches."""
+    permutation_indices, signs = _grade4_permutation_tensors(matrix)
+    selected = tuple(matrix[..., row, permutation_indices[:, row]] for row in range(4))
+    rows = []
+    for row in range(4):
+        partial = signs
+        for other in range(4):
+            if other != row:
+                partial = partial * selected[other]
+        target = matrix.new_zeros(*matrix.shape[:-2], 4)
+        rows.append(target.scatter_add(-1, permutation_indices[:, row].expand_as(partial), partial))
+    return torch.stack(rows, dim=-2)
+
+
+def _cofactor_minors(matrix: torch.Tensor, *, first_row_only: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+    n = matrix.shape[-1]
+    pairs = ((0, col) for col in range(n)) if first_row_only else ((row, col) for row in range(n) for col in range(n))
+    pairs = tuple(pairs)
+    rows = torch.tensor([[axis for axis in range(n) if axis != row] for row, _ in pairs], device=matrix.device)
+    cols = torch.tensor([[axis for axis in range(n) if axis != col] for _, col in pairs], device=matrix.device)
+    signs = matrix.new_tensor([(-1) ** (row + col) for row, col in pairs])
+    return matrix[..., rows.unsqueeze(-1), cols.unsqueeze(-2)], signs
+
+
+def _grade5_determinant(matrix: torch.Tensor) -> torch.Tensor:
+    minors, signs = _cofactor_minors(matrix, first_row_only=True)
+    return (matrix[..., 0, :] * _grade4_determinant(minors) * signs).sum(-1)
+
+
+def _grade5_cofactors(matrix: torch.Tensor) -> torch.Tensor:
+    minors, signs = _cofactor_minors(matrix)
+    return (_grade4_determinant(minors) * signs).reshape(*matrix.shape[:-2], 5, 5)
+
+
+def _grade6_cofactors(matrix: torch.Tensor) -> torch.Tensor:
+    minors, signs = _cofactor_minors(matrix)
+    return (_grade5_determinant(minors) * signs).reshape(*matrix.shape[:-2], 6, 6)
 
 
 def _small_action_minors(matrices: torch.Tensor, rows: torch.Tensor, cols: torch.Tensor, grade: int) -> torch.Tensor:
