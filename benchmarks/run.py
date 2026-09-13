@@ -18,7 +18,7 @@ from .cases import (
     BenchmarkCase,
     ExecutionPlacement,
     SelectionCase,
-    exploratory_cases,
+    full_cases,
     smoke_cases,
 )
 from .engine import SCHEMA_VERSION, MeasurementConfig, measure_request
@@ -208,12 +208,13 @@ def run_cases(
 def campaign_plan(
     devices: tuple[str, ...] = ("cpu",),
     *,
+    dtypes: tuple[str, ...] | None = None,
     families: tuple[str, ...] = ("product", "bivector_exp", "action"),
     modes: tuple[str, ...] | None = None,
 ) -> CampaignPlan:
     """Expand semantic axes into normal and every feasible forced-root row."""
 
-    cases = exploratory_cases(families)
+    cases = full_cases(families)
     requests = []
     pruned = []
     for case in cases:
@@ -221,8 +222,10 @@ def campaign_plan(
         if modes is None and case.case_id in AMORTIZATION_CASE_IDS:
             case_modes += ("planning_preparation", "first_invocation")
         for device in devices:
-            dtypes = ("float32",) if device == "mps" else ("float32", "float64")
-            for dtype in dtypes:
+            device_dtypes = (
+                dtypes if dtypes is not None else ("float32",) if device == "mps" else ("float32", "float64")
+            )
+            for dtype in device_dtypes:
                 placement = ExecutionPlacement(dtype, device)
                 assessments = route_assessments(case, placement)
                 feasible = tuple(item["route"] for item in assessments if item["eligible"])
@@ -250,16 +253,16 @@ def campaign_plan(
     return CampaignPlan(cases, tuple(requests), tuple(pruned))
 
 
-def smoke_requests(device: str, modes: tuple[str, ...]):
+def smoke_requests(device: str, modes: tuple[str, ...], dtype: str = "float32"):
     requests = []
     for case in smoke_cases():
-        placement = ExecutionPlacement("float32", device)
+        placement = ExecutionPlacement(dtype, device)
         if device in {"mps", "cuda"}:
             placements = (placement,)
         else:
             feasible = tuple(item["route"] for item in route_assessments(case, placement) if item["eligible"])
             placements = (placement,) + tuple(
-                ExecutionPlacement("float32", device, SelectionCase("forced_repository_private", route))
+                ExecutionPlacement(dtype, device, SelectionCase("forced_repository_private", route))
                 for route in feasible
             )
         requests.extend(BenchmarkRequest(case, item, mode) for item in placements for mode in modes)
@@ -267,14 +270,11 @@ def smoke_requests(device: str, modes: tuple[str, ...]):
 
 
 def _parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Run clifra's internal routed-family performance harness")
+    parser = argparse.ArgumentParser(description="Run clifra's fixed routed-family benchmark suite")
     parser.add_argument("--output", type=Path, required=True, help="authoritative JSON artifact path")
-    parser.add_argument(
-        "--suite",
-        choices=("smoke", "exploratory", "product-exploratory", "bivector-exp-exploratory", "action-exploratory"),
-        default="smoke",
-    )
-    parser.add_argument("--device", action="append", choices=("cpu", "mps", "cuda"), dest="devices")
+    parser.add_argument("--suite", choices=("full", "smoke"), default="full")
+    parser.add_argument("--device", choices=("cpu", "mps", "cuda"), default="cpu")
+    parser.add_argument("--dtype", choices=("float32", "float64"), default="float32")
     parser.add_argument("--mode", action="append", choices=sorted(TIMING_MODES), dest="modes")
     parser.add_argument("--case-id", action="append", help="run only these exact semantic case ids")
     parser.add_argument("--samples", type=int, default=5)
@@ -291,20 +291,18 @@ def _parse_args(argv=None):
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
-    devices = tuple(args.devices or ("cpu",))
-    modes = tuple(args.modes or ("steady_forward",))
+    devices = (args.device,)
+    modes = tuple(args.modes or ("steady_forward", "forward_backward"))
     pruned = ()
     if args.suite == "smoke":
-        requests = tuple(request for device in devices for request in smoke_requests(device, modes))
+        requests = tuple(request for device in devices for request in smoke_requests(device, modes, args.dtype))
         summary = {"semantic_case_count": len(smoke_cases()), "execution_row_count": len(requests)}
     else:
-        families = {
-            "exploratory": ("product", "bivector_exp", "action"),
-            "product-exploratory": ("product",),
-            "bivector-exp-exploratory": ("bivector_exp",),
-            "action-exploratory": ("action",),
-        }[args.suite]
-        plan = campaign_plan(devices, families=families, modes=None if args.modes is None else modes)
+        plan = campaign_plan(
+            devices,
+            dtypes=(args.dtype,),
+            modes=None if args.modes is None else modes,
+        )
         requests, pruned, summary = plan.requests, plan.pruned, plan.summary()
     if args.case_id:
         requested_ids = set(args.case_id)

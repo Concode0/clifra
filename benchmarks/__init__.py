@@ -14,6 +14,7 @@ __all__ = [
     "PreparedBenchmark",
     "SelectionCase",
     "measure_request",
+    "full_cases",
     "smoke_cases",
 ]
 
@@ -26,6 +27,7 @@ def __getattr__(name: str):
         "OrdinaryTensorCase",
         "SelectionCase",
         "smoke_cases",
+        "full_cases",
     }:
         from . import cases
 

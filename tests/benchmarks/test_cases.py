@@ -9,8 +9,9 @@ from benchmarks.cases import (
     exploratory_action_cases,
     exploratory_bivector_exp_cases,
     exploratory_product_cases,
+    full_cases,
 )
-from benchmarks.run import campaign_plan
+from benchmarks.run import _parse_args, campaign_plan
 
 
 def test_case_and_placement_round_trip_separately():
@@ -108,6 +109,22 @@ def test_campaign_includes_normal_and_every_feasible_product_root_route():
         ("default", None),
         ("forced_repository_private", "sparse"),
     }
+
+
+def test_full_cases_is_the_canonical_complete_suite():
+    assert full_cases() == exploratory_product_cases() + exploratory_bivector_exp_cases() + exploratory_action_cases()
+
+
+def test_campaign_can_pin_one_explicit_dtype():
+    plan = campaign_plan(("cpu",), dtypes=("float32",), modes=("steady_forward",))
+    assert {request.placement.dtype for request in plan.requests} == {"float32"}
+
+
+def test_run_cli_defaults_to_full_single_explicit_placement():
+    args = _parse_args(["--device", "mps", "--dtype", "float32", "--output", "artifact.json"])
+    assert args.suite == "full"
+    assert args.device == "mps"
+    assert args.dtype == "float32"
 
 
 def test_campaign_summary_reports_projected_rows_and_explicit_pruning():

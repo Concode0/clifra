@@ -687,6 +687,15 @@ def exploratory_cases(families: tuple[str, ...] = ("product", "bivector_exp", "a
     return tuple(case for family in families for case in by_family[family]())
 
 
+def full_cases(families: tuple[str, ...] = ("product", "bivector_exp", "action")) -> tuple[BenchmarkCase, ...]:
+    """Return the canonical complete fixed suite.
+
+    ``exploratory_cases`` remains the family-specific constructor; this name
+    is the stable suite boundary used by the command-line runner.
+    """
+    return exploratory_cases(families)
+
+
 AMORTIZATION_CASE_IDS = {
     "product.cl5.full-full.gp.batch1",
     "product.cl5.full-full.gp.batch1024",
