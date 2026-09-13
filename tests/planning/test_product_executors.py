@@ -126,6 +126,38 @@ def test_selected_product_route_matches_independent_oracle(op):
     torch.testing.assert_close(actual, oracle.product(left, right, op=op))
 
 
+def test_sparse_cpu_float64_gather_preserves_broadcast_compact_canonical_and_gradients():
+    algebra = configured_algebra(3, 1, 1, dtype=torch.float64, planning_policy=PreferRoute("product", "sparse"))
+    left_layout, right_layout, output_layout = (
+        algebra.layout((1,)),
+        algebra.layout((2,)),
+        algebra.layout((1, 3)),
+    )
+    operation = algebra.plan_product(left=left_layout, right=right_layout, output=output_layout)
+    oracle = SmallCliffordOracle(3, 1, 1)
+    left = torch.randn(4, 1, left_layout.dim, dtype=torch.float64, requires_grad=True)
+    right = torch.randn(1, 3, right_layout.dim, dtype=torch.float64, requires_grad=True)
+    expected = oracle.product(
+        left,
+        right,
+        left_indices=left_layout.basis_indices,
+        right_indices=right_layout.basis_indices,
+        output_indices=output_layout.basis_indices,
+    )
+    methods = (
+        lambda: operation(left, right),
+        lambda: operation._kernel.forward(left_layout.full(left), right_layout.full(right)),
+    )
+    weights = torch.randn_like(expected)
+    expected_gradient = torch.autograd.grad((expected * weights).sum(), (left, right))
+    for method in methods:
+        actual = method()
+        torch.testing.assert_close(actual, expected)
+        actual_gradient = torch.autograd.grad((actual * weights).sum(), (left, right))
+        for found, reference in zip(actual_gradient, expected_gradient):
+            torch.testing.assert_close(found, reference)
+
+
 def test_product_policy_prefers_structural_pruning_and_is_device_independent():
     algebra = AlgebraContext(5)
     layout = algebra.layout()

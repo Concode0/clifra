@@ -23,6 +23,12 @@ def _pairwise_inputs(left: torch.Tensor, right: torch.Tensor) -> tuple[torch.Ten
     return left.expand(*prefix, *left.shape[-2:]), right.expand(*prefix, *right.shape[-2:])
 
 
+def _sparse_gather(values: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    if values.device.type == "cpu" and values.dtype == torch.float64:
+        return torch.gather(values, -1, positions.expand(*values.shape[:-1], -1))
+    return torch.index_select(values, -1, positions)
+
+
 class GradeProductExecutor(nn.Module):
     """Compile-friendly grade-restricted product using a static interaction plan.
 
@@ -99,8 +105,8 @@ class GradeProductExecutor(nn.Module):
                 return left[..., :1] * torch.index_select(right, -1, self.output_basis_indices)
             return torch.index_select(left, -1, self.output_basis_indices) * right[..., :1]
 
-        left_terms = torch.index_select(left, -1, self.left_indices)
-        right_terms = torch.index_select(right, -1, self.right_indices)
+        left_terms = _sparse_gather(left, self.left_indices)
+        right_terms = _sparse_gather(right, self.right_indices)
         terms = left_terms * right_terms * self.coefficients
 
         if self._vector_scalar or self.output_dim == 1:
@@ -121,8 +127,8 @@ class GradeProductExecutor(nn.Module):
             # multiply them by zero: that would introduce NaNs for infinite lanes.
             terms = left[..., : self.p + self.q] * right[..., : self.p + self.q] * self.coefficients
             return terms.sum(-1, keepdim=True)
-        left_terms = torch.index_select(left, -1, self.left_compact_positions)
-        right_terms = torch.index_select(right, -1, self.right_compact_positions)
+        left_terms = _sparse_gather(left, self.left_compact_positions)
+        right_terms = _sparse_gather(right, self.right_compact_positions)
         terms = left_terms * right_terms * self.coefficients
 
         # A one-lane output is a reduction, not a scatter. Besides avoiding

@@ -47,6 +47,24 @@ def test_pairwise_product_compiles_fullgraph_with_broadcast_gradients():
         torch.testing.assert_close(got, want)
 
 
+def test_large_leading_sparse_strategy_compiles_fullgraph_with_gradients():
+    algebra = AlgebraContext(8, dtype=torch.float64)
+    vector, output = algebra.layout((1,)), algebra.layout((0, 2))
+    operation = algebra.plan_product(left=vector, right=vector, output=output)
+    left = torch.randn(128, 1, vector.dim, dtype=torch.float64, requires_grad=True)
+    right = torch.randn(1, 2, vector.dim, dtype=torch.float64, requires_grad=True)
+    compiled = torch.compile(operation, backend="aot_eager", fullgraph=True)
+
+    expected, actual = operation(left, right), compiled(left, right)
+
+    torch.testing.assert_close(actual, expected)
+    for got, want in zip(
+        torch.autograd.grad(actual.sum(), (left, right)),
+        torch.autograd.grad(expected.sum(), (left, right)),
+    ):
+        torch.testing.assert_close(got, want)
+
+
 def test_unary_layout_conversion_compiles_fullgraph():
     algebra = AlgebraContext(5)
     source, output = algebra.layout((1, 2)), algebra.layout((2,))
