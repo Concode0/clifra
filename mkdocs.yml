@@ -82,6 +82,7 @@ nav:
       - Products, Grades, and Blade Geometry: explanations/products-and-geometry.md
       - Signatures and Algebraic Behavior: explanations/signatures-and-learning.md
       - Planned Execution and Resources: explanations/planning-policy-injection.md
+      - Structural Work and Policy Calibration: explanations/structural-work-and-policy-calibration.md
       - Tensor Composition and PyTorch Ownership: explanations/clifra-and-pytorch.md
       - Geometric Representations and Parameters: explanations/clifra-methodology.md
       - Optimization and Geometric Updates: explanations/optimizer-dispatch.md
@@ -93,8 +94,6 @@ nav:
           - Sparse-Constraint Continuum Threading: research/sparse_continuum_threading.md
           - Continuous-Time PGA LiDAR Deskewing: research/pga-lidar-deskewing.md
           - Relativistic Beamline Inverse Design: research/relativistic-beamline.md
-  - Benchmarks:
-      - Overview: benchmarks/index.md
 
 markdown_extensions:
   - admonition
