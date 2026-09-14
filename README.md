@@ -59,7 +59,7 @@ Contact: nemonanconcode@gmail.com.
   author  = {Kim, Eunkyum},
   title   = {clifra: Layout-first Clifford algebra tools for PyTorch},
   url     = {https://github.com/Concode0/clifra},
-  version = {2.0.0},
+  version = {2.0.1},
   year    = {2026},
   doi     = {10.5281/zenodo.18939518},
   license = {Apache-2.0}
