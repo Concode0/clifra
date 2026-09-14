@@ -10,7 +10,6 @@ from math import comb
 import torch
 
 from clifra.core._kernel.basis import operation_coefficient
-from clifra.core._kernel.planning.policy import ActionFacts
 from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core.layout import GradeLayout
 
@@ -222,31 +221,6 @@ def _bivector_generator_term_count(bivector_layout) -> int:
     return (spec.p + spec.q) * max(spec.n - 1, 0)
 
 
-def _linear_action_facts(input_layout, output_layout, *, generator_layout=None) -> ActionFacts:
-    """Count the semantic grade blocks and cheaper generic exterior work.
-
-    These counts describe the route's algebra, not the backend-selected
-    compound or direct kernel. The final dense application term is available
-    from the request layouts and is kept separate by the policy.
-    """
-    n = input_layout.spec.n
-    grades = set(input_layout.grades) & set(output_layout.grades)
-    entries = sum(comb(n, grade) ** 2 for grade in grades)
-    work = 0
-    for grade in grades:
-        if grade < 2:
-            continue  # Scalar and vector actions need no exterior lift.
-        count = comb(n, grade) ** 2
-        compound_work = count * (2 if grade == 2 else 9 if grade == 3 else grade**3)
-        direct_work, _, _ = _direct_grade_counts(n, grade)
-        work += min(compound_work, direct_work)
-    return ActionFacts(
-        generator_terms=0 if generator_layout is None else _bivector_generator_term_count(generator_layout),
-        exterior_entries=entries,
-        exterior_work=work,
-    )
-
-
 def _linear_action_structure(input_layout, output_layout, *, generator_layout=None, device="cpu"):
     """Describe the lift and bound the selected prepared execution storage.
 
@@ -262,9 +236,8 @@ def _linear_action_structure(input_layout, output_layout, *, generator_layout=No
     minors = max((count * g * g for g, count in blocks.items()), default=0)
     indices = sum(count * (1 + 2 * g) for g, count in blocks.items())
     scalar = int(0 in input_layout.grades and 0 in output_layout.grades)
-    facts = _linear_action_facts(input_layout, output_layout, generator_layout=generator_layout)
     # Resources, unlike route-level facts, bound the selected implementation.
-    generator_terms = facts.generator_terms
+    generator_terms = 0 if generator_layout is None else _bivector_generator_term_count(generator_layout)
     if direct:
         compound = {g: count for g, count in blocks.items() if g not in direct}
         compound_indices = sum(count * (1 + 2 * g) for g, count in compound.items())
@@ -297,4 +270,4 @@ def _linear_action_structure(input_layout, output_layout, *, generator_layout=No
         pairs += 3 * generator_terms + 2 * n * n
     lanes = max(n, input_layout.dim, output_layout.dim, 0 if generator_layout is None else generator_layout.dim)
     required_pairs = pairs if direct else max(pairs, indices + n * n)
-    return facts, ResourceRequirements(lanes, required_pairs)
+    return generator_terms, ResourceRequirements(lanes, required_pairs)
