@@ -38,6 +38,17 @@ gives the indexed inverse.
 
 The examples use the same basic construction in three different geometries.
 
+| Research example | Core primitives used | Role in the experiment |
+| --- | --- | --- |
+| [Sparse-Constraint Continuum Threading](sparse_continuum_threading.md) | `AlgebraContext(4, 1, 0)`, grade `layout`, `plan_versor_action(grade=2)`, `geometric_product` | Compact conformal points and bivectors; planned actions deform the rod, and a geometric product normalizes points when extracting coordinates. |
+| [Continuous-Time PGA LiDAR Deskewing](pga-lidar-deskewing.md) | `AlgebraContext(3, 0, 1)`, grade `layout`, `plan_versor_action(grade=2)`, `plan_product(op="wedge")` | Planned motor actions deskew point trivectors; planned wedges construct lines and evaluate point-plane and point-line geometry. |
+| [Relativistic Beamline Inverse Design](relativistic-beamline.md) | `AlgebraContext(1, 3)`, grade `layout`, `plan_versor_action(grade=2)` | Planned Lorentz rotor actions update four-velocities while preserving the mass shell. |
+
+See [Signatures and layouts](../how-to/signatures-and-layouts.md),
+[Induced actions](../how-to/induced-actions.md), and
+[Planned execution](../how-to/planned-execution.md) for the Core contracts
+behind these examples.
+
 ### [Sparse-Constraint Continuum Threading](sparse_continuum_threading.md)
 
 A material-coordinate field in \(Cl(4,1)\) is fitted from three gate poses and

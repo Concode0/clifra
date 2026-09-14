@@ -23,11 +23,32 @@ The final axis holds coefficients in the declared layout. Leading dimensions
 broadcast as ordinary PyTorch dimensions; autograd differentiates the executed
 tensor operations.
 
+## Computation model
+
+clifra keeps coefficient data in ordinary PyTorch tensors.
+
+Layouts describe the algebraic meaning of the final coefficient axis without
+changing PyTorch's ownership of leading dimensions, devices, dtypes, or
+autograd.
+
+Operations can be executed directly or planned from algebraic structure and
+reused across changing tensor values and batch shapes.
+
+The same model applies across Euclidean, projective, conformal, and indefinite
+Clifford algebras.
+
+---
+
+
 The [tutorials](tutorials/index.md) introduce coefficient tensors, layouts,
 broadcasting, and planned differentiation, followed by geometric applications.
 The [how-to guides](how-to/index.md) cover individual tasks, including strict
 blade geometry, resource budgets, compilation, and executor extensions.
 
 The [explanations](explanations/index.md) develop representation, products,
-signed forms, numerical behavior, and execution semantics. The
-[API reference](reference/index.md) documents the stable public interfaces.
+signed forms, numerical behavior, and execution semantics.
+
+The [research](research/index.md) notes show how the same computational model
+is used in geometric optimization and transformation-field experiments.
+
+The [API reference](reference/index.md) documents the stable public interfaces.
