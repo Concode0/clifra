@@ -12,6 +12,10 @@ of the public library.
   their gradients and conditioning.
 - [Planned Execution and Resources](planning-policy-injection.md)
   separates fixed contracts, feasibility budgets, and executor selection.
+- [Structural Work and Policy Calibration](structural-work-and-policy-calibration.md)
+  explains how executor algorithms become planner-visible work profiles and how
+  the default route policy is calibrated without turning benchmark timings into
+  runtime cost predictions.
 - [Tensor Composition and PyTorch Ownership](clifra-and-pytorch.md)
   covers broadcasting, autograd, modules, placement, and compilation.
 
