@@ -11,8 +11,9 @@ import torch
 
 from clifra.core._kernel.basis import build_bivector_squared_signs
 from clifra.core._kernel.contracts import _check_contract_spec
-from clifra.core._kernel.planning.policy import BivectorExpFacts, ProductFacts
+from clifra.core._kernel.planning.policy import BivectorExpFacts
 from clifra.core._kernel.planning.resources import ResourceRequirements
+from clifra.core._kernel.planning.work import BivectorExpWorkProfile, product_work_profile
 from clifra.core.layout import AlgebraSpec, GradeLayout
 from clifra.core.tensors import TensorContract
 
@@ -114,7 +115,7 @@ class BivectorExpRouteAssessment:
     unavailable_reason: str | None = None
 
 
-def _product_facts(spec, left, right, output, op="geometric_product"):
+def _sparse_product_profile(spec, left, right, output, op="geometric_product"):
     from clifra.core._kernel.planning.product import count_grade_product_interactions
     from clifra.core._kernel.planning.tree import build_grade_plan_tree
 
@@ -126,16 +127,7 @@ def _product_facts(spec, left, right, output, op="geometric_product"):
         output_grades=output.grades,
     )
     interactions = count_grade_product_interactions(tree)
-    reductions = interactions if output.dim > 1 and interactions > 0 else 0
-    return ProductFacts(interactions, reductions)
-
-
-def _sum_product_facts(parts):
-    parts = tuple(parts)
-    return (
-        sum(part.interactions for part in parts),
-        sum(part.indexed_reduction_terms for part in parts),
-    )
+    return product_work_profile("sparse", interactions=interactions, output_width=output.dim, full_width=spec.dim)
 
 
 def assess_bivector_exp_route(spec, device, *, dtype, output_layout, route):
@@ -146,6 +138,9 @@ def assess_bivector_exp_route(spec, device, *, dtype, output_layout, route):
     output = spec.layout((0,)) if output_layout is None else output_layout
     inputs = spec.layout((2,)) if spec.n >= 2 else spec.layout(())
     even_layout = spec.layout(range(0, spec.n + 1, 2))
+    fixed_products = plain_products = scaled_products = ()
+    square_product = None
+    plain_widths = scaled_widths = ()
     reason = None
     if route == "closed":
         reason = None if 2 <= spec.n <= 5 else "closed_requires_n_2_through_5"
@@ -154,48 +149,53 @@ def assess_bivector_exp_route(spec, device, *, dtype, output_layout, route):
         if reason is None and spec.n >= 4:
             grade4 = spec.layout((4,))
             products = [
-                _product_facts(spec, inputs, inputs, grade4, "wedge"),
-                _product_facts(spec, grade4, grade4, spec.layout((0,))),
-                _product_facts(spec, inputs, grade4, output),
+                _sparse_product_profile(spec, inputs, inputs, grade4, "wedge"),
+                _sparse_product_profile(spec, grade4, grade4, spec.layout((0,))),
+                _sparse_product_profile(spec, inputs, grade4, output),
             ]
-        fixed, reductions = _sum_product_facts(products)
-        facts = BivectorExpFacts(fixed, reductions)
+        fixed_products = tuple(products)
     elif route == "taylor":
         reason = None if 2 <= spec.n <= 12 else "materialized_exp_requires_n_2_through_12"
         pairs = even**2
 
-        def polynomial_facts(target):
+        def polynomial_profiles(target):
             layouts = taylor_layouts(spec, target, taylor_degree(dtype))
-            return _sum_product_facts(
-                _product_facts(spec, inputs, left, right) for left, right in zip(layouts, layouts[1:])
+            return (
+                tuple(_sparse_product_profile(spec, inputs, left, right) for left, right in zip(layouts, layouts[1:])),
+                tuple(layout.dim for layout in layouts[1:]),
             )
 
-        polynomial, polynomial_reductions = polynomial_facts(output) if reason is None else (0, 0)
-        scaled, scaled_reductions = (
-            ((polynomial, polynomial_reductions) if output == even_layout else polynomial_facts(even_layout))
-            if reason is None
-            else (0, 0)
-        )
-        facts = BivectorExpFacts(
-            polynomial_interactions=polynomial,
-            polynomial_reduction_terms=polynomial_reductions,
-            scaled_polynomial_interactions=scaled,
-            scaled_polynomial_reduction_terms=scaled_reductions,
-        )
+        if reason is None:
+            plain_products, plain_widths = polynomial_profiles(output)
+            scaled_products, scaled_widths = (
+                (plain_products, plain_widths) if output == even_layout else polynomial_profiles(even_layout)
+            )
+            square_product = _sparse_product_profile(spec, even_layout, even_layout, even_layout, "symmetric_product")
     elif route == "left_matrix_exp":
         reason = None if 2 <= spec.n <= 12 else "materialized_exp_requires_n_2_through_12"
         pairs = max(bivector_lanes, 1) * even**2
-        product = _product_facts(spec, inputs, even_layout, even_layout) if reason is None else None
-        facts = BivectorExpFacts(
-            fixed_product_interactions=0 if product is None else product.interactions,
-            fixed_reduction_terms=0 if product is None else product.indexed_reduction_terms,
-        )
+        fixed_products = (_sparse_product_profile(spec, inputs, even_layout, even_layout),) if reason is None else ()
     else:
         raise ValueError(f"unknown bivector exponential route {route!r}")
     if route != "closed" and dtype not in (torch.float32, torch.float64):
         reason = "general_exp_requires_float32_or_float64"
     if torch.device(device).type == "mps" and dtype == torch.float64:
         reason = "mps_does_not_support_float64_output"
+    facts = BivectorExpFacts(
+        BivectorExpWorkProfile(
+            route=route,
+            bivector_width=inputs.dim,
+            grade4_width=spec.layout((4,)).dim if route == "closed" and spec.n >= 4 else 0,
+            even_width=even_layout.dim,
+            output_width=output.dim,
+            fixed_products=fixed_products,
+            plain_products=plain_products,
+            scaled_products=scaled_products,
+            square_product=square_product,
+            plain_stage_widths=plain_widths,
+            scaled_stage_widths=scaled_widths,
+        )
+    )
     return BivectorExpRouteAssessment(
         route,
         facts,

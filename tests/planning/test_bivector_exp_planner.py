@@ -36,9 +36,12 @@ def test_bivector_square_preparation_matches_independent_products(signature):
     torch.testing.assert_close(build_bivector_squared_signs(layout, dtype=torch.float64, device="cpu"), expected)
 
 
-def test_closed_route_is_preferred_throughout_its_domain():
-    for n in range(2, 6):
-        assert _select(AlgebraSpec(n)).route == "closed"
+def test_default_exp_policy_uses_small_matrix_regime_and_nearby_closed_routes():
+    assert _select(AlgebraSpec(3)).route == "closed"
+    assert _select(AlgebraSpec(4), dtype=torch.float32).route == "left_matrix_exp"
+    assert _select(AlgebraSpec(4), dtype=torch.float64).route == "closed"
+    assert _select(AlgebraSpec(3, 1), dtype=torch.float64).route == "left_matrix_exp"
+    assert _select(AlgebraSpec(5), dtype=torch.float32).route == "closed"
 
 
 def test_general_default_policy_is_device_independent():

@@ -6,7 +6,7 @@ Construction consumes the retained preparation without selecting routes again.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -31,6 +31,7 @@ from clifra.core._kernel.planning.policy import (
     ProductFacts,
 )
 from clifra.core._kernel.planning.resources import ResourceRequirements
+from clifra.core._kernel.planning.work import ActionWorkProfile, BivectorExpWorkProfile, action_lift_profile
 from clifra.core.executors import Assessment, ExecutorRequest, Rejected
 from clifra.core.tensors import TensorContract
 
@@ -366,6 +367,37 @@ def _assess_exp(request, route):
         )
     else:
         children = ()
+    if request.planner is not None:
+        spec, output = request.spec, request.output.layout
+        even = spec.layout(range(0, spec.n + 1, 2))
+        degree = 18 if request.dtype == torch.float64 else 12
+        plain = polynomial_18 if degree == 18 else polynomial_12
+        scaled = full_polynomial_18 if degree == 18 else full_polynomial_12
+        fixed = {
+            "closed": (wedge, square4, mixed),
+            "left_matrix_exp": (left_product,),
+            "taylor": (),
+        }[route]
+        facts = replace(
+            facts,
+            work_profile=BivectorExpWorkProfile(
+                route=route,
+                bivector_width=request.inputs[0].layout.dim,
+                grade4_width=spec.layout((4,)).dim if route == "closed" and spec.n >= 4 else 0,
+                even_width=even.dim,
+                output_width=output.dim,
+                fixed_products=tuple(item.facts.work_profile for item in fixed if item is not None),
+                plain_products=tuple(item.facts.work_profile for item in plain),
+                scaled_products=tuple(item.facts.work_profile for item in scaled),
+                square_product=None if square is None else square.facts.work_profile,
+                plain_stage_widths=tuple(layout.dim for layout in taylor_layouts(spec, output, degree)[1:])
+                if route == "taylor"
+                else (),
+                scaled_stage_widths=tuple(layout.dim for layout in taylor_layouts(spec, even, degree)[1:])
+                if route == "taylor"
+                else (),
+            ),
+        )
     preparation = ExpPreparation(
         facts,
         left_product,
@@ -439,16 +471,22 @@ def _build_exp(request, route, preparation):
         )
         degree = 18 if request.dtype == torch.float64 else 12
 
+        def product_proxy(child):
+            # Preserve the eager-CPU partition heuristic's old P + indexed-P proxy exactly.
+            profile = child.facts.work_profile
+            return profile.bulk + (
+                profile.bulk if profile.route == "sparse" and profile.output > 1 and profile.bulk > 0 else 0
+            )
+
         def schedule_work(children):
-            return sum(child.facts.interactions + child.facts.indexed_reduction_terms for child in children)
+            return sum(product_proxy(child) for child in children)
 
         plain = preparation.polynomial_18 if degree == 18 else preparation.polynomial_12
         full = preparation.full_polynomial_18 if degree == 18 else preparation.full_polynomial_12
-        square_facts = preparation.square.facts
         taylor_work = (
             schedule_work(plain),
             schedule_work(full),
-            square_facts.interactions + square_facts.indexed_reduction_terms,
+            product_proxy(preparation.square),
         )
 
     return BivectorExpExecutor(
@@ -527,8 +565,9 @@ def _assess_action(request, route):
             norm = planner.router.select(norm_request, planner.policy, planner.limits, warn_selected=False)
             involution = _unary_child(planner, inputs, "grade_involution", request.dtype, request.device)
             reverse = _unary_child(planner, parameter, "reverse", request.dtype, request.device)
+    product_facts = ()
     if route == "vector_matrix":
-        facts, resources = _linear_action_structure(
+        generator_terms, resources = _linear_action_structure(
             inputs,
             output,
             generator_layout=parameter if grade == 2 else None,
@@ -537,15 +576,24 @@ def _assess_action(request, route):
         if grade == 1:
             resources = ResourceRequirements(resources.lanes, resources.pairs + 2 * spec.n**2 + spec.n)
     else:
-        product_facts = [
+        product_facts = tuple(
             child.facts for child in (left, right) if child is not None and isinstance(child.facts, ProductFacts)
-        ]
-        facts = ActionFacts(
-            product_interactions=sum(item.interactions for item in product_facts),
-            indexed_reduction_terms=sum(item.indexed_reduction_terms for item in product_facts),
-            exponential_route=None if exponential is None else exponential.route,
-            exponential_facts=None if exponential is None else exponential.facts,
         )
+        generator_terms = 0
+    facts = ActionFacts(
+        ActionWorkProfile(
+            route=route,
+            grade=grade,
+            generator_terms=generator_terms,
+            reflection_cells=spec.n**2 if route == "vector_matrix" and grade == 1 else 0,
+            vector_matrix_exp_order=spec.n**3 if route == "vector_matrix" and grade == 2 else 0,
+            lift=action_lift_profile(spec.n, inputs.grades, output.grades) if route == "vector_matrix" else None,
+            product_children=tuple(item.work_profile for item in product_facts),
+            exponential_child=None if exponential is None else exponential.facts.work_profile,
+            full_action_matrix_order=spec.dim**3 if route == "full_action_matrix" else 0,
+            full_action_cells=spec.dim**2 if route == "full_action_matrix" else 0,
+        )
+    )
     children = tuple(child for child in (exponential, reverse, left, right, norm, involution) if child is not None)
     resources = ResourceRequirements(
         max(resources.lanes, 0 if rotor is None else rotor.dim, 0 if middle is None else middle.dim),

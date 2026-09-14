@@ -36,7 +36,9 @@ def test_bivector_exp_closed_simple_matches_cpu_reference_on_basis_point():
 
 @pytest.mark.parametrize("signature", [(4, 0, 0), (5, 0, 0), (2, 2, 0), (3, 0, 1)])
 def test_bivector_exp_closed_biquadratic_matches_cpu_reference(signature):
-    algebra = AlgebraContext(*signature, device=DEVICE, dtype=torch.float64)
+    algebra = configured_algebra(
+        *signature, device=DEVICE, dtype=torch.float64, planning_policy=PreferRoute("bivector_exp", "closed")
+    )
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout(range(0, algebra.n + 1, 2))
     generator = torch.Generator(device=DEVICE).manual_seed(283)
@@ -73,7 +75,9 @@ def test_bivector_exp_closed_biquadratic_resolves_degenerate_derivative_limit(
     power_stop,
     atol,
 ):
-    algebra = AlgebraContext(2, 0, 2, device=DEVICE, dtype=dtype)
+    algebra = configured_algebra(
+        2, 0, 2, device=DEVICE, dtype=dtype, planning_policy=PreferRoute("bivector_exp", "closed")
+    )
     bivector_layout = algebra.layout((2,))
     deltas = torch.tensor([2.0**-power for power in range(power_start, power_stop)], dtype=dtype)
     values = torch.zeros(deltas.numel(), bivector_layout.dim, dtype=dtype)
@@ -109,7 +113,9 @@ def test_bivector_exp_closed_biquadratic_resolves_coalescing_complex_roots(
     power_stop,
     atol,
 ):
-    algebra = AlgebraContext(3, 1, 0, device=DEVICE, dtype=dtype)
+    algebra = configured_algebra(
+        3, 1, 0, device=DEVICE, dtype=dtype, planning_policy=PreferRoute("bivector_exp", "closed")
+    )
     bivector_layout = algebra.layout((2,))
     even_layout = algebra.layout((0, 2, 4))
     deltas = torch.tensor([2.0**-power for power in range(power_start, power_stop)], dtype=dtype)
@@ -304,7 +310,7 @@ def test_mps_closed_biquadratic_bivector_exp_executor_compiles_fullgraph():
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("angle", [128.0, 1024.0])
 def test_closed_large_elliptic_angle_has_correct_finite_vjp(n, dtype, angle):
-    a = AlgebraContext(n, dtype=dtype)
+    a = configured_algebra(n, dtype=dtype, planning_policy=PreferRoute("bivector_exp", "closed"))
     layout = a.layout((2,))
     output = a.layout(range(0, n + 1, 2))
     values = torch.zeros(1, layout.dim, dtype=dtype)

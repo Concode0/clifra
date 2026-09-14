@@ -38,17 +38,16 @@ def test_forced_action_root_leaves_exp_and_product_children_on_default_policy():
     )
 
 
-def test_action_metadata_uses_route_level_exterior_facts():
+def test_action_metadata_uses_authoritative_work_profile():
     case = _case("action", "versor")
     placement = ExecutionPlacement(selection=SelectionCase("forced_repository_private", "vector_matrix"))
     algebra, inputs, output, _ = construct_case(case, placement)
     metadata = planning_metadata(plan_case(algebra, inputs, output, case), case, placement)
 
     facts = metadata["structural_facts"]
-    assert "exterior_entries" in facts
-    assert "exterior_work" in facts
-    assert "minor_entries" not in facts
-    assert "determinant_work" not in facts
+    assert facts["work_profile"]["route"] == "vector_matrix"
+    assert facts["work_profile"]["lift"]["input_width"] > 0
+    assert "exterior_work" not in facts
 
 
 def test_forced_exp_root_records_normally_selected_product_children():
