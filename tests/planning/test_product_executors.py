@@ -59,22 +59,22 @@ def test_product_assessment_uses_combinatorics_without_enumeration(monkeypatch):
         output_layout=algebra.layout((1, 3)),
     )
     sparse = next(item for item in assessments if item.route == "sparse")
-    assert sparse.facts.interactions > 0
+    assert sparse.facts.work_profile.bulk > 0
 
 
 @pytest.mark.parametrize(
-    "op,forbidden_builder",
+    "n,op,forbidden_builder",
     [
-        ("geometric_product", "build_grade_product_plan_from_tree"),
-        ("wedge", "build_full_table_product_plan_from_request"),
+        (8, "geometric_product", "build_grade_product_plan_from_tree"),
+        (4, "wedge", "build_full_table_product_plan_from_request"),
     ],
 )
-def test_only_selected_product_route_constructs_buffers(op, forbidden_builder, monkeypatch):
+def test_only_selected_product_route_constructs_buffers(n, op, forbidden_builder, monkeypatch):
     def fail(*args, **kwargs):
         raise AssertionError("unselected route constructed buffers")
 
     monkeypatch.setattr(f"clifra.core._kernel.planning.product.{forbidden_builder}", fail)
-    AlgebraContext(4).plan_product(op=op)
+    AlgebraContext(n).plan_product(op=op)
 
 
 def test_sparse_route_survives_infeasible_dense_cartesian_size():

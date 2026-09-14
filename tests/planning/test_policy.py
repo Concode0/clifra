@@ -1,6 +1,5 @@
 import warnings
 from dataclasses import FrozenInstanceError, dataclass, replace
-from math import comb
 
 import pytest
 import torch
@@ -9,13 +8,13 @@ from clifra.core import AlgebraContext, ResourceLimits, TensorContract
 from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.planning.action import _linear_action_structure
 from clifra.core._kernel.planning.policy import (
-    ActionFacts,
     PlanCandidate,
     PolicyCoverageError,
     PolicyEvaluation,
     ProductFacts,
     select_policy_route,
 )
+from clifra.core._kernel.planning.work import ProductWorkProfile, action_lift_profile
 from clifra.core._kernel.providers import BuiltinProvider, action_execution_request
 from clifra.core.executors import ExecutorRequest
 from tests.planning._grade_plan_helpers import select_product_route
@@ -33,12 +32,12 @@ def candidate(route, interactions=1):
     algebra = AlgebraContext(2)
     contract = TensorContract.compact(algebra.layout())
     request = ExecutorRequest("product", "geometric_product", (contract, contract), contract, torch.float32, "cpu")
-    return PlanCandidate("product", route, request, ProductFacts(interactions))
+    return PlanCandidate("product", route, request, ProductFacts(ProductWorkProfile(route, interactions, 1)))
 
 
 def test_minimum_score_and_registration_order_ties():
     candidates = (candidate("first", 2), candidate("second", 1))
-    assert select_policy_route(ScoringPolicy(lambda c: c.facts.interactions), candidates).route == "second"
+    assert select_policy_route(ScoringPolicy(lambda c: c.facts.work_profile.bulk), candidates).route == "second"
     assert select_policy_route(ScoringPolicy(lambda c: 0), candidates).route == "first"
 
 
@@ -54,38 +53,29 @@ def test_nonfinite_policy_scores_rejected(score):
 
 
 def test_family_facts_are_immutable_and_nonnegative():
-    facts = ProductFacts(3, 2)
+    facts = ProductFacts(ProductWorkProfile("sparse", 3, 2))
     with pytest.raises(FrozenInstanceError):
-        facts.interactions = 4
+        facts.work_profile = ProductWorkProfile("sparse", 4, 2)
     with pytest.raises(ValueError, match="non-negative integer"):
-        ProductFacts(-1)
-    with pytest.raises(ValueError, match="non-negative integer"):
-        ActionFacts(exterior_work=-1)
+        ProductFacts(ProductWorkProfile("sparse", -1, 1))
 
 
-def test_action_facts_are_semantic_and_independent_of_prepared_backend():
+def test_action_lift_profile_is_semantic_and_independent_of_prepared_backend():
     algebra = AlgebraContext(8)
     layout = algebra.layout((0, 2, 4))
     generator = algebra.layout((2,))
-    cpu_facts, cpu_resources = _linear_action_structure(layout, layout, generator_layout=generator, device="cpu")
-    mps_facts, mps_resources = _linear_action_structure(layout, layout, generator_layout=generator, device="mps")
-
-    def direct_work(grade):
-        return sum(comb(8, step + 1) * comb(8, grade - step - 1) * (8 - grade + step + 1) for step in range(grade))
-
-    assert cpu_facts == mps_facts
+    cpu_terms, cpu_resources = _linear_action_structure(layout, layout, generator_layout=generator, device="cpu")
+    mps_terms, mps_resources = _linear_action_structure(layout, layout, generator_layout=generator, device="mps")
+    lift = action_lift_profile(8, layout.grades, layout.grades)
+    assert cpu_terms == mps_terms == 8 * 7
     assert cpu_resources != mps_resources
-    assert cpu_facts.generator_terms == 8 * 7
-    assert cpu_facts.exterior_entries == 1 + comb(8, 2) ** 2 + comb(8, 4) ** 2
-    assert cpu_facts.exterior_work == sum(
-        min(comb(8, grade) ** 2 * (2 if grade == 2 else grade**3), direct_work(grade)) for grade in (2, 4)
-    )
-    assert not hasattr(cpu_facts, "minor_entries")
-    assert not hasattr(cpu_facts, "determinant_work")
+    assert tuple(item.grade for item in lift.grades) == (2, 4)
+    assert lift.compound().full_matrix_cells == layout.dim**2
+    assert lift.direct().direct_terms > 0
 
-    vector_facts, _ = _linear_action_structure(algebra.layout((1,)), algebra.layout((1,)))
-    assert vector_facts.exterior_entries == 8**2
-    assert vector_facts.exterior_work == 0
+    vector_terms, _ = _linear_action_structure(algebra.layout((1,)), algebra.layout((1,)))
+    assert vector_terms == 0
+    assert action_lift_profile(8, (1,), (1,)).compound().dense_matvec_cells == 8**2
 
 
 def test_action_facts_with_nested_exp_are_device_independent_for_supported_placements():
@@ -138,8 +128,8 @@ def test_default_product_policy_prefers_pruning_and_is_device_independent():
 
 def test_unselected_large_route_does_not_warn():
     algebra = configured_algebra(
-        4,
-        resource_limits=ResourceLimits(warn_lanes=1000, warn_pairs=300, max_pairs=1000),
+        8,
+        resource_limits=ResourceLimits(warn_lanes=1000, warn_pairs=100_000, max_pairs=200_000),
     )
     with warnings.catch_warnings():
         warnings.simplefilter("error")

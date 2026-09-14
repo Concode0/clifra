@@ -28,6 +28,7 @@ from clifra.core._kernel.planning.layouts import ProductRequest
 from clifra.core._kernel.planning.policy import ProductFacts
 from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core._kernel.planning.tree import GradePlanTree
+from clifra.core._kernel.planning.work import product_work_profile
 from clifra.core.layout import AlgebraSpec
 from clifra.core.tensors import TensorContract
 
@@ -592,15 +593,23 @@ def assess_product_routes(
     return (
         ProductRouteAssessment(
             "full_table",
-            ProductFacts(full_table_pairs),
+            ProductFacts(
+                product_work_profile(
+                    "full_table",
+                    interactions=full_table_pairs,
+                    output_width=output_layout.dim,
+                    full_width=left_layout.spec.dim,
+                ),
+            ),
             ResourceRequirements(lanes, full_table_pairs),
             unavailable_reason=None if full_table_supported else "requires_canonical_full_layouts",
         ),
         ProductRouteAssessment(
             "sparse",
             ProductFacts(
-                sparse_pairs,
-                sparse_pairs if output_layout.dim > 1 and sparse_pairs > 0 else 0,
+                product_work_profile(
+                    "sparse", interactions=sparse_pairs, output_width=output_layout.dim, full_width=left_layout.spec.dim
+                ),
             ),
             # Interaction buffers and the pairwise lookup remain resident
             # together after construction, so both count toward the route bound.

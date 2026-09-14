@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping, Protocol
 
+import torch
+
+from clifra.core._kernel.planning.work import ActionWorkProfile, BivectorExpWorkProfile, ProductWorkProfile
 from clifra.core.executors import ExecutorRequest
 
 
@@ -21,70 +24,27 @@ def _count(value, name: str) -> int:
 
 @dataclass(frozen=True)
 class ProductFacts:
-    """Structural execution counts for one product route."""
+    """Authoritative structural profile for one product route."""
 
-    interactions: int
-    indexed_reduction_terms: int = 0
+    work_profile: ProductWorkProfile
 
     def __post_init__(self) -> None:
-        for name in ("interactions", "indexed_reduction_terms"):
-            object.__setattr__(self, name, _count(getattr(self, name), name))
+        _count(self.work_profile.bulk, "product.bulk")
+        _count(self.work_profile.output, "product.output")
 
 
 @dataclass(frozen=True)
 class BivectorExpFacts:
-    """Product structure used by one bivector-exponential regime."""
+    """Selected child structure and equations for one exponential route."""
 
-    fixed_product_interactions: int = 0
-    fixed_reduction_terms: int = 0
-    polynomial_interactions: int = 0
-    polynomial_reduction_terms: int = 0
-    scaled_polynomial_interactions: int = 0
-    scaled_polynomial_reduction_terms: int = 0
-
-    def __post_init__(self) -> None:
-        for name in (
-            "fixed_product_interactions",
-            "fixed_reduction_terms",
-            "polynomial_interactions",
-            "polynomial_reduction_terms",
-            "scaled_polynomial_interactions",
-            "scaled_polynomial_reduction_terms",
-        ):
-            object.__setattr__(self, name, _count(getattr(self, name), name))
+    work_profile: BivectorExpWorkProfile
 
 
 @dataclass(frozen=True)
 class ActionFacts:
-    """Route-level exterior-action and selected child-route structure.
+    """Authoritative structural profile for one versor-action route."""
 
-    ``exterior_entries`` counts a *conceptual* dense grade-preserving map;
-    it does not imply materialization. ``exterior_work`` is the smaller
-    device-independent structural count for compound and direct formulations,
-    not the work of the prepared backend kernel.
-    """
-
-    generator_terms: int = 0
-    exterior_entries: int = 0
-    exterior_work: int = 0
-    product_interactions: int = 0
-    indexed_reduction_terms: int = 0
-    exponential_route: str | None = None
-    exponential_facts: BivectorExpFacts | None = None
-
-    def __post_init__(self) -> None:
-        for name in (
-            "generator_terms",
-            "exterior_entries",
-            "exterior_work",
-            "product_interactions",
-            "indexed_reduction_terms",
-        ):
-            object.__setattr__(self, name, _count(getattr(self, name), name))
-        if (self.exponential_route is None) != (self.exponential_facts is None):
-            raise ValueError("action exponential route and facts must be provided together")
-        if self.exponential_route is not None and not self.exponential_route:
-            raise ValueError("action exponential route must be non-empty")
+    work_profile: ActionWorkProfile
 
 
 PlanningFacts = ProductFacts | ActionFacts | BivectorExpFacts | None
@@ -134,21 +94,74 @@ class PlanningPolicy(Protocol):
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation: ...
 
 
-def _exp_work(route: str, request, facts: BivectorExpFacts) -> int:
-    """Return one deliberately coarse structural comparison within exp routes."""
-    if route == "closed":
-        return facts.fixed_product_interactions + facts.fixed_reduction_terms
-    if route == "left_matrix_exp":
-        order = 1 << max(request.output.spec.n - 1, 0)
-        return facts.fixed_product_interactions + facts.fixed_reduction_terms + order**3
-    if route == "taylor":
-        # Scaling is input-dependent. Its fixed 16-step envelope is a safety
-        # bound, not an assumption that every call performs sixteen squarings.
-        return max(
-            facts.polynomial_interactions + facts.polynomial_reduction_terms,
-            facts.scaled_polynomial_interactions + facts.scaled_polynomial_reduction_terms,
+def _product_child_work(profile: ProductWorkProfile) -> int:
+    return profile.bulk + profile.output
+
+
+def _equation_work(equation) -> float:
+    return (
+        sum(call.calls * _product_child_work(call.profile) for call in equation.products)
+        + equation.elementwise_cells
+        + equation.matrix_exp_order
+    )
+
+
+def _exp_profile_score(profile: BivectorExpWorkProfile) -> float:
+    if profile.route == "closed":
+        return _equation_work(profile.closed())
+    if profile.route == "left_matrix_exp":
+        return _equation_work(profile.left_matrix_exp())
+    if profile.route == "taylor":
+        if profile.square_product is None:
+            raise ValueError("Taylor work requires a selected square product")
+        plain = _equation_work(profile.taylor_plain())
+        scaled_base = (
+            sum(_product_child_work(child) for child in profile.scaled_products)
+            + sum(profile.scaled_stage_widths)
+            + profile.output_width
         )
-    raise ValueError(f"unknown bivector exponential route {route!r}")
+        square = _product_child_work(profile.square_product) + profile.even_width
+        # One square-work basis charge; neither branch nor square count is observed by planning.
+        return 0.5 * plain + 0.5 * scaled_base + square
+    raise ValueError(f"unknown bivector exponential route {profile.route!r}")
+
+
+def _small_matrix_exp_regime(request, profile: BivectorExpWorkProfile) -> bool:
+    spec = request.output.spec
+    stabilized_closed = spec.r > 0 or spec.p > 0 and spec.q > 0
+    return profile.even_width == 8 and (request.dtype == torch.float32 or stabilized_closed)
+
+
+def _action_profile_score(profile: ActionWorkProfile, request: ExecutorRequest) -> float:
+    products = profile.product_children
+    score = (
+        profile.generator_terms
+        + profile.reflection_cells
+        + 0.2 * (profile.vector_matrix_exp_order + profile.full_action_matrix_order)
+        + 100 * sum(child.bulk for child in products)
+        + sum(child.output for child in products)
+        + profile.full_action_cells
+    )
+    if profile.exponential_child is not None:
+        score += _exp_profile_score(profile.exponential_child)
+    if profile.lift is not None:
+        # This endpoint is a static score basis, not the executor's device-selected grade set.
+        lift = profile.lift.direct() if profile.lift.grades else profile.lift.compound()
+        score += 20 * (
+            lift.compound_minor_work
+            + lift.direct_terms
+            + lift.direct_reductions
+            + lift.full_matrix_cells
+            + lift.dense_matvec_cells
+            + lift.block_matvec_cells
+            + lift.grade1_matvec_cells
+            + lift.output_assembly_cells
+        )
+    if profile.route == "rotor_product":
+        score += profile.exponential_child.even_width + products[0].output + request.output.layout.dim
+    elif profile.route == "full_action_matrix":
+        score += request.output.spec.dim + request.inputs[0].layout.dim
+    return score
 
 
 @dataclass(frozen=True)
@@ -158,36 +171,19 @@ class DefaultPolicy:
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation:
         family, route, request, facts = candidate.family, candidate.route, candidate.request, candidate.facts
         if family == "product":
-            score = facts.interactions + facts.indexed_reduction_terms
+            profile = facts.work_profile
+            score = profile.bulk + profile.output if route == "sparse" else 0.5 * profile.bulk + 32 * profile.output
             return PolicyEvaluation(score, "structural_product_work")
         if family == "bivector_exp":
-            if route == "closed":
-                return PolicyEvaluation(0.0, "closed_domain")
-            return PolicyEvaluation(1.0 + _exp_work(route, request, facts), "structural_exp_work")
+            profile = facts.work_profile
+            if route == "left_matrix_exp" and _small_matrix_exp_regime(request, profile):
+                # Explicit selection preference at the first biquadratic/small-matrix crossover.
+                return PolicyEvaluation(0.0, "small_matrix_exp_regime")
+            return PolicyEvaluation(_exp_profile_score(profile), "structural_exp_work")
         if family == "action" and request.operation == "versor":
-            spec = request.output.spec
-            inputs, output = request.inputs[0].layout, request.output.layout
-            exp_work = (
-                0
-                if facts.exponential_facts is None
-                else _exp_work(facts.exponential_route, request, facts.exponential_facts)
-            )
-            if route == "vector_matrix":
-                matrix_work = spec.n**3 if request.grade == 2 else spec.n**2
-                score = (
-                    facts.generator_terms
-                    + matrix_work
-                    + facts.exterior_entries
-                    + facts.exterior_work
-                    + inputs.dim * output.dim
-                )
-            elif route == "rotor_product":
-                score = exp_work + facts.product_interactions + facts.indexed_reduction_terms
-            elif route == "full_action_matrix":
-                score = exp_work + spec.dim**3 + 3 * spec.dim**2
-            else:
+            if route not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
                 return PolicyEvaluation(None, "unknown_builtin_route")
-            return PolicyEvaluation(score, "structural_action_work")
+            return PolicyEvaluation(_action_profile_score(facts.work_profile, request), "structural_action_work")
         scores = {
             ("action", "graded_linear"): 0.0,
             ("action", "full_action_matrix"): 0.0,
