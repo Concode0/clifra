@@ -43,6 +43,12 @@ class Config:
     field_start: float = 0.35
     field_end: float = 6.35
     quadrupole_radius: float = 0.18
+    gate_aperture_soft_limit: float = 0.92
+    target_region_soft_limit: float = 0.88
+    gate_aperture_slope: float = 7.0
+    target_region_slope: float = 8.0
+    reach_margin: float = 0.04
+    monotonic_step_floor: float = 0.014
     optimization_steps: int = 520
     learning_rate: float = 0.055
     minimum_learning_rate_fraction: float = 0.10
@@ -54,9 +60,7 @@ class Config:
     live: bool = False
     weights: dict[str, float] = field(
         default_factory=lambda: {
-            "gate_center": 34.0,
             "gate_aperture": 350.0,
-            "target_center": 220.0,
             "target_region": 25.0,
             "target_spread": 180.0,
             "target_direction": 10.0,
@@ -366,9 +370,7 @@ class BeamlineObjective:
         gate_yz = gate_crossings[..., 2:4]
         target_yz = target_crossing[0, ..., 2:4]
         final_u = target_velocity[0]
-        gate_center_error = gate_yz.mean(dim=1) - self.gate_centers
         gate_radius = _elliptical_radius(gate_yz, self.gate_centers[:, None, :], self.gate_radii[:, None, :])
-        target_center_error = target_yz.mean(dim=0) - self.target_center
         target_spread = target_yz - target_yz.mean(dim=0)
         target_radius = _elliptical_radius(target_yz, self.target_center, self.target_radii)
         transverse_slope = final_u[..., 2:4] / final_u[..., 1:2].clamp_min(0.2)
@@ -378,17 +380,17 @@ class BeamlineObjective:
         if not isinstance(sampler, BeamlineFieldSampler):
             raise TypeError("BeamlineObjective requires BeamlineFieldSampler")
         controls = sampler.control_values(field_model.latent_coordinates)
+        gate_excess = self.config.gate_aperture_slope * (gate_radius - self.config.gate_aperture_soft_limit)
+        target_excess = self.config.target_region_slope * (target_radius - self.config.target_region_soft_limit)
         components = {
-            "gate_center": gate_center_error.square().mean(),
-            "gate_aperture": F.softplus(7.0 * (gate_radius - 0.92)).square().mean() / 49.0,
-            "target_center": target_center_error.square().mean(),
-            "target_region": F.softplus(8.0 * (target_radius - 0.88)).square().mean() / 64.0,
+            "gate_aperture": F.softplus(gate_excess).square().mean() / self.config.gate_aperture_slope**2,
+            "target_region": F.softplus(target_excess).square().mean() / self.config.target_region_slope**2,
             "target_spread": target_spread.square().mean(),
             "target_direction": transverse_slope.square().mean(),
             "target_energy": (final_u[..., 0].mean() - self.config.target_gamma).square(),
             "energy_spread": final_u[..., 0].var(unbiased=False),
-            "reach": F.relu(self.beamline.target_x + 0.04 - downstream_x).square().mean(),
-            "monotonic": F.relu(0.014 - delta_x).square().mean(),
+            "reach": F.relu(self.beamline.target_x + self.config.reach_margin - downstream_x).square().mean(),
+            "monotonic": F.relu(self.config.monotonic_step_floor - delta_x).square().mean(),
             "field_strength": controls.square().mean(),
             "field_smoothness": (controls[1:] - controls[:-1]).square().mean(),
             "field_edges": controls[[0, -1]].square().mean(),
@@ -423,7 +425,7 @@ def optimize(
     best_parameters = field_model.latent_coordinates.detach().clone()
     print(
         f"[{0:4d}/{config.optimization_steps}] loss={initial_state.loss.item():.4e} "
-        f"gate={math.sqrt(initial_state.components['gate_center'].item()):.4f} "
+        f"aperture={math.sqrt(initial_state.components['gate_aperture'].item()):.4f} "
         f"focus={math.sqrt(initial_state.components['target_spread'].item()):.4f} "
         f"gamma={initial_state.target_velocity[:, 0].mean().item():.3f}"
     )
@@ -454,7 +456,7 @@ def optimize(
             target_rms = math.sqrt(float(state.components["target_spread"].detach()))
             print(
                 f"[{step:4d}/{config.optimization_steps}] loss={state.loss.item():.4e} "
-                f"gate={math.sqrt(state.components['gate_center'].item()):.4f} "
+                f"aperture={math.sqrt(state.components['gate_aperture'].item()):.4f} "
                 f"focus={target_rms:.4f} gamma={state.target_velocity[:, 0].mean().item():.3f}"
             )
     with torch.no_grad():
@@ -477,9 +479,7 @@ def _trajectory_metrics(
         objective.gate_radii[:, None, :],
     )
     target_yz = state.target_crossing[..., 2:4]
-    target_error = target_yz - objective.target_center
     target_elliptical_radius = _elliptical_radius(target_yz, objective.target_center, objective.target_radii)
-    target_rms = torch.sqrt(target_error.square().sum(dim=-1).mean())
     centered = target_yz - target_yz.mean(dim=0)
     spread_rms = torch.sqrt(centered.square().sum(dim=-1).mean())
     invariant = minkowski_norm_squared(state.trajectory.four_velocities)
@@ -491,9 +491,7 @@ def _trajectory_metrics(
         "gate_max_elliptical_radius": gate_radius.max(dim=1).values,
         "gate_pass_fraction": (gate_radius <= 1.0).to(gate_radius.dtype).mean(dim=1),
         "target_centroid_error": torch.linalg.vector_norm(target_yz.mean(dim=0) - objective.target_center),
-        "target_rms_error": target_rms,
         "target_rms_spread": spread_rms,
-        "target_max_radius": torch.linalg.vector_norm(target_error, dim=-1).max(),
         "target_max_elliptical_radius": target_elliptical_radius.max(),
         "target_pass_fraction": (target_elliptical_radius <= 1.0).to(target_yz.dtype).mean(),
         "target_transverse_slope_rms": torch.sqrt(slopes.square().sum(dim=-1).mean()),
@@ -662,6 +660,12 @@ def evaluate(
             "field_control_sites": config.control_sites,
             "field_parameterization": "C1 compact two-site cubic interpolation along x",
             "crossing_strategy": "first forward crossing with a fractional in-step Lorentz rotor",
+            "intermediate_gate_centroid_equality_objective": False,
+            "intermediate_gate_objective": "softened elliptical aperture penalty; centroid errors are diagnostics",
+            "target_centroid_equality_objective": False,
+            "target_objective": "softened target-region penalty and focus; centroid error is diagnostic",
+            "gate_aperture_soft_limit": config.gate_aperture_soft_limit,
+            "target_region_soft_limit": config.target_region_soft_limit,
             "target_gamma": config.target_gamma,
         },
         "optimization": {
@@ -700,13 +704,12 @@ def evaluate(
         "limitations": [
             "The prescribed compact field is a synthetic control model rather than a Maxwell or fringe-field solution.",
             "Three resolutions demonstrate observed sensitivity but do not establish a formal convergence order.",
-            "Apertures and target are idealized hard geometric regions in natural units.",
+            "Apertures and target are idealized geometric regions in natural units; optimization uses smooth boundary penalties.",
         ],
     }
     report["checks"] = {
         "optimized beamline is feasible": (
             min(final_metrics["gate_pass_fraction"]) >= 0.999
-            and final_metrics["target_centroid_error"] < 0.035
             and final_metrics["target_rms_spread"] < 0.060
             and final_metrics["target_pass_fraction"] >= 0.999
             and abs(final_metrics["target_gamma_mean"] - config.target_gamma) < 0.035

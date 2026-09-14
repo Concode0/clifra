@@ -483,10 +483,10 @@ def build_sparse_constraints(config: Config, scan: Scan) -> SparseConstraints:
         selected_lines.append(_stratified_indices(candidates, config.line_constraints_per_feature))
     plane_indices = torch.cat(selected_planes)
     line_indices = torch.cat(selected_lines)
-    all_candidates = torch.arange(scan.world_points.shape[0], device=scan.world_points.device)
+    all_candidates = torch.arange(scan.measured_points.shape[0], device=scan.measured_points.device)
     anchor_indices = _stratified_indices(all_candidates, config.anchor_constraints)
     indices = torch.unique(torch.cat((plane_indices, line_indices, anchor_indices)), sorted=True)
-    row_for_scan = torch.full((scan.world_points.shape[0],), -1, device=indices.device, dtype=torch.long)
+    row_for_scan = torch.full((scan.measured_points.shape[0],), -1, device=indices.device, dtype=torch.long)
     row_for_scan[indices] = torch.arange(indices.numel(), device=indices.device)
     return SparseConstraints(
         indices=indices,
@@ -495,6 +495,8 @@ def build_sparse_constraints(config: Config, scan: Scan) -> SparseConstraints:
         anchor_rows=row_for_scan[anchor_indices],
         plane_ids=scan.plane_ids[plane_indices],
         line_ids=scan.line_ids[line_indices],
+        # Only these surveyed points enter the estimator; the full world scan
+        # and the analytic trajectory remain evaluation/synthesis data.
         anchor_targets=scan.world_points[anchor_indices],
     )
 
@@ -691,17 +693,15 @@ def optimize(
     return OptimizationResult(history, best_step, best_loss, final_history_loss)
 
 
-def evaluate_pose_field(
-    field_model: InvertibleBivectorField, times: torch.Tensor, *, axis_length: float = 0.34
-) -> tuple[torch.Tensor, torch.Tensor]:
+def evaluate_pose_field(field_model: InvertibleBivectorField, times: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     probes = times.new_zeros(times.shape[0], 4, 3)
-    probes[:, 1, 0] = axis_length
-    probes[:, 2, 1] = axis_length
-    probes[:, 3, 2] = axis_length
+    probes[:, 1, 0] = 1.0
+    probes[:, 2, 1] = 1.0
+    probes[:, 3, 2] = 1.0
     labels = times[:, None, :].expand(times.shape[0], 4, 1)
     transformed = field_model(CoordinateFieldInput(probes, sample_coordinates=labels, domain_shape=(4,)))
     origins = transformed[:, 0]
-    rotations = (transformed[:, 1:] - origins[:, None, :]).transpose(-1, -2) / axis_length
+    rotations = (transformed[:, 1:] - origins[:, None, :]).transpose(-1, -2)
     return origins, rotations
 
 
@@ -737,7 +737,7 @@ def _scan_evaluation(
     corrected_plane, corrected_line = _geometry_residuals(pga, scene, scan, corrected)
     oracle_plane, oracle_line = _geometry_residuals(pga, scene, scan, oracle_corrected)
     metrics = {
-        "returns": int(scan.world_points.shape[0]),
+        "returns": int(scan.measured_points.shape[0]),
         "raw_plane_rmse": float(raw_plane.square().mean().sqrt()),
         "corrected_plane_rmse": float(corrected_plane.square().mean().sqrt()),
         "oracle_plane_rmse": float(oracle_plane.square().mean().sqrt()),
@@ -764,7 +764,7 @@ def evaluate(
     optimization: OptimizationResult,
 ) -> tuple[dict[str, Any], dict[str, torch.Tensor]]:
     dense_t = torch.linspace(
-        0.0, 1.0, config.dense_times, device=scan.world_points.device, dtype=scan.world_points.dtype
+        0.0, 1.0, config.dense_times, device=scan.measured_points.device, dtype=scan.measured_points.dtype
     ).unsqueeze(-1)
     with torch.no_grad():
         primary, corrected = _scan_evaluation(learned, truth, pga, scene, scan)
@@ -797,14 +797,16 @@ def evaluate(
         "algebra": "Cl(3,0,1)",
         "signature": "+++0",
         "problem": {
-            "scan_returns": int(scan.world_points.shape[0]),
-            "sparse_constraints": int(constraints.indices.numel()),
-            "plane_constraints": int(constraints.plane_rows.numel()),
-            "line_constraints": int(constraints.line_rows.numel()),
-            "anchor_constraints": int(constraints.anchor_rows.numel()),
+            "scan_returns": int(scan.measured_points.shape[0]),
+            "optimization_returns": int(constraints.indices.numel()),
+            "plane_correspondences": int(constraints.plane_rows.numel()),
+            "line_correspondences": int(constraints.line_rows.numel()),
+            "surveyed_point_anchors": int(constraints.anchor_rows.numel()),
             "truth_representation": "independent analytic matrix trajectory",
             "estimator_representation": "normalized Gaussian-RBF PGA motor field",
-            "truth_available_to_optimizer": False,
+            "analytic_trajectory_available_to_optimizer": False,
+            "surveyed_anchor_targets_available_to_optimizer": True,
+            "map_feature_correspondences_supplied": True,
         },
         "optimization": {
             "algorithm": "Adam with cosine learning-rate decay, then L-BFGS",
@@ -831,6 +833,7 @@ def evaluate(
         },
         "limitations": [
             "Map-feature correspondences and surveyed anchors are supplied in the synthetic scene.",
+            "Plane/line incidences alone leave the late scan locally pose-underdetermined; anchors support dense trajectory recovery.",
             "Sensor noise is independent Gaussian noise and the environment is static.",
             "The RBF estimator approximates, but does not share, the analytic truth representation.",
         ],
@@ -999,7 +1002,7 @@ def print_report(report: dict[str, Any]) -> None:
     )
     print(
         f"optimization best {optimization['best_loss']:.3e} at {optimization['best_step']} | "
-        f"final {optimization['final_history_loss']:.3e} | {problem['sparse_constraints']} constraints"
+        f"final {optimization['final_history_loss']:.3e} | {problem['optimization_returns']} selected returns"
     )
     print()
     for name, passed in report["checks"].items():
@@ -1051,7 +1054,7 @@ def run(config: Config = Config()) -> dict[str, Any]:
     with torch.no_grad():
         initial_state = objective(learned)
     print(
-        f"setup         {scan.world_points.shape[0]} timed returns | {constraints.indices.numel()} sparse constraints | "
+        f"setup         {scan.measured_points.shape[0]} timed returns | {constraints.indices.numel()} selected returns | "
         f"{config.rbf_controls} RBF controls | seed {config.seed}"
     )
     view = LiveView(scene, scan) if config.live else None

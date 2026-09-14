@@ -14,7 +14,14 @@ Eleven longitudinal control sites parameterize six field channels with local
 \(C^1\) cubic interpolation along the beamline. The optimization uses 25
 particles. Its objective combines aperture and target geometry, focusing,
 direction and energy terms, forward-motion constraints, and compact field
-regularization.
+regularization. There are no separate centroid-equality losses for the
+intermediate apertures or target. Softened aperture and target-region penalties
+favor interior passage, while focusing, direction, and energy terms shape the
+downstream bunch. The region centers define those penalties, but gate and target
+centroid errors are diagnostics rather than acceptance limits.
+The softened penalties use normalized-radius limits of 0.92 at the gates and
+0.88 at the target; acceptance checks require passage inside the actual
+unit-radius regions.
 
 The restored field is then evaluated without retraining on an off-grid
 \(9\times9\) transverse phase-space grid containing 81 held-out particles.
@@ -23,17 +30,17 @@ proper-time discretization.
 
 | Quantity | Optimized / held-out result |
 | --- | ---: |
-| Optimized gate max normalized radii | 0.765, 0.771, 0.699 |
-| Held-out gate max normalized radii | 0.838, 0.754, 0.851 |
+| Optimized gate max normalized radii | 0.687, 0.674, 0.682 |
+| Held-out gate max normalized radii | 0.743, 0.687, 0.878 |
 | Held-out target pass fraction | 100% |
-| Held-out target max normalized radius | 0.683 |
-| Held-out target RMS spread | 31.7 mm |
-| Held-out target centroid error | 11.8 mm |
-| Held-out mean \(\gamma\) | 1.659 |
-| Held-out mass-shell max error | \(5.1\times10^{-14}\) |
+| Held-out target max normalized radius | 0.829 |
+| Held-out target RMS spread | 28.3 mm |
+| Held-out target centroid error (diagnostic) | 25.2 mm |
+| Held-out mean \(\gamma\) | 1.650 |
+| Held-out mass-shell max error | \(4.8\times10^{-14}\) |
 
 Successive crossing differences decrease under refinement. From \(h/2\) to
-\(h/4\), the held-out RMS change is 3.59 mm at the gates and 2.94 mm at the
+\(h/4\), the held-out RMS change is 3.88 mm at the gates and 3.34 mm at the
 target. The refinement is reported as observed convergence behavior rather than
 as a formal convergence-order estimate.
 
@@ -43,12 +50,12 @@ Recorded default run summary:
 
 ```text
 setup         25 optimization particles | 11 field sites | 144 steps at h=0.042
-[   0/520] loss=2.9384e+03 gate=0.3287 focus=0.1556 gamma=1.539
-[ 520/520] loss=2.9677e-01 gate=0.0386 focus=0.0234 gamma=1.656
-validation   81 held-out particles | target 100.0% | spread 31.67 mm | centroid 11.85 mm
-refinement   target ΔRMS 5.45→2.94 mm | gate ΔRMS 7.25→3.59 mm
-numerical    gamma 1.6590 | mass shell 5.1e-14
-optimization best 2.861e-01 at 516 | final 2.968e-01
+[   0/520] loss=2.8683e+03 aperture=1.9907 focus=0.1556 gamma=1.539
+[ 520/520] loss=1.3227e-01 aperture=0.0099 focus=0.0201 gamma=1.650
+validation   81 held-out particles | target 100.0% | spread 28.31 mm | centroid 25.23 mm
+refinement   target ΔRMS 6.26→3.34 mm | gate ΔRMS 7.90→3.88 mm
+numerical    gamma 1.6498 | mass shell 4.8e-14
+optimization best 1.323e-01 at 520 | final 1.323e-01
 ```
 
 ## Run

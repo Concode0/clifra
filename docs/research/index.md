@@ -41,8 +41,9 @@ The examples use the same basic construction in three different geometries.
 ### [Sparse-Constraint Continuum Threading](sparse_continuum_threading.md)
 
 A material-coordinate field in \(Cl(4,1)\) is fitted from three gate poses and
-one tip pose. The optimized field is then evaluated on a much denser continuum
-discretization without retraining.
+one tip pose. The predicted centerline supplies gate crossings without a
+material-to-gate assignment. The field is then evaluated on a much denser
+continuum discretization without retraining.
 
 ### [Continuous-Time PGA LiDAR Deskewing](pga-lidar-deskewing.md)
 

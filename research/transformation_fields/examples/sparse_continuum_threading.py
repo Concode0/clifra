@@ -37,6 +37,8 @@ class Config:
     surface_samples: int = 4
     dense_sections: int = 180
     dense_surface_samples: int = 12
+    # Fixed undeformed rod length, independent of any gate-to-material assignment.
+    robot_length: float = 1.4829312322619825
     robot_radius: float = 0.014
     rbf_controls: int = 14
     rbf_length_scale: float = 0.115
@@ -88,7 +90,6 @@ class Scene:
     """Sparse gate, tip, and obstacle geometry."""
 
     rings: tuple[RingObstacle, ...]
-    gate_s: torch.Tensor
     gate_centers: torch.Tensor
     gate_normals: torch.Tensor
     tip_position: torch.Tensor
@@ -180,31 +181,6 @@ def build_scene(config: Config, *, device: torch.device, dtype: torch.dtype) -> 
         )
     )
 
-    # The Hermite sketch assigns material gate identities and total rod arc length.
-    pieces: list[torch.Tensor] = []
-    for index in range(knots.shape[0] - 1):
-        p0, p1 = knots[index], knots[index + 1]
-        t = torch.linspace(0.0, 1.0, 321, device=device, dtype=dtype)
-        chord = torch.linalg.vector_norm(p1 - p0)
-        m0 = 0.72 * chord * directions[index]
-        m1 = 0.72 * chord * directions[index + 1]
-        t2, t3 = t.square(), t.pow(3)
-        xyz = (
-            (2.0 * t3 - 3.0 * t2 + 1.0)[:, None] * p0
-            + (t3 - 2.0 * t2 + t)[:, None] * m0
-            + (-2.0 * t3 + 3.0 * t2)[:, None] * p1
-            + (t3 - t2)[:, None] * m1
-        )
-        pieces.append(xyz if index == 0 else xyz[1:])
-    construction_curve = torch.cat(pieces)
-    segment_length = torch.linalg.vector_norm(construction_curve[1:] - construction_curve[:-1], dim=-1)
-    cumulative = torch.cat((segment_length.new_zeros(1), torch.cumsum(segment_length, dim=0)))
-    robot_length = float(cumulative[-1].item())
-    construction_s = cumulative / cumulative[-1]
-    gate_s = torch.stack(
-        [construction_s[torch.linalg.vector_norm(construction_curve - point, dim=-1).argmin()] for point in knots[1:-1]]
-    )
-
     tip_x = directions[-1]
     world_z = tip_x.new_tensor([0.0, 0.0, 1.0])
     tip_y0 = _normalize(torch.linalg.cross(world_z, tip_x, dim=-1))
@@ -226,25 +202,17 @@ def build_scene(config: Config, *, device: torch.device, dtype: torch.dtype) -> 
     )
     return Scene(
         rings=rings,
-        gate_s=gate_s,
         gate_centers=knots[1:-1],
         gate_normals=directions[1:-1],
         tip_position=knots[-1],
         tip_frame=tip_frame,
-        robot_length=robot_length,
+        robot_length=config.robot_length,
     )
-
-
-def _material_grid(section_count: int, gate_s: torch.Tensor) -> torch.Tensor:
-    values = torch.linspace(0.0, 1.0, section_count, device=gate_s.device, dtype=gate_s.dtype)
-    for gate in gate_s:
-        values[torch.argmin(torch.abs(values - gate))] = gate
-    return torch.sort(values).values
 
 
 def build_robot(section_count: int, surface_count: int, scene: Scene, config: Config) -> RobotSamples:
     """Sample a cylinder; every point on a section shares one material s."""
-    s = _material_grid(section_count, scene.gate_s)
+    s = torch.linspace(0.0, 1.0, section_count, device=scene.gate_centers.device, dtype=scene.gate_centers.dtype)
     centers = torch.stack((scene.robot_length * s, torch.zeros_like(s), torch.zeros_like(s)), dim=-1)
     angle = torch.arange(surface_count, device=s.device, dtype=s.dtype) * (2.0 * math.pi / surface_count)
     offsets = torch.stack(
@@ -272,14 +240,6 @@ def torus_clearance(points: torch.Tensor, scene: Scene, robot_radius: float) -> 
     radial = torch.sqrt((relative.square().sum(dim=-1) - axial.square()).clamp_min(torch.finfo(points.dtype).eps))
     distance_to_circle = torch.sqrt((radial - major).square() + axial.square() + torch.finfo(points.dtype).eps)
     return distance_to_circle - tube - float(robot_radius)
-
-
-def centerline_tangents(points: torch.Tensor) -> torch.Tensor:
-    tangent = torch.empty_like(points)
-    tangent[..., 0, :] = points[..., 1, :] - points[..., 0, :]
-    tangent[..., -1, :] = points[..., -1, :] - points[..., -2, :]
-    tangent[..., 1:-1, :] = points[..., 2:, :] - points[..., :-2, :]
-    return _normalize(tangent)
 
 
 def axial_strain(points: torch.Tensor, robot: RobotSamples) -> torch.Tensor:
@@ -343,23 +303,56 @@ def build_field(config: Config, *, device: torch.device, dtype: torch.dtype) -> 
     )
 
 
+def current_gate_crossings(
+    centers: torch.Tensor, section_s: torch.Tensor, scene: Scene
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Find the first forward centerline crossing of each physical gate plane.
+
+    Segment selection is detached. Position and material-coordinate interpolation
+    within the selected segment remain differentiable.
+    """
+    relative = centers[:, None, :] - scene.gate_centers[None, :, :]
+    signed = (relative * scene.gate_normals[None, :, :]).sum(dim=-1).transpose(0, 1)
+    before, after = signed[:, :-1], signed[:, 1:]
+    eps = 32.0 * torch.finfo(centers.dtype).eps
+    forward = (before.detach() <= 0.0) & (after.detach() >= 0.0) & ((after - before).detach() > eps)
+    valid = forward.any(dim=-1)
+    first = forward.long().argmax(dim=-1)
+    fallback = torch.minimum(before.detach().abs(), after.detach().abs()).argmin(dim=-1)
+    left = torch.where(valid, first, fallback)
+
+    p0, p1 = centers[left], centers[left + 1]
+    d0 = ((p0 - scene.gate_centers) * scene.gate_normals).sum(dim=-1)
+    d1 = ((p1 - scene.gate_centers) * scene.gate_normals).sum(dim=-1)
+    denominator = d1 - d0
+    safe_denominator = torch.where(
+        denominator.abs() < eps,
+        torch.where(denominator < 0.0, -eps, eps),
+        denominator,
+    )
+    fraction = (-d0 / safe_denominator).clamp(0.0, 1.0)
+    crossing = p0 + fraction[:, None] * (p1 - p0)
+    tangent = _normalize(p1 - p0)
+    material_s = section_s[left] + fraction * (section_s[left + 1] - section_s[left])
+    return crossing, tangent, material_s, valid
+
+
 def geometry_metrics(
     final: torch.Tensor,
     robot: RobotSamples,
     scene: Scene,
-    gate_indices: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
     centers = final[..., 0, :]
     frames = section_frame(final)
     tip_dots = (frames[-1] * scene.tip_frame).sum(dim=-1).clamp(-1.0, 1.0)
-    gate_tangent = centerline_tangents(centers)[gate_indices]
+    gate_crossing, gate_tangent, _, _ = current_gate_crossings(centers, robot.section_s, scene)
     gate_dot = (gate_tangent * scene.gate_normals).sum(dim=-1).clamp(-1.0, 1.0)
     strain = axial_strain(centers, robot)
     curvature = discrete_curvature(centers)
     return {
         "tip_position_error": torch.linalg.vector_norm(centers[-1] - scene.tip_position),
         "tip_orientation_error": torch.acos(tip_dots).amax(),
-        "gate_offset": torch.linalg.vector_norm(centers[gate_indices] - scene.gate_centers, dim=-1).amax(),
+        "gate_offset": torch.linalg.vector_norm(gate_crossing - scene.gate_centers, dim=-1).amax(),
         "gate_orientation_error": torch.acos(gate_dot).amax(),
         "minimum_clearance": torus_clearance(centers, scene, robot.radius).amin(),
         "maximum_axial_strain": strain.abs().amax(),
@@ -373,15 +366,13 @@ class SparseThreadingObjective:
         self.config = config
         self.robot = robot
         self.scene = scene
-        self.gate_indices = torch.stack([torch.argmin(torch.abs(robot.section_s - value)) for value in scene.gate_s])
 
     def __call__(self, field_model: InvertibleBivectorField) -> FitState:
         # A shared material s gives every point on a section the same composed action.
         final = field_model(self.robot.field_input)
         centers = final[..., 0, :]
         frames = section_frame(final)
-        gate_centers = centers[self.gate_indices]
-        gate_tangent = centerline_tangents(centers)[self.gate_indices]
+        gate_centers, gate_tangent, _, _ = current_gate_crossings(centers, self.robot.section_s, self.scene)
         gate_dot = (gate_tangent * self.scene.gate_normals).sum(dim=-1).clamp(-1.0, 1.0)
         tip_dots = (frames[-1] * self.scene.tip_frame).sum(dim=-1).clamp(-1.0, 1.0)
 
@@ -417,7 +408,7 @@ class SparseThreadingObjective:
             "stage_smoothness": (controls[1:] - controls[:-1]).square().mean(),
         }
         loss = sum(components[name] * self.config.weights[name] for name in components)
-        metrics = geometry_metrics(final, self.robot, self.scene, self.gate_indices)
+        metrics = geometry_metrics(final, self.robot, self.scene)
         metrics["loss"] = loss
         return FitState(loss=loss, final_coordinates=final, metrics=metrics)
 
@@ -437,14 +428,20 @@ def verify_final(
     field_model: InvertibleBivectorField,
     robot: RobotSamples,
     scene: Scene,
-) -> tuple[dict[str, float], torch.Tensor]:
-    gate_indices = torch.stack([torch.argmin(torch.abs(robot.section_s - value)) for value in scene.gate_s])
+) -> tuple[dict[str, Any], torch.Tensor]:
     with torch.no_grad():
         final = field_model(robot.field_input)
         reconstructed = field_model.inverse(robot.field_input.with_coordinates(final))
-        report = {
-            name: float(value.item()) for name, value in geometry_metrics(final, robot, scene, gate_indices).items()
-        }
+        report = {name: float(value.item()) for name, value in geometry_metrics(final, robot, scene).items()}
+        crossings, tangents, material_s, valid = current_gate_crossings(final[:, 0], robot.section_s, scene)
+        report["gate_crossing_position_errors"] = torch.linalg.vector_norm(
+            crossings - scene.gate_centers, dim=-1
+        ).tolist()
+        report["gate_crossing_orientation_errors"] = torch.acos(
+            (tangents * scene.gate_normals).sum(dim=-1).clamp(-1.0, 1.0)
+        ).tolist()
+        report["gate_crossing_material_s"] = material_s.tolist()
+        report["gate_forward_crossings"] = valid.tolist()
         report["cross_section_rigidity_error"] = float(cross_section_rigidity_error(final, robot.xyz).item())
         report["inverse_reconstruction_error"] = float((reconstructed - robot.xyz).abs().max().item())
     return report, final
@@ -698,7 +695,9 @@ def acceptance_checks(report: dict[str, Any]) -> dict[str, bool]:
     numerical = 1e-12
     return {
         "sparse threading": (
-            coarse["gate_offset"] < 0.035
+            all(coarse["gate_forward_crossings"])
+            and all(dense["gate_forward_crossings"])
+            and coarse["gate_offset"] < 0.035
             and dense["gate_offset"] < 0.035
             and coarse["gate_orientation_error"] < 0.35
             and dense["gate_orientation_error"] < 0.35
@@ -707,7 +706,7 @@ def acceptance_checks(report: dict[str, Any]) -> dict[str, bool]:
             and coarse["tip_orientation_error"] < 0.25
             and dense["tip_orientation_error"] < 0.25
         ),
-        "collision-free rod remains geometrically valid": (
+        "sampled clearance and geometric validity": (
             coarse["minimum_clearance"] >= 0.0
             and dense["minimum_clearance"] >= 0.0
             and coarse["maximum_axial_strain"] < 0.11
@@ -742,6 +741,7 @@ def print_report(report: dict[str, Any]) -> None:
         f"validation   {validation['optimization_sample_count']}→{validation['dense_sample_count']} points | "
         f"gate {dense['gate_offset']:.4f} m | transfer Δ {transfer['coarse_dense_centerline_discrepancy']:.4f} m"
     )
+    print("gate s        " + ", ".join(f"{value:.4f}" for value in coarse["gate_crossing_material_s"]))
     print(
         f"numerical    inverse {dense['inverse_reconstruction_error']:.1e} | "
         f"rigidity {dense['cross_section_rigidity_error']:.1e} | strain {dense['maximum_axial_strain']:.3f}"
@@ -910,11 +910,15 @@ def run(config: Config = Config()) -> dict[str, Any]:
         "algebra": "Cl(4,1)",
         "signature": "++++-",
         "problem": {
-            "constraints": "three gate poses and one tip pose",
+            "constraints": "three gate-center/alignment targets evaluated at predicted crossings, plus one tip pose",
             "field": "material-coordinate RBF SE(3) generator field",
+            "robot_length": config.robot_length,
             "optimization_sections": config.optimization_sections,
             "optimization_surface_samples": config.surface_samples,
-            "optimizer_visible_target_curve": False,
+            "target_centerline_supplied": False,
+            "material_to_gate_correspondence_supplied": False,
+            "material_grid": "uniform",
+            "gate_crossing_strategy": "first forward predicted centerline crossing; detached segment selection and differentiable interpolation",
         },
         "optimization": {
             "algorithm": "Adam with cosine learning-rate decay",
@@ -935,7 +939,8 @@ def run(config: Config = Config()) -> dict[str, Any]:
             "dense_transfer": transfer,
         },
         "limitations": [
-            "The model is kinematic; strain and curvature are geometric diagnostics rather than constitutive mechanics.",
+            "The model is kinematic; strain and curvature are geometric penalties and diagnostics, not constitutive mechanics.",
+            "Clearance and curvature are sampled on centerline sections, not proven over every continuous segment.",
             "The sparse gate and tip poses are prescribed exactly in a synthetic scene.",
         ],
     }
