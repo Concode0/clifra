@@ -29,6 +29,18 @@ def _sparse_gather(values: torch.Tensor, positions: torch.Tensor) -> torch.Tenso
     return torch.index_select(values, -1, positions)
 
 
+def _uniform_output_group_size(positions: torch.Tensor, output_dim: int) -> int:
+    """Return a worthwhile exact per-output reduction width, or zero."""
+    # With fewer terms per output, the indexed reduction is cheaper on CPU;
+    # eight terms is the first shape where contiguous reduction consistently
+    # amortizes its row-wise reduction work on the measured CPU and MPS paths.
+    if output_dim <= 1 or positions.numel() < 8 * output_dim:
+        return 0
+    counts = torch.bincount(positions.detach().cpu(), minlength=output_dim)
+    group_size = int(counts[0])
+    return group_size if bool(torch.all(counts == group_size)) else 0
+
+
 class GradeProductExecutor(nn.Module):
     """Compile-friendly grade-restricted product using a static interaction plan.
 
@@ -73,14 +85,20 @@ class GradeProductExecutor(nn.Module):
                 "anti_commutator_product",
             }
         )
-        self.register_buffer("left_indices", plan.left_indices, persistent=False)
-        self.register_buffer("right_indices", plan.right_indices, persistent=False)
-        self.register_buffer("output_indices", plan.output_indices, persistent=False)
-        self.register_buffer("output_positions", plan.output_positions, persistent=False)
-        self.register_buffer("coefficients", plan.coefficients, persistent=False)
+        self._output_group_size = _uniform_output_group_size(plan.output_positions, self.output_dim)
+        order = torch.argsort(plan.output_positions, stable=True) if self._output_group_size else None
+
+        def output_grouped(values: torch.Tensor) -> torch.Tensor:
+            return values if order is None else torch.index_select(values, 0, order)
+
+        self.register_buffer("left_indices", output_grouped(plan.left_indices), persistent=False)
+        self.register_buffer("right_indices", output_grouped(plan.right_indices), persistent=False)
+        self.register_buffer("output_indices", output_grouped(plan.output_indices), persistent=False)
+        self.register_buffer("output_positions", output_grouped(plan.output_positions), persistent=False)
+        self.register_buffer("coefficients", output_grouped(plan.coefficients), persistent=False)
         self.register_buffer("output_basis_indices", plan.output_basis_indices, persistent=False)
-        self.register_buffer("left_compact_positions", plan.left_compact_positions, persistent=False)
-        self.register_buffer("right_compact_positions", plan.right_compact_positions, persistent=False)
+        self.register_buffer("left_compact_positions", output_grouped(plan.left_compact_positions), persistent=False)
+        self.register_buffer("right_compact_positions", output_grouped(plan.right_compact_positions), persistent=False)
         self._pairwise_contract_left = plan.pairwise_contract_left
         self.register_buffer("pairwise_gather_positions", plan.pairwise_gather_positions, persistent=False)
         self.register_buffer("pairwise_coefficients", plan.pairwise_coefficients, persistent=False)
@@ -109,12 +127,7 @@ class GradeProductExecutor(nn.Module):
         right_terms = _sparse_gather(right, self.right_indices)
         terms = left_terms * right_terms * self.coefficients
 
-        if self._vector_scalar or self.output_dim == 1:
-            return terms.sum(-1, keepdim=True)
-        if self._empty_product:
-            return terms.sum(-1, keepdim=True).expand(*terms.shape[:-1], self.output_dim)
-        output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
-        return output.index_add(-1, self.output_positions, terms)
+        return self._reduce_terms(terms)
 
     def forward_compact(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         """Return compact output for inputs already stored in this plan's compact layouts."""
@@ -131,12 +144,17 @@ class GradeProductExecutor(nn.Module):
         right_terms = _sparse_gather(right, self.right_compact_positions)
         terms = left_terms * right_terms * self.coefficients
 
+        return self._reduce_terms(terms)
+
+    def _reduce_terms(self, terms: torch.Tensor) -> torch.Tensor:
         # A one-lane output is a reduction, not a scatter. Besides avoiding
         # atomic accumulation, this supports scalar-output compiled Taylor.
-        if self.output_dim == 1:
+        if self._vector_scalar or self.output_dim == 1:
             return terms.sum(-1, keepdim=True)
         if self._empty_product:
             return terms.sum(-1, keepdim=True).expand(*terms.shape[:-1], self.output_dim)
+        if self._output_group_size:
+            return terms.unflatten(-1, (self.output_dim, self._output_group_size)).sum(-1)
         output = terms.new_zeros(*terms.shape[:-1], self.output_dim)
         return output.index_add(-1, self.output_positions, terms)
 
