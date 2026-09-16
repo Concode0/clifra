@@ -349,6 +349,54 @@ stable over roughly \(0.1\) to \(0.3\); the lift coefficient had a narrower
 stable region around \(20\) to \(21\). Simple representatives were chosen from
 those plateaus.
 
+## Sandwich work
+
+A generic sandwich computes \(LXR\) for independently declared left, input,
+right, and output layouts. The `composed_products` route executes two selected
+Product children in order. Identical child requests share prepared resident
+state, but work still counts both calls.
+
+Separate those Product profiles by execution topology. Write
+
+\[
+B_s=\sum_{c\,{\rm sparse}} P_c.\mathrm{bulk},
+\qquad
+O_s=\sum_{c\,{\rm sparse}} P_c.\mathrm{output},
+\]
+
+and define \(B_f,O_f\) analogously for full-table children. These are the
+existing `ProductWorkProfile` coordinates. The composed score is
+
+\[
+S_{\mathrm{composed}}
+=
+\tfrac14 B_s + O_s + B_f + O_f.
+\]
+
+The `full_action_matrix` route is feasible only when all four layouts are the
+same full layout. It materializes a dense sandwich matrix and then applies it.
+Its independent structural orders are the dense matrix composition
+\(D^3\) and retained/action cells \(D^2\). The final score is
+
+\[
+S_{\mathrm{full}}
+=
+\kappa_{\mathrm{dtype}}D^3+D^2,
+\]
+
+with
+
+\[
+\kappa_{\mathrm{float32}}=\frac1{512},
+\qquad
+\kappa_{\mathrm{float64}}=\frac1{128}.
+\]
+
+Other supported lower-precision dtypes use the float32 coefficient. Dtype is
+planner-visible; device, leading-shape reuse, and timing mode are not. The
+coefficients compare the existing dense-matrix and Product-child structural
+orders rather than introducing a backend table.
+
 ## Forced-route measurements
 
 The structural basis was derived before using timing data. Benchmark
@@ -356,15 +404,17 @@ artifacts were then used in two different roles.
 
 First, they were used as a **sanity check**. Every feasible root route was
 forced for the same semantic requests, allowing route timings to be compared
-without changing the requested mathematics. The measurements covered six
-placements:
+without changing the requested mathematics. The original Product,
+BivectorExp, and versor Action measurements covered six placements. The
+Sandwich campaign added CUDA float64, for seven Sandwich placements:
 
 - Apple M5 Pro CPU float32;
 - Apple M5 Pro CPU float64;
 - Apple M5 Pro MPS float32;
 - AMD EPYC CPU float32;
 - AMD EPYC CPU float64;
-- NVIDIA CUDA float32.
+- NVIDIA CUDA float32;
+- NVIDIA CUDA float64.
 
 Steady forward and forward-plus-backward measurements were both retained.
 They are different hidden execution conditions for the same static planning
@@ -411,8 +461,8 @@ The **environment-static oracle** requires one route for all rows with the
 same planner-visible context inside one environment.
 
 The **shared static oracle** adds the final design constraint: the same static
-context must choose the same route across all six environments. Device is not
-part of its key.
+context must choose the same route across all measured environments. Device is
+not part of its key.
 
 The static context contains the information available to planning, such as
 signature, operation, declared layouts, action grade, and dtype. It excludes
@@ -453,6 +503,44 @@ Tail regret was inspected alongside the mean. This exposed the avoidable
 \(n=4\) exponential failure that a good aggregate score alone would have
 hidden.
 
+## Sandwich calibration
+
+Across the seven placements, 70 paired forced-route steady-forward and
+forward-plus-backward observations covered the full-layout overlap. Planning
+and first-invocation rows were lifecycle measurements, while the generic
+mixed-layout case had only the composed route. Provenance shared base commit
+`1ba734a`, benchmark and measurement hashes, and an empty production diff.
+
+Grouping by planner-visible context left full layouts at \(D=8,64,256\) for
+float32 and float64. The results were:
+
+| Selector | Context-balanced geometric regret | Row p90 | Row maximum | Route-order accuracy |
+| --- | ---: | ---: | ---: | ---: |
+| Pointwise oracle | 1.0000x | 1.0000x | 1.0000x | 100.00% |
+| Environment-static oracle | 1.1137x | 1.7080x | 3.0599x | 68.57% |
+| Shared static oracle | 1.1612x | 1.9055x | 2.6055x | 65.71% |
+| Final structural score | 1.1612x | 1.9055x | 2.6055x | 65.71% |
+
+The shared oracle and final score selected the same route in every static
+context:
+
+| dtype | \(D=8\) | \(D=64\) | \(D=256\) |
+| --- | --- | --- | --- |
+| float32 | `composed_products` | `full_action_matrix` | `full_action_matrix` |
+| float64 | `composed_products` | `full_action_matrix` | `composed_products` |
+
+The profile was expressive enough because it already retains each child's
+sparse-versus-full-table topology. A coarse positive coefficient search and
+local checks found broad stable plateaus; the final unit coefficients and
+simple powers were chosen from their interiors rather than as fitted decimals.
+
+Hidden-condition conflicts remain: no-reuse CPU rows can favor composition
+where reused factors favor the full matrix, and the direction changes with
+dtype and environment. The largest final tail is the AMD EPYC float32
+\(D=256\) no-reuse backward row at \(2.6055\times\); these conflicts are
+already paid by the shared static oracle. The score is therefore a static
+structural compromise, not a latency predictor.
+
 ## Final calibration
 
 The final production policy reproduced the accepted shared candidate behavior:
@@ -462,10 +550,13 @@ The final production policy reproduced the accepted shared candidate behavior:
 | Product | 1.0626x | 1.3426x | 2.6486x |
 | BivectorExp | 1.2727x | 3.0267x | 11.7762x |
 | Action | 1.0343x | 1.0843x | 2.1701x |
+| Sandwich | 1.1612x | 1.9055x | 2.6055x |
 
 Product was effectively at its shared-static lower bound. Action remained
 close to its shared-static oracle with a small residual cost for using one
-device-independent score.
+device-independent score. Sandwich exactly reproduced its shared-static route
+pattern; its remaining regret is the cost of hiding device, reuse, and timing
+mode from planning.
 
 For BivectorExp, the explicit \(E=8\) regime removed the avoidable CUDA
 closed-versus-matrix tail and brought context-balanced regret essentially to

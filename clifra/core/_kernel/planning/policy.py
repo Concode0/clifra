@@ -151,6 +151,21 @@ def _small_matrix_exp_regime(request, profile: BivectorExpWorkProfile) -> bool:
     return profile.even_width == 8 and (request.dtype == torch.float32 or stabilized_closed)
 
 
+def _sandwich_profile_score(profile: SandwichWorkProfile, request: ExecutorRequest) -> float:
+    if profile.route == "composed_products":
+        score = 0.0
+        for child in profile.product_children:
+            bulk_weight = {"sparse": 0.25, "full_table": 1.0}.get(child.route)
+            if bulk_weight is None:
+                raise ValueError(f"unknown sandwich product child route {child.route!r}")
+            score += bulk_weight * child.bulk + child.output
+        return score
+    if profile.route == "full_action_matrix":
+        matrix_weight = 1 / 128 if request.dtype == torch.float64 else 1 / 512
+        return matrix_weight * profile.full_action_matrix_order + profile.full_action_cells
+    raise ValueError(f"unknown sandwich route {profile.route!r}")
+
+
 def _action_profile_score(profile: ActionWorkProfile, request: ExecutorRequest) -> float:
     products = profile.product_children
     score = (
@@ -204,12 +219,9 @@ class DefaultPolicy:
                 return PolicyEvaluation(None, "unknown_builtin_route")
             return PolicyEvaluation(_action_profile_score(facts.work_profile, request), "structural_action_work")
         if family == "action" and request.operation == "sandwich":
-            scores = {"composed_products": 0.0, "full_action_matrix": 1.0}
-            score = scores.get(route)
-            return PolicyEvaluation(
-                score,
-                "unknown_builtin_route" if score is None else "uncalibrated_composed_sandwich_default",
-            )
+            if route not in {"composed_products", "full_action_matrix"}:
+                return PolicyEvaluation(None, "unknown_builtin_route")
+            return PolicyEvaluation(_sandwich_profile_score(facts.work_profile, request), "structural_sandwich_work")
         scores = {
             ("action", "graded_linear"): 0.0,
             ("action", "full_action_matrix"): 0.0,
