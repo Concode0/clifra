@@ -87,7 +87,7 @@ def _random_compact(declaration, contract, generator, *, scale=1.0):
 
 
 def _structured_clifford(case, index, declaration, contract, generator):
-    scale = case.value_scale if case.family == "bivector_exp" or index > 0 else 1.0
+    scale = case.value_scale if case.family == "bivector_exp" or case.operation == "sandwich" or index > 0 else 1.0
     values = _random_compact(declaration, contract, generator, scale=scale)
     structure = case.generator_structure
     if structure in {"simple_plane", "commuting_planes", "null_plane"} and (case.family == "bivector_exp" or index > 0):
@@ -151,6 +151,8 @@ def plan_case(algebra, inputs, output, case: BenchmarkCase):
         return algebra.plan_bivector_exp(input=inputs[0], output=output)
     if case.operation == "linear":
         return algebra.plan_linear_action(input=inputs[0], output=output)
+    if case.operation == "sandwich":
+        return algebra.plan_sandwich_action(left=inputs[0], input=inputs[1], right=inputs[2], output=output)
     return algebra.plan_versor_action(
         grade=case.action_grade,
         input=inputs[0],
@@ -174,6 +176,15 @@ def _execution_request(algebra, inputs, output, case):
         return product_execution_request(declaration)
     if case.family == "bivector_exp":
         return exp_execution_request(algebra.spec, device, dtype, output.layout, planner=algebra._planner)
+    if case.operation == "sandwich":
+        return action_execution_request(
+            algebra,
+            "sandwich",
+            left_layout=inputs[0].layout,
+            input_layout=inputs[1].layout,
+            right_layout=inputs[2].layout,
+            output_layout=output.layout,
+        )
     parameter = None if case.operation == "linear" else inputs[1].layout
     return action_execution_request(
         algebra,
@@ -287,6 +298,11 @@ def _child_selections(kernel, case):
             ("right_product", "product"),
         ):
             item = _child(getattr(kernel, name, None), name, family)
+            if item is not None:
+                children.append(item)
+    elif case.family == "action" and case.operation == "sandwich":
+        for name in ("left_product", "right_product"):
+            item = _child(getattr(kernel, name, None), name, "product", "geometric_product")
             if item is not None:
                 children.append(item)
     return children

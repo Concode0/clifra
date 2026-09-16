@@ -11,12 +11,13 @@ from clifra.core._kernel.planning.policy import (
     NoAvailableRouteError,
     PlanCandidate,
     ProductFacts,
+    SandwichFacts,
     select_policy_route,
 )
 from clifra.core._kernel.planning.resources import DEFAULT_RESOURCE_LIMITS, ResourceRequirements
 from clifra.core.executors import Assessment, ExecutorProvider, ExecutorRequest, Rejected
 
-PlanningFacts = ProductFacts | ActionFacts | BivectorExpFacts | None
+PlanningFacts = ProductFacts | ActionFacts | SandwichFacts | BivectorExpFacts | None
 
 
 @dataclass(frozen=True)

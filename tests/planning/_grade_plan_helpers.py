@@ -17,7 +17,9 @@ def _planned_full_sandwich(layout, *, dtype=torch.float32, device="cpu"):
 
     spec = layout.spec
     algebra = AlgebraContext(spec.p, spec.q, spec.r, dtype=dtype, device=device)
-    request = action_execution_request(algebra, "sandwich", input_layout=layout)
+    request = action_execution_request(
+        algebra, "sandwich", left_layout=layout, input_layout=layout, right_layout=layout
+    )
     selection = algebra._planner.router.select(
         request,
         PreferRoute("action", "full_action_matrix"),

@@ -420,6 +420,21 @@ class VersorVectorMatrixExecutor(nn.Module):
         return self.eye - 2.0 * outer / denominator.unsqueeze(-1)
 
 
+class ComposedSandwichExecutor(nn.Module):
+    """Apply a sandwich through two fixed prepared Clifford products."""
+
+    route = "composed_products"
+    op = "sandwich_action"
+
+    def __init__(self, left_product: nn.Module, right_product: nn.Module):
+        super().__init__()
+        self.left_product = left_product
+        self.right_product = right_product
+
+    def forward(self, left: torch.Tensor, values: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+        return self.right_product(self.left_product(left, values), right)
+
+
 class FullSandwichActionExecutor(nn.Module):
     """Apply full-layout sandwich action matrices from static Cayley buffers."""
 

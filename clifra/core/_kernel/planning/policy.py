@@ -12,7 +12,12 @@ from typing import Mapping, Protocol
 
 import torch
 
-from clifra.core._kernel.planning.work import ActionWorkProfile, BivectorExpWorkProfile, ProductWorkProfile
+from clifra.core._kernel.planning.work import (
+    ActionWorkProfile,
+    BivectorExpWorkProfile,
+    ProductWorkProfile,
+    SandwichWorkProfile,
+)
 from clifra.core.executors import ExecutorRequest
 
 
@@ -47,7 +52,18 @@ class ActionFacts:
     work_profile: ActionWorkProfile
 
 
-PlanningFacts = ProductFacts | ActionFacts | BivectorExpFacts | None
+@dataclass(frozen=True)
+class SandwichFacts:
+    """Authoritative structural profile for one generic sandwich route."""
+
+    work_profile: SandwichWorkProfile
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.work_profile, SandwichWorkProfile):
+            raise TypeError("sandwich facts require a SandwichWorkProfile")
+
+
+PlanningFacts = ProductFacts | ActionFacts | SandwichFacts | BivectorExpFacts | None
 
 
 @dataclass(frozen=True)
@@ -68,6 +84,9 @@ class PlanCandidate:
         if self.family == "action" and self.request.operation == "versor":
             if not isinstance(self.facts, ActionFacts):
                 raise TypeError("versor action candidates require ActionFacts")
+        elif self.family == "action" and self.request.operation == "sandwich":
+            if not isinstance(self.facts, SandwichFacts):
+                raise TypeError("sandwich action candidates require SandwichFacts")
         elif self.family not in {"product", "bivector_exp"} and self.facts is not None:
             raise TypeError(f"{self.family} candidates do not use route facts")
 
@@ -184,6 +203,13 @@ class DefaultPolicy:
             if route not in {"vector_matrix", "rotor_product", "full_action_matrix"}:
                 return PolicyEvaluation(None, "unknown_builtin_route")
             return PolicyEvaluation(_action_profile_score(facts.work_profile, request), "structural_action_work")
+        if family == "action" and request.operation == "sandwich":
+            scores = {"composed_products": 0.0, "full_action_matrix": 1.0}
+            score = scores.get(route)
+            return PolicyEvaluation(
+                score,
+                "unknown_builtin_route" if score is None else "uncalibrated_composed_sandwich_default",
+            )
         scores = {
             ("action", "graded_linear"): 0.0,
             ("action", "full_action_matrix"): 0.0,

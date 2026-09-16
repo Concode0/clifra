@@ -185,3 +185,47 @@ class ActionWorkProfile:
     exponential_child: BivectorExpWorkProfile | None = None
     full_action_matrix_order: int = 0
     full_action_cells: int = 0
+
+
+@dataclass(frozen=True)
+class SandwichWorkProfile:
+    """Repeated execution work for one sandwich route and its two product calls."""
+
+    route: str
+    input_widths: tuple[int, int, int]
+    output_width: int
+    middle_width: int = 0
+    product_children: tuple[ProductWorkProfile, ...] = ()
+    full_action_matrix_order: int = 0
+    full_action_cells: int = 0
+
+    def __post_init__(self) -> None:
+        counts = (
+            *self.input_widths,
+            self.output_width,
+            self.middle_width,
+            self.full_action_matrix_order,
+            self.full_action_cells,
+        )
+        if len(self.input_widths) != 3 or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in counts
+        ):
+            raise ValueError("sandwich work widths and counts must be non-negative integers")
+        if any(not isinstance(child, ProductWorkProfile) for child in self.product_children):
+            raise TypeError("sandwich product children require ProductWorkProfile values")
+        if self.route == "composed_products":
+            if len(self.product_children) != 2:
+                raise ValueError("composed_products work requires two ordered product calls")
+            if self.full_action_matrix_order or self.full_action_cells:
+                raise ValueError("composed_products work cannot declare full action matrix work")
+            return
+        if self.route == "full_action_matrix":
+            width = self.output_width
+            if self.product_children or self.middle_width:
+                raise ValueError("full_action_matrix work cannot declare product children or a middle width")
+            if len(set((*self.input_widths, width))) != 1 or width < 1:
+                raise ValueError("full_action_matrix work requires one matching non-empty full width")
+            if self.full_action_matrix_order != width**3 or self.full_action_cells != width**2:
+                raise ValueError("full_action_matrix work counts must match its full width")
+            return
+        raise ValueError(f"unknown sandwich route {self.route!r}")

@@ -37,6 +37,7 @@ class GradePlanner:
         self._signature_norm_squared_executors = {}
         self._pseudoscalar_product_executors = {}
         self._bivector_exp_executors = {}
+        self._sandwich_executors = {}
 
     def layout(self, grades):
         """Return the compact layout for ``grades``."""
@@ -49,6 +50,7 @@ class GradePlanner:
         self._signature_norm_squared_executors.clear()
         self._pseudoscalar_product_executors.clear()
         self._bivector_exp_executors.clear()
+        self._sandwich_executors.clear()
 
     def product_executor(
         self,
@@ -205,7 +207,21 @@ class GradePlanner:
         from clifra.core._kernel.providers import action_execution_request
 
         request = action_execution_request(self.algebra, operation, **parameters)
-        return self.router.execute_plan(request, self.policy, self.limits)
+        if operation != "sandwich":
+            return self.router.execute_plan(request, self.policy, self.limits)
+        key = (
+            self.spec,
+            str(request.device),
+            request.dtype,
+            operation,
+            request.inputs,
+            request.output,
+        )
+        executor = self._sandwich_executors.get(key)
+        if executor is None:
+            executor = self.router.execute_plan(request, self.policy, self.limits)
+            self._sandwich_executors[key] = executor
+        return executor
 
     def _product_request_cache_key(self, request: ProductRequest) -> tuple[object, ...]:
         return (

@@ -74,8 +74,9 @@ def test_exp_matrix_is_generated_from_domain_output_batch_and_structure_tracks()
 def test_action_matrix_covers_routed_request_and_broadcast_structures():
     cases = exploratory_action_cases()
 
-    assert {case.operation for case in cases} == {"linear", "versor"}
+    assert {case.operation for case in cases} == {"linear", "versor", "sandwich"}
     assert {case.action_grade for case in cases if case.operation == "versor"} == {1, 2}
+    assert all(case.action_grade is None and len(case.inputs) == 3 for case in cases if case.operation == "sandwich")
     assert {sum(case.signature) for case in cases} == {3, 4, 5, 6, 8, 10, 12}
     assert any(
         case.inputs[0].leading_shape == (512,) and case.inputs[1].leading_shape == ()
@@ -84,6 +85,23 @@ def test_action_matrix_covers_routed_request_and_broadcast_structures():
     )
     assert any(case.inputs[0].leading_shape == (32, 1) for case in cases)
     assert any(case.inputs[0].grades == tuple(range(sum(case.signature) + 1)) for case in cases)
+    assert any(
+        case.operation == "sandwich"
+        and case.inputs[0].leading_shape == ()
+        and case.inputs[1].leading_shape == (512,)
+        and case.inputs[2].leading_shape == ()
+        for case in cases
+    )
+    assert any(
+        case.operation == "sandwich" and len({item.grades for item in (*case.inputs, case.output)}) > 1
+        for case in cases
+    )
+    no_reuse = {case.case_id: case for case in cases if ".sandwich.no-reuse." in case.case_id}
+    assert set(no_reuse) == {
+        "action.cl600.full.sandwich.no-reuse.batch32",
+        "action.cl800.full.sandwich.no-reuse.batch16",
+    }
+    assert all(len({item.leading_shape for item in case.inputs}) == 1 for case in no_reuse.values())
     assert len({case.case_id for case in cases}) == len(cases)
 
 
@@ -108,6 +126,51 @@ def test_campaign_includes_normal_and_every_feasible_product_root_route():
     assert {(item.placement.selection.mode, item.placement.selection.route) for item in compact} == {
         ("default", None),
         ("forced_repository_private", "sparse"),
+    }
+
+
+def test_campaign_includes_default_and_each_feasible_sandwich_route():
+    requests = campaign_plan(("cpu",), families=("action",), modes=("steady_forward",)).requests
+    full = [
+        request
+        for request in requests
+        if request.case.case_id == "action.cl600.full.sandwich.shared-pair.batch512"
+        and request.placement.dtype == "float32"
+    ]
+    generic = [
+        request
+        for request in requests
+        if request.case.case_id == "action.cl500.generic.sandwich.broadcast-reuse32x8"
+        and request.placement.dtype == "float32"
+    ]
+
+    assert {(item.placement.selection.mode, item.placement.selection.route) for item in full} == {
+        ("default", None),
+        ("forced_repository_private", "composed_products"),
+        ("forced_repository_private", "full_action_matrix"),
+    }
+    assert {(item.placement.selection.mode, item.placement.selection.route) for item in generic} == {
+        ("default", None),
+        ("forced_repository_private", "composed_products"),
+    }
+
+    amortized = campaign_plan(("cpu",), families=("action",)).requests
+    no_reuse = [
+        request
+        for request in amortized
+        if request.case.case_id == "action.cl800.full.sandwich.no-reuse.batch16"
+        and request.placement.dtype == "float32"
+    ]
+    assert {request.mode for request in no_reuse} == {
+        "planning_preparation",
+        "first_invocation",
+        "steady_forward",
+        "forward_backward",
+    }
+    assert {request.placement.selection.route for request in no_reuse} == {
+        None,
+        "composed_products",
+        "full_action_matrix",
     }
 
 

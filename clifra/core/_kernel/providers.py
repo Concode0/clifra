@@ -29,9 +29,15 @@ from clifra.core._kernel.planning.policy import (
     NoAvailableRouteError,
     PolicyCoverageError,
     ProductFacts,
+    SandwichFacts,
 )
 from clifra.core._kernel.planning.resources import ResourceRequirements
-from clifra.core._kernel.planning.work import ActionWorkProfile, BivectorExpWorkProfile, action_lift_profile
+from clifra.core._kernel.planning.work import (
+    ActionWorkProfile,
+    BivectorExpWorkProfile,
+    SandwichWorkProfile,
+    action_lift_profile,
+)
 from clifra.core.executors import Assessment, ExecutorRequest, Rejected
 from clifra.core.tensors import TensorContract
 
@@ -60,7 +66,7 @@ class UnaryExecutionRequest(ExecutorRequest):
 
 @dataclass(frozen=True)
 class BuiltinPreparation:
-    facts: ProductFacts | ActionFacts | BivectorExpFacts | None
+    facts: ProductFacts | ActionFacts | SandwichFacts | BivectorExpFacts | None
 
 
 @dataclass(frozen=True)
@@ -128,13 +134,17 @@ def action_execution_request(
     input_layout,
     output_layout=None,
     parameter_layout=None,
+    left_layout=None,
+    right_layout=None,
     grade=None,
 ):
     inputs = TensorContract.compact(input_layout)
     output = TensorContract.compact(output_layout or input_layout)
     contracts = (inputs, TensorContract.compact(parameter_layout)) if parameter_layout is not None else (inputs, None)
     if operation == "sandwich":
-        contracts = (inputs, inputs, inputs)
+        if left_layout is None or right_layout is None:
+            raise ValueError("sandwich execution requests require explicit left_layout and right_layout")
+        contracts = (TensorContract.compact(left_layout), inputs, TensorContract.compact(right_layout))
     return ActionExecutionRequest(
         "action",
         operation,
@@ -501,6 +511,55 @@ def _build_exp(request, route, preparation):
     )
 
 
+def _assess_sandwich(request, route):
+    from clifra.core._kernel.basis import expand_output_grades
+
+    algebra, spec = request.algebra, request.inputs[0].spec
+    planner = algebra._planner
+    left, inputs, right = (contract.layout for contract in request.inputs)
+    output = request.output.layout
+    if any(layout.spec != spec for layout in (inputs, right, output)):
+        return Rejected("sandwich_layout_signatures_must_match")
+    full_layout = spec.full_layout()
+    full = left == inputs == right == output == full_layout
+    if route == "composed_products":
+        middle = spec.layout(expand_output_grades(left.grades, inputs.grades, spec.n, op="geometric_product"))
+        first = _product_child(planner, left, inputs, middle, request.dtype, request.device)
+        second = _product_child(planner, middle, right, output, request.dtype, request.device)
+        children = (first, second)
+        facts = SandwichFacts(
+            SandwichWorkProfile(
+                route=route,
+                input_widths=(left.dim, inputs.dim, right.dim),
+                output_width=output.dim,
+                middle_width=middle.dim,
+                # Keep both calls as execution work even when their prepared
+                # resident state is identical and deduplicated below.
+                product_children=tuple(child.facts.work_profile for child in children),
+            )
+        )
+        resources = _combined_requirements(
+            ResourceRequirements(max(left.dim, inputs.dim, right.dim, output.dim, middle.dim), 0), children
+        )
+        return _accepted(
+            ActionPreparation(facts, middle_layout=middle, left_product=first, right_product=second), resources
+        )
+    if route != "full_action_matrix":
+        return Rejected("route_does_not_implement_sandwich")
+    if not full:
+        return Rejected("full_action_matrix_requires_matching_full_left_input_right_output_layouts")
+    facts = SandwichFacts(
+        SandwichWorkProfile(
+            route=route,
+            input_widths=(left.dim, inputs.dim, right.dim),
+            output_width=output.dim,
+            full_action_matrix_order=spec.dim**3,
+            full_action_cells=spec.dim**2,
+        )
+    )
+    return _accepted(ActionPreparation(facts), _simple_requirements(request, 6 * spec.dim**2))
+
+
 def _assess_action(request, route):
     from clifra.core._kernel.basis import expand_output_grades
 
@@ -508,12 +567,14 @@ def _assess_action(request, route):
 
     algebra, spec = request.algebra, request.inputs[0].spec
     planner = algebra._planner
-    inputs, output = request.inputs[0].layout, request.output.layout
     operation, grade = request.operation, request.grade
-    parameter = request.inputs[1].layout if request.inputs[1] is not None else None
-    full = inputs.dim == spec.dim and output.dim == spec.dim
     if request.device.type == "mps" and request.dtype == torch.float64:
         return Rejected("mps_does_not_support_float64_output")
+    if operation == "sandwich":
+        return _assess_sandwich(request, route)
+    inputs, output = request.inputs[0].layout, request.output.layout
+    parameter = request.inputs[1].layout if request.inputs[1] is not None else None
+    full = inputs.dim == spec.dim and output.dim == spec.dim
     if route in {"graded_linear", "vector_matrix"}:
         needs_det = any(g >= 4 for g in set(inputs.grades) & set(output.grades))
         if (needs_det or grade == 2) and request.dtype not in (torch.float32, torch.float64):
@@ -524,11 +585,6 @@ def _assess_action(request, route):
         _, resources = _linear_action_structure(inputs, output, device=request.device)
         preparation = ActionPreparation(None)
         return _accepted(preparation, resources)
-    if operation == "sandwich":
-        if route != "full_action_matrix" or not full:
-            return Rejected("requires_full_sandwich")
-        preparation = ActionPreparation(None)
-        return _accepted(preparation, _simple_requirements(request, 6 * spec.dim**2))
     if operation != "versor":
         return Rejected("unsupported_action_operation")
     if grade not in (1, 2) or parameter is None or parameter.grades != (grade,):
@@ -604,19 +660,26 @@ def _assess_action(request, route):
     return _accepted(preparation, resources)
 
 
-def _operation(child):
+def _operation(child, cache=None):
     if child is None:
         return None
     from clifra.core.operation import PlannedOperation
 
+    key = (child.family, child.route, child.request.operation, child.request.inputs, child.request.output)
+    if cache is not None and key in cache:
+        return cache[key]
     method = "forward_compact" if child.family in {"product", "unary"} else "forward"
-    return PlannedOperation(child.build(), child.request.inputs, child.request.output, method=method)
+    operation = PlannedOperation(child.build(), child.request.inputs, child.request.output, method=method)
+    if cache is not None:
+        cache[key] = operation
+    return operation
 
 
 def _build_action(request, route, preparation):
     from .execution.action import (
         ActionComponents,
         BivectorVectorGeneratorExecutor,
+        ComposedSandwichExecutor,
         FullSandwichActionExecutor,
         GradedLinearActionExecutor,
         VersorActionExecutor,
@@ -631,7 +694,9 @@ def _build_action(request, route, preparation):
         build_versor_vector_buffers,
     )
 
-    inputs, output = request.inputs[0].layout, request.output.layout
+    inputs = request.inputs[1].layout if request.operation == "sandwich" else request.inputs[0].layout
+    output = request.output.layout
+    child_cache = {}
 
     def graded_action():
         grades = tuple(grade for grade in inputs.grades if grade > 0 and grade in output.grades)
@@ -670,16 +735,21 @@ def _build_action(request, route, preparation):
     if request.operation == "linear":
         return graded_action()
     if request.operation == "sandwich":
+        if route == "composed_products":
+            return ComposedSandwichExecutor(
+                _operation(preparation.left_product, child_cache),
+                _operation(preparation.right_product, child_cache),
+            )
         return full_action()
     components = ActionComponents(
         preparation.rotor_layout,
         preparation.middle_layout,
-        _operation(preparation.exponential),
-        _operation(preparation.reverse),
-        _operation(preparation.left_product),
-        _operation(preparation.right_product),
-        _operation(preparation.norm),
-        _operation(preparation.involution),
+        _operation(preparation.exponential, child_cache),
+        _operation(preparation.reverse, child_cache),
+        _operation(preparation.left_product, child_cache),
+        _operation(preparation.right_product, child_cache),
+        _operation(preparation.norm, child_cache),
+        _operation(preparation.involution, child_cache),
     )
     action = vector_matrix = selected_full_action = None
     if route == "vector_matrix":
@@ -744,7 +814,7 @@ def builtin_providers():
             ),
             (
                 "action",
-                ("vector_matrix", "rotor_product", "full_action_matrix", "graded_linear"),
+                ("vector_matrix", "rotor_product", "full_action_matrix", "graded_linear", "composed_products"),
             ),
         )
         for route in routes

@@ -1,5 +1,5 @@
 from benchmarks.adapters import construct_case, plan_case, planning_metadata, route_assessments
-from benchmarks.cases import ExecutionPlacement, SelectionCase, smoke_cases
+from benchmarks.cases import ExecutionPlacement, SelectionCase, exploratory_action_cases, smoke_cases
 
 
 def _case(family, operation=None):
@@ -23,6 +23,7 @@ def test_registered_root_routes_are_enumerated_per_exact_family_request():
         "rotor_product",
         "full_action_matrix",
         "graded_linear",
+        "composed_products",
     }
 
 
@@ -48,6 +49,18 @@ def test_action_metadata_uses_authoritative_work_profile():
     assert facts["work_profile"]["route"] == "vector_matrix"
     assert facts["work_profile"]["lift"]["input_width"] > 0
     assert "exterior_work" not in facts
+
+
+def test_sandwich_metadata_records_root_facts_and_selected_product_children():
+    case = next(case for case in exploratory_action_cases() if case.operation == "sandwich")
+    placement = ExecutionPlacement(selection=SelectionCase("forced_repository_private", "composed_products"))
+    algebra, inputs, output, _ = construct_case(case, placement)
+    metadata = planning_metadata(plan_case(algebra, inputs, output, case), case, placement)
+
+    assert metadata["selected_route"] == "composed_products"
+    assert metadata["structural_facts"]["work_profile"]["route"] == "composed_products"
+    assert [item["path"] for item in metadata["child_selections"]] == ["left_product", "right_product"]
+    assert {item["family"] for item in metadata["child_selections"]} == {"product"}
 
 
 def test_forced_exp_root_records_normally_selected_product_children():

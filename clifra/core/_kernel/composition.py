@@ -11,12 +11,6 @@ class Geometry(nn.Module):
         super().__init__()
         self.kind = kind
         self.eps_sq = algebra.eps_sq
-        if kind == "sandwich":
-            left, values, right = inputs
-            middle = algebra.layout(expand_output_grades(left.grades, values.grades, algebra.n, op="geometric_product"))
-            self.first = algebra.plan_product(left=left, right=values, output=middle)
-            self.second = algebra.plan_product(left=middle, right=right, output=output)
-            return
         blade = inputs[0] if kind == "blade_inverse" else inputs[1]
         self.reverse = algebra.plan_unary(op="reverse", input=blade, output=blade)
         self.norm = algebra.plan_signature_norm_squared(input=blade)
@@ -42,9 +36,6 @@ class Geometry(nn.Module):
         self.second = algebra.plan_product(left=middle, right=blade, output=output)
 
     def forward(self, *values):
-        if self.kind == "sandwich":
-            left, x, right = values
-            return self.second(self.first(left, x), right)
         blade = values[0] if self.kind == "blade_inverse" else values[1]
         inverse = self._inverse(blade)
         if self.kind == "blade_inverse":

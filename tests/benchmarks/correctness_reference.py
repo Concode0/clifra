@@ -474,6 +474,31 @@ def _reference_geometric(
     return reference_product((left, right), product_case)
 
 
+def reference_sandwich_action(values: tuple[torch.Tensor, ...], case: BenchmarkCase) -> torch.Tensor:
+    """Independent two-product sandwich for separately declared layouts."""
+
+    n = sum(case.signature)
+    left, target, right = (_compact_semantic(value, declaration, n) for value, declaration in zip(values, case.inputs))
+    full_grades = tuple(range(n + 1))
+    middle = _reference_geometric(
+        left,
+        target,
+        case.signature,
+        case.inputs[0].grades,
+        case.inputs[1].grades,
+        full_grades,
+    )
+    compact = _reference_geometric(
+        middle,
+        right,
+        case.signature,
+        full_grades,
+        case.inputs[2].grades,
+        case.output.grades,
+    )
+    return _format_reference_output(compact, case.output, n)
+
+
 def reference_versor_action(values: tuple[torch.Tensor, ...], case: BenchmarkCase) -> torch.Tensor:
     """Independent exp/product sandwich for rotor and reflection-like actions."""
 
@@ -556,6 +581,11 @@ def _qualification_description(case):
             "tests/benchmarks/correctness_reference.py:reference_linear_action",
             "independent Leibniz determinant lift; forward and squared-loss gradients",
         )
+    if case.operation == "sandwich":
+        return (
+            "tests/benchmarks/correctness_reference.py:reference_sandwich_action",
+            "independent two-product Clifford sandwich; forward and squared-loss gradients",
+        )
     claim = (
         "tests/benchmarks/correctness_reference.py:reference_versor_action",
         "independent dense exp and Clifford sandwich; forward and squared-loss gradients",
@@ -577,7 +607,13 @@ def qualify_case(operation, values, output_contract, case, placement, *, check_g
     reference = (
         reference_bivector_exp
         if case.family == "bivector_exp"
-        else (reference_linear_action if case.operation == "linear" else reference_versor_action)
+        else (
+            reference_linear_action
+            if case.operation == "linear"
+            else reference_sandwich_action
+            if case.operation == "sandwich"
+            else reference_versor_action
+        )
     )
     actual_inputs = tuple(value.detach().clone().requires_grad_(check_gradients) for value in values)
     reference_inputs = tuple(value.detach().cpu().double().requires_grad_(check_gradients) for value in values)

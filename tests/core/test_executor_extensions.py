@@ -34,6 +34,11 @@ class ParameterScalarProduct(nn.Module):
         return left * right * self.scale
 
 
+class ScalarSandwich(nn.Module):
+    def forward(self, left, values, right):
+        return left * values * right
+
+
 @dataclass(frozen=True)
 class ExternalScalarProvider:
     calls: list
@@ -71,6 +76,26 @@ class ExternalParameterProvider(ExternalScalarProvider):
     def build(self, request, assessment):
         self.calls.append(("build", request, assessment))
         return ParameterScalarProduct(assessment.preparation)
+
+
+@dataclass(frozen=True)
+class ExternalSandwichProvider:
+    calls: list
+    identity: tuple[str, str] = ("action", "external_sandwich")
+
+    def assess(self, request):
+        assert type(request) is ExecutorRequest
+        if request.operation != "sandwich" or any(
+            contract.layout.grades != (0,) for contract in (*request.inputs, request.output)
+        ):
+            return Rejected("only scalar sandwiches")
+        assessment = Assessment(lanes=1, pairs=0)
+        self.calls.append(("assess", request, assessment))
+        return assessment
+
+    def build(self, request, assessment):
+        self.calls.append(("build", request, assessment))
+        return ScalarSandwich()
 
 
 def registry_with_external(calls):
@@ -123,6 +148,21 @@ def test_parameter_only_cached_external_kernel_moves_independently_between_plans
     value = torch.tensor([2.0])
     torch.testing.assert_close(first(value.double(), value.double()), torch.tensor([4.0], dtype=torch.float64))
     torch.testing.assert_close(second(value, value), torch.tensor([4.0]))
+
+
+def test_external_action_provider_can_override_public_sandwich_planning():
+    calls = []
+    provider = ExternalSandwichProvider(calls)
+    registry = ExecutorRegistry((provider, *ExecutorRegistry.default().providers))
+    algebra = AlgebraContext(3, registry=registry)
+    scalar = algebra.layout((0,))
+    operation = algebra.plan_sandwich_action(left=scalar, input=scalar, right=scalar, output=scalar)
+    left, values, right = torch.randn(2, 1), torch.randn(2, 1), torch.randn(2, 1)
+
+    torch.testing.assert_close(operation(left, values, right), left * values * right)
+    assert [event for event, *_ in calls] == ["assess", "build"]
+    request = calls[0][1]
+    assert request.inputs == (TensorContract.compact(scalar),) * 3
 
 
 def test_external_provider_pairwise_and_compile_need_only_forward():

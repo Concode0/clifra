@@ -12,9 +12,10 @@ from clifra.core._kernel.planning.policy import (
     PolicyCoverageError,
     PolicyEvaluation,
     ProductFacts,
+    SandwichFacts,
     select_policy_route,
 )
-from clifra.core._kernel.planning.work import ProductWorkProfile, action_lift_profile
+from clifra.core._kernel.planning.work import ProductWorkProfile, SandwichWorkProfile, action_lift_profile
 from clifra.core._kernel.providers import BuiltinProvider, action_execution_request
 from clifra.core.executors import ExecutorRequest
 from tests.planning._grade_plan_helpers import select_product_route
@@ -58,6 +59,23 @@ def test_family_facts_are_immutable_and_nonnegative():
         facts.work_profile = ProductWorkProfile("sparse", 4, 2)
     with pytest.raises(ValueError, match="non-negative integer"):
         ProductFacts(ProductWorkProfile("sparse", -1, 1))
+
+
+def test_sandwich_work_profiles_enforce_route_specific_structure():
+    child = ProductWorkProfile("sparse", 3, 2)
+    composed = SandwichWorkProfile("composed_products", (2, 3, 4), 5, 6, (child, child))
+    full = SandwichWorkProfile("full_action_matrix", (8, 8, 8), 8, full_action_matrix_order=512, full_action_cells=64)
+
+    assert SandwichFacts(composed).work_profile is composed
+    assert SandwichFacts(full).work_profile is full
+    with pytest.raises(ValueError, match="two ordered product calls"):
+        SandwichWorkProfile("composed_products", (2, 3, 4), 5, 6, (child,))
+    with pytest.raises(ValueError, match="matching non-empty full width"):
+        SandwichWorkProfile("full_action_matrix", (8, 4, 8), 8, full_action_matrix_order=512, full_action_cells=64)
+    with pytest.raises(ValueError, match="counts must match"):
+        SandwichWorkProfile("full_action_matrix", (8, 8, 8), 8, full_action_matrix_order=64, full_action_cells=64)
+    with pytest.raises(ValueError, match="unknown sandwich route"):
+        SandwichWorkProfile("unknown", (2, 2, 2), 2)
 
 
 def test_action_lift_profile_is_semantic_and_independent_of_prepared_backend():

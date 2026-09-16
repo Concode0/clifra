@@ -8,6 +8,7 @@ from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.planning.policy import NoAvailableRouteError, PolicyEvaluation
 from clifra.core._kernel.planning.resources import ResourceLimits
 from clifra.core._kernel.providers import BuiltinProvider, action_execution_request
+from clifra.core.executors import Rejected
 from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
 from tests.helpers.policy import PreferRoute
 from tests.helpers.small_oracle import SmallCliffordOracle
@@ -16,6 +17,7 @@ from tests.planning._grade_plan_helpers import _planned_full_sandwich
 DEVICES = (
     ["cpu"] + (["cuda"] if torch.cuda.is_available() else []) + (["mps"] if torch.backends.mps.is_available() else [])
 )
+MOVEMENTS = [("cpu", torch.float64)] + ([("mps", torch.float32)] if torch.backends.mps.is_available() else [])
 
 
 @pytest.mark.parametrize(
@@ -154,6 +156,192 @@ def test_full_sandwich_broadcasts_independent_factor_shapes():
     left, values, right = (torch.randn(*shape, algebra.dim, dtype=torch.float64) for shape in [(2, 1), (), (3,)])
     oracle = SmallCliffordOracle(1, 1, 1)
     torch.testing.assert_close(executor(left, values, right), oracle.product(oracle.product(left, values), right))
+
+
+def test_public_sandwich_defaults_to_prepared_composed_products():
+    algebra = AlgebraContext(4, dtype=torch.float64)
+    left, inputs, right, output = (
+        algebra.layout((0, 2, 4)),
+        algebra.layout((1, 2)),
+        algebra.layout((0, 2)),
+        algebra.layout((1, 3)),
+    )
+    action = algebra.plan_sandwich_action(left=left, input=inputs, right=right, output=output)
+
+    assert action._kernel.route == "composed_products"
+    assert action.inputs == tuple(TensorContract.compact(layout) for layout in (left, inputs, right))
+    values = (
+        torch.randn(1, 3, left.dim, dtype=torch.float64, requires_grad=True),
+        torch.randn(2, 1, inputs.dim, dtype=torch.float64, requires_grad=True),
+        torch.randn(1, 3, right.dim, dtype=torch.float64, requires_grad=True),
+    )
+    expected = output.compact(
+        SmallCliffordOracle(4).product(
+            SmallCliffordOracle(4).product(left.full(values[0]), inputs.full(values[1])), right.full(values[2])
+        )
+    )
+    actual = action(*values)
+    torch.testing.assert_close(actual, expected)
+    for found, reference in zip(
+        torch.autograd.grad(actual.square().sum(), values), torch.autograd.grad(expected.square().sum(), values)
+    ):
+        torch.testing.assert_close(found, reference)
+
+
+def test_forced_public_full_sandwich_matches_composed_route_and_gradients():
+    full = AlgebraContext(3).layout()
+    composed_algebra = AlgebraContext(3, dtype=torch.float64)
+    fused_algebra = configured_algebra(
+        3, dtype=torch.float64, planning_policy=PreferRoute("action", "full_action_matrix")
+    )
+    composed = composed_algebra.plan_sandwich_action()
+    fused = fused_algebra.plan_sandwich_action()
+    assert composed._kernel.route == "composed_products"
+    assert fused._kernel.route == "full_action_matrix"
+    values = tuple(
+        torch.randn(*shape, full.dim, dtype=torch.float64, requires_grad=True) for shape in ((2, 1), (2, 3), (2, 1))
+    )
+    expected, actual = composed(*values), fused(*values)
+    torch.testing.assert_close(actual, expected)
+    for found, reference in zip(
+        torch.autograd.grad(actual.square().sum(), values, retain_graph=True),
+        torch.autograd.grad(expected.square().sum(), values),
+    ):
+        torch.testing.assert_close(found, reference)
+
+
+@pytest.mark.parametrize("device,dtype", MOVEMENTS)
+def test_identical_composed_children_remain_shared_after_plan_movement(device, dtype):
+    algebra = AlgebraContext(3)
+    operation = algebra.plan_sandwich_action()
+    peer = algebra.plan_sandwich_action()
+
+    assert operation._kernel is peer._kernel
+    assert operation._kernel.left_product is operation._kernel.right_product
+    operation.to(device=device, dtype=dtype)
+    assert operation._kernel is not peer._kernel
+    assert operation._kernel.left_product is operation._kernel.right_product
+    assert operation._kernel.left_product._kernel is operation._kernel.right_product._kernel
+    assert all(buffer.device.type == device for buffer in operation._kernel.buffers())
+    assert all(buffer.dtype == dtype for buffer in operation._kernel.buffers() if buffer.is_floating_point())
+    assert all(buffer.device.type == "cpu" for buffer in peer._kernel.buffers())
+    assert all(buffer.dtype == torch.float32 for buffer in peer._kernel.buffers() if buffer.is_floating_point())
+
+    values = tuple(torch.randn(2, algebra.dim, device=device, dtype=dtype, requires_grad=True) for _ in range(3))
+    result = operation(*values)
+    assert result.device.type == device
+    assert result.dtype == dtype
+    assert all(gradient is not None for gradient in torch.autograd.grad(result.square().sum(), values))
+
+
+@pytest.mark.parametrize("route", ["composed_products", "full_action_matrix"])
+def test_public_sandwich_routes_compile_fullgraph_with_gradients(route):
+    algebra = configured_algebra(3, dtype=torch.float64, planning_policy=PreferRoute("action", route))
+    action = algebra.plan_sandwich_action()
+    eager_values = tuple(torch.randn(2, 1, algebra.dim, dtype=torch.float64, requires_grad=True) for _ in range(3))
+    compiled_values = tuple(value.detach().clone().requires_grad_() for value in eager_values)
+
+    expected = action(*eager_values)
+    compiled = torch.compile(action, backend="aot_eager", fullgraph=True)
+    actual = compiled(*compiled_values)
+    torch.testing.assert_close(actual, expected)
+    for found, reference in zip(
+        torch.autograd.grad(actual.square().sum(), compiled_values),
+        torch.autograd.grad(expected.square().sum(), eager_values),
+    ):
+        torch.testing.assert_close(found, reference)
+
+
+def test_sandwich_root_planning_cache_avoids_rebuilding_selected_route(monkeypatch):
+    calls = {"action": 0, "product": 0}
+    original = BuiltinProvider.build
+
+    def counted(provider, request, assessment):
+        if provider.identity[0] == "action" and request.operation == "sandwich":
+            calls["action"] += 1
+        elif provider.identity[0] == "product":
+            calls["product"] += 1
+        return original(provider, request, assessment)
+
+    monkeypatch.setattr(BuiltinProvider, "build", counted)
+    algebra = AlgebraContext(3)
+    algebra.plan_sandwich_action()
+    algebra.plan_sandwich_action()
+    assert calls == {"action": 1, "product": 1}
+
+    algebra.to(dtype=torch.float64)
+    algebra.plan_sandwich_action()
+    assert calls == {"action": 2, "product": 2}
+
+
+def test_composed_sandwich_assessment_aggregates_unique_product_children():
+    algebra = AlgebraContext(4)
+    left, inputs, right, output = (
+        algebra.layout((0, 2, 4)),
+        algebra.layout((0, 1, 2, 3, 4)),
+        algebra.layout((0, 2)),
+        algebra.layout((1, 3)),
+    )
+    request = action_execution_request(
+        algebra,
+        "sandwich",
+        left_layout=left,
+        input_layout=inputs,
+        right_layout=right,
+        output_layout=output,
+    )
+    assessment = BuiltinProvider(("action", "composed_products")).assess(request)
+    preparation = assessment.preparation
+
+    assert assessment.pairs == (preparation.left_product.assessment.pairs + preparation.right_product.assessment.pairs)
+    assert preparation.facts.work_profile.route == "composed_products"
+    assert len(preparation.facts.work_profile.product_children) == 2
+    fused = BuiltinProvider(("action", "full_action_matrix")).assess(request)
+    assert isinstance(fused, Rejected)
+    assert fused.reason == "full_action_matrix_requires_matching_full_left_input_right_output_layouts"
+
+
+def test_full_overlap_counts_two_product_calls_but_one_resident_child():
+    algebra = AlgebraContext(6)
+    full = algebra.layout()
+    request = action_execution_request(
+        algebra,
+        "sandwich",
+        left_layout=full,
+        input_layout=full,
+        right_layout=full,
+        output_layout=full,
+    )
+    assessment = BuiltinProvider(("action", "composed_products")).assess(request)
+    preparation = assessment.preparation
+    profile = preparation.facts.work_profile
+
+    assert preparation.left_product.route == preparation.right_product.route == "full_table"
+    assert preparation.left_product.request == preparation.right_product.request
+    assert profile.product_children == (
+        preparation.left_product.facts.work_profile,
+        preparation.right_product.facts.work_profile,
+    )
+    assert assessment.pairs == preparation.left_product.assessment.pairs
+
+
+def test_sandwich_request_and_route_rejections_are_precise():
+    algebra = AlgebraContext(3)
+    full = algebra.layout()
+    with pytest.raises(ValueError, match="explicit left_layout and right_layout"):
+        action_execution_request(algebra, "sandwich", input_layout=full)
+
+    request = action_execution_request(
+        algebra,
+        "sandwich",
+        left_layout=full,
+        input_layout=full,
+        right_layout=full,
+        output_layout=full,
+    )
+    rejected = BuiltinProvider(("action", "vector_matrix")).assess(request)
+    assert isinstance(rejected, Rejected)
+    assert rejected.reason == "route_does_not_implement_sandwich"
 
 
 class _DirectOnly:

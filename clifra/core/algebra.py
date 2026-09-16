@@ -339,15 +339,12 @@ class AlgebraContext:
             self.plan_versor_action(grade=grade, input=input, parameter=parameter, output=output), device, dtype
         )(values, weights)
 
-    def _build_geometry(self, kind, *, input=None, left=None, right=None, output=None):
+    def _build_geometry(self, kind, *, input=None, right=None, output=None):
         from ._kernel.composition import Geometry
 
-        declarations = (
-            (input,) if kind == "blade_inverse" else (left, input, right) if kind == "sandwich" else (input, right)
-        )
+        declarations = (input,) if kind == "blade_inverse" else (input, right)
         inputs = tuple(self._contract(item) for item in declarations)
-        default = inputs[1].layout if kind == "sandwich" else inputs[0].layout
-        output = self._contract(output, default=default)
+        output = self._contract(output, default=inputs[0].layout)
         kernel = Geometry(self, kind, tuple(item.layout for item in inputs), output.layout)
         return PlannedOperation(kernel, inputs, output)
 
@@ -445,7 +442,16 @@ class AlgebraContext:
 
     def plan_sandwich_action(self, *, left=None, input=None, right=None, output=None):
         """Plan L X R with ordinary tensor broadcasting."""
-        return self._build_geometry("sandwich", left=left, input=input, right=right, output=output)
+        left, input, right = self._contract(left), self._contract(input), self._contract(right)
+        output = self._contract(output, default=input.layout)
+        kernel = self._planner.action_executor(
+            "sandwich",
+            left_layout=left.layout,
+            input_layout=input.layout,
+            right_layout=right.layout,
+            output_layout=output.layout,
+        )
+        return PlannedOperation(kernel, (left, input, right), output)
 
     def sandwich_product(self, a, values, b, *, left=None, input=None, right=None, output=None):
         device, dtype = self._placement(a, values, b)

@@ -17,7 +17,7 @@ DTYPES = {"float32", "float64"}
 DEVICES = {"cpu", "cuda", "mps"}
 STORAGE_MODES = {"compact", "canonical"}
 FAMILIES = {"product", "bivector_exp", "action"}
-ACTION_OPERATIONS = {"linear", "versor"}
+ACTION_OPERATIONS = {"linear", "versor", "sandwich"}
 GENERATOR_STRUCTURES = {
     "random",
     "simple_plane",
@@ -188,6 +188,9 @@ class BenchmarkCase:
                 raise ValueError("versor action cases require values, a grade-1/2 parameter, and action_grade")
             if self.inputs[1].grades != (self.action_grade,):
                 raise ValueError("versor parameter grades must match action_grade")
+        if self.family == "action" and self.operation == "sandwich":
+            if len(self.inputs) != 3 or self.ordinary_inputs or self.action_grade is not None:
+                raise ValueError("sandwich action cases require left, input, and right Clifford values")
         if self.family != "action" and (self.ordinary_inputs or self.action_grade is not None):
             raise ValueError("ordinary inputs and action_grade are action-only declarations")
         if self.generator_structure not in GENERATOR_STRUCTURES:
@@ -300,6 +303,20 @@ def smoke_cases() -> tuple[BenchmarkCase, ...]:
             generator_structure="near_identity_matrix",
             value_scale=0.1,
             seed=1734,
+        ),
+        BenchmarkCase(
+            case_id="action.cl3.full.sandwich.shared-pair.batch2",
+            family="action",
+            operation="sandwich",
+            signature=(3, 0, 0),
+            inputs=(
+                LayoutCase((0, 1, 2, 3)),
+                LayoutCase((0, 1, 2, 3), leading_shape=(2,)),
+                LayoutCase((0, 1, 2, 3)),
+            ),
+            output=LayoutCase((0, 1, 2, 3)),
+            value_scale=0.1,
+            seed=1735,
         ),
     )
 
@@ -670,6 +687,82 @@ def exploratory_action_cases() -> tuple[BenchmarkCase, ...]:
                     )
                 )
                 seed += 1
+    cases.extend(
+        (
+            BenchmarkCase(
+                case_id="action.cl300.full.sandwich.aligned",
+                family="action",
+                operation="sandwich",
+                signature=(3, 0, 0),
+                inputs=(LayoutCase(tuple(range(4)), leading_shape=(32,)),) * 3,
+                output=LayoutCase(tuple(range(4))),
+                value_scale=0.1,
+                seed=seed,
+            ),
+            BenchmarkCase(
+                case_id="action.cl500.generic.sandwich.broadcast-reuse32x8",
+                family="action",
+                operation="sandwich",
+                signature=(5, 0, 0),
+                inputs=(
+                    LayoutCase((0, 2, 4), leading_shape=(1, 8)),
+                    LayoutCase((1,), leading_shape=(32, 8)),
+                    LayoutCase((0, 2, 4), leading_shape=(1, 8)),
+                ),
+                output=LayoutCase((1,)),
+                value_scale=0.1,
+                seed=seed + 1,
+            ),
+            BenchmarkCase(
+                case_id="action.cl600.full.sandwich.no-reuse.batch32",
+                family="action",
+                operation="sandwich",
+                signature=(6, 0, 0),
+                inputs=(LayoutCase(tuple(range(7)), leading_shape=(32,)),) * 3,
+                output=LayoutCase(tuple(range(7))),
+                value_scale=0.1,
+                seed=seed + 2,
+            ),
+            BenchmarkCase(
+                case_id="action.cl600.full.sandwich.shared-pair.batch512",
+                family="action",
+                operation="sandwich",
+                signature=(6, 0, 0),
+                inputs=(
+                    LayoutCase(tuple(range(7))),
+                    LayoutCase(tuple(range(7)), leading_shape=(512,)),
+                    LayoutCase(tuple(range(7))),
+                ),
+                output=LayoutCase(tuple(range(7))),
+                value_scale=0.1,
+                seed=seed + 3,
+            ),
+            BenchmarkCase(
+                case_id="action.cl800.full.sandwich.no-reuse.batch16",
+                family="action",
+                operation="sandwich",
+                signature=(8, 0, 0),
+                inputs=(LayoutCase(tuple(range(9)), leading_shape=(16,)),) * 3,
+                output=LayoutCase(tuple(range(9))),
+                value_scale=0.1,
+                seed=seed + 4,
+            ),
+            BenchmarkCase(
+                case_id="action.cl800.full.sandwich.broadcast-reuse32x8",
+                family="action",
+                operation="sandwich",
+                signature=(8, 0, 0),
+                inputs=(
+                    LayoutCase(tuple(range(9)), leading_shape=(32, 1)),
+                    LayoutCase(tuple(range(9)), leading_shape=(32, 8)),
+                    LayoutCase(tuple(range(9)), leading_shape=(32, 1)),
+                ),
+                output=LayoutCase(tuple(range(9))),
+                value_scale=0.1,
+                seed=seed + 5,
+            ),
+        )
+    )
     return tuple(cases)
 
 
@@ -704,4 +797,7 @@ AMORTIZATION_CASE_IDS = {
     "bivector_exp.cl600.even.commuting_planes.batch32",
     "action.cl400.vector.rotor.aligned",
     "action.cl400.bivector.linear.aligned",
+    "action.cl600.full.sandwich.shared-pair.batch512",
+    "action.cl800.full.sandwich.no-reuse.batch16",
+    "action.cl800.full.sandwich.broadcast-reuse32x8",
 }
