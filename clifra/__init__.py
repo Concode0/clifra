@@ -8,7 +8,7 @@ contracts describe coefficient storage; planned operations execute those
 contracts independently of the private planner and kernel implementations.
 """
 
-__version__ = "2.0.2"
+__version__ = "2.0.3"
 
 from clifra.core.algebra import AlgebraContext
 from clifra.core.config import AlgebraConfig, make_algebra, make_algebra_from_config

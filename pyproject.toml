@@ -1,6 +1,6 @@
 [project]
 name = "clifra"
-version = "2.0.2"
+version = "2.0.3"
 description = "clifra: Layout-first Clifford algebra tools for PyTorch"
 readme = "README.md"
 requires-python = ">=3.12"
