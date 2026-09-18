@@ -19,6 +19,7 @@ vectors = algebra.layout((1,))
 scalar_vectors = algebra.layout((0, 1))
 x = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64, requires_grad=True)
 canonical = vectors.full(x)
+
 assert canonical.shape == (8,)
 torch.testing.assert_close(vectors.compact(canonical), x)
 extended = scalar_vectors.convert(x, vectors)

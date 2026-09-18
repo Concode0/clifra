@@ -13,9 +13,11 @@ algebra = make_algebra(3, dtype=torch.float64)
 vectors = algebra.layout((1,))
 output = algebra.layout((0, 2))
 product = algebra.plan_product(left=vectors, right=vectors, output=output)
+
 x = torch.arange(24, dtype=torch.float64).reshape(2, 4, 3)
 w = torch.tensor([[1., 0., 0.], [0., 1., 0.]], dtype=x.dtype)
 y = product(x, w[:, None, :])
+
 assert y.shape == (2, 4, 4)
 for batch in range(2):
     for item in range(4):

@@ -16,8 +16,11 @@ compiled = torch.compile(product, backend="aot_eager", fullgraph=True)
 
 x = torch.tensor([[1., 2., 0.]], dtype=torch.float64, requires_grad=True)
 y = torch.tensor([[0., 1., 3.]], dtype=torch.float64, requires_grad=True)
+
 expected, actual = product(x, y), compiled(x, y)
+
 torch.testing.assert_close(actual, expected)
+
 expected_grad = torch.autograd.grad(expected.square().sum(), (x, y))
 actual_grad = torch.autograd.grad(actual.square().sum(), (x, y))
 for got, want in zip(actual_grad, expected_grad):

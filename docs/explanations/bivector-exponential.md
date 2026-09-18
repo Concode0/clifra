@@ -144,8 +144,7 @@ the Clifford exponential into a low-rank approximation.
 
 Large hyperbolic generators can produce large exponential coefficients.
 Finite closure bounds the algebraic expansion but not coefficient magnitude: a finite input can still exceed the representable output range.
-General materialized routes require float32 or float64; device support can impose
-additional restrictions. Among the supported output dtypes, MPS is limited to float32, and some methods transfer unsupported operations to CPU.
+General Taylor and matrix routes require float32 or float64; on MPS those routes are limited to float32. Closed-form routes have separate dtype constraints.
 
 ## Applying the induced action
 

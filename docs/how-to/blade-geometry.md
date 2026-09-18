@@ -20,17 +20,22 @@ from clifra import make_algebra
 algebra = make_algebra(3, dtype=torch.float64)
 vectors = algebra.layout((1,))
 bivectors = algebra.layout((2,))
+
 plane = torch.tensor([2., 0., 0.], dtype=torch.float64)  # 2 e12
 x = torch.tensor([1., 2., 3.], dtype=torch.float64)
+
 project = algebra.plan_strict_blade_project(input=vectors, blade=bivectors)
 projection = project(x, plane)
 rejection = algebra.strict_blade_reject(x, plane, input=vectors, blade=bivectors)
+
 torch.testing.assert_close(projection, torch.tensor([1., 2., 0.], dtype=x.dtype))
 torch.testing.assert_close(projection + rejection, x)
+
 inverse = algebra.strict_blade_inverse(plane, input=bivectors)
 identity = algebra.geometric_product(
     plane, inverse, left=bivectors, right=bivectors, output=algebra.layout((0,)),
 )
+
 torch.testing.assert_close(identity, torch.ones(1, dtype=x.dtype))
 
 try:

@@ -25,8 +25,9 @@ torch.testing.assert_close(
 assert spectral.left_multiplication_eigenvalue_magnitudes is not None
 
 commutators = CommutatorAnalyzer(algebra).analyze(observations)
-assert abs(commutators.mean_commutator_norm - 1.) < 1e-12
 transformations = TransformationDiagnosticsAnalyzer(algebra).analyze(observations)
+
+assert abs(commutators.mean_commutator_norm - 1.) < 1e-12
 assert transformations.odd_grade_energy_fraction == 1.
 ```
 
@@ -66,11 +67,13 @@ reflection scores along null basis directions, where the inverse is undefined.
 ```python
 degenerate = make_algebra(1, 0, 1, dtype=torch.float64)
 data = degenerate.layout((1,)).full(coordinates[:, :2])
+
 diagnostics = TransformationDiagnosticsAnalyzer(degenerate).analyze(data)
 null_score = next(
     item["score"] for item in diagnostics.basis_reflection_marginal_scores
     if item["direction"] == 1
 )
+
 assert null_score is None
 assert "basis_reflection_marginal_scores" in diagnostics.skipped
 ```

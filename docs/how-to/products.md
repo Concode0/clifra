@@ -21,8 +21,10 @@ algebra = make_algebra(2, dtype=torch.float64)
 vectors = algebra.layout((1,))
 bivectors = algebra.layout((2,))
 even = algebra.layout((0, 2))
+
 e1 = torch.tensor([1., 0.], dtype=torch.float64)
 e2 = torch.tensor([0., 1.], dtype=torch.float64)
+
 product = algebra.geometric_product(e1, e2, left=vectors, right=vectors)
 torch.testing.assert_close(product, torch.tensor([0., 1.], dtype=e1.dtype))
 wedge = algebra.wedge(e1, e2, left=vectors, right=vectors)

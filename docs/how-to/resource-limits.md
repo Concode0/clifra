@@ -17,12 +17,15 @@ import torch
 from clifra import AlgebraConfig, ResourceLimits, make_algebra, make_algebra_from_config
 
 limits = ResourceLimits()
+
 algebra = make_algebra(16, resource_limits=limits)
 assert algebra.resource_limits is limits
 vector = algebra.layout((1,))
 scalar = algebra.layout((0,))
+
 dot = algebra.plan_product(left=vector, right=vector, output=scalar)
 x = torch.arange(16, dtype=torch.float32)
+
 torch.testing.assert_close(dot(x, x), x.square().sum().reshape(1))
 assert vector.dim == 16
 assert algebra.dim == 65536

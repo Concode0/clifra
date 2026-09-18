@@ -18,12 +18,14 @@ from clifra import make_algebra
 algebra = make_algebra(2, 1, dtype=torch.float64)
 vectors = algebra.layout((1,))
 mixed = algebra.layout((0, 1, 2))
+
 assert vectors.basis_indices == (1, 2, 4)
 assert mixed.basis_indices == (0, 1, 2, 3, 4, 5, 6)
 # Mixed lanes: 1, e1, e2, e12, e3, e13, e23.
 e3 = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float64)
 square = algebra.scalar_product(e3, e3, left=vectors, right=vectors)
 torch.testing.assert_close(square, torch.tensor([-1.0], dtype=torch.float64))
+
 assert mixed.positions_for_grades((1,)).tolist() == [1, 2, 4]
 ```
 

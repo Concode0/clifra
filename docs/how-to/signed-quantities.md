@@ -23,10 +23,12 @@ vectors = algebra.layout((1,))
 x = torch.tensor([[1., 1.], [0., 2.]], dtype=torch.float64)
 energy = algebra.lane_energy(x, input=vectors)
 signed = algebra.signature_norm_squared(x, input=vectors)
+
 torch.testing.assert_close(energy, torch.tensor([[2.], [4.]], dtype=x.dtype))
 torch.testing.assert_close(signed, torch.tensor([[0.], [-4.]], dtype=x.dtype))
 conjugate = algebra.conjugate_scalar_form(x, x, left=vectors, right=vectors)
 torch.testing.assert_close(conjugate, -signed)
+
 by_grade = algebra.lane_grade_energy(x, input=vectors)
 assert by_grade.shape == (2, 3)
 torch.testing.assert_close(by_grade[:, 1:2], energy)

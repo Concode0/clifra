@@ -21,11 +21,13 @@ from clifra import make_algebra
 
 torch.manual_seed(7)
 algebra = make_algebra(3, 0, dtype=torch.float64)
+
 vectors = algebra.layout((1,))
 bivectors = algebra.layout((2,))
 action = algebra.plan_versor_action(
     grade=2, input=vectors, parameter=bivectors, output=vectors,
 )
+
 heights = torch.linspace(-1, 1, 25, dtype=torch.float64)
 angles = torch.arange(40, dtype=torch.float64) * (2 * math.pi / 40)
 z, phi = torch.meshgrid(heights, angles, indexing="ij")
@@ -40,6 +42,7 @@ def generator_field(coefficients):
 
 with torch.no_grad():
     target = action(surface, generator_field(true_coefficients))
+    
 assert surface.shape == target.shape == (25, 40, 3)
 ```
 
@@ -76,7 +79,8 @@ for step in range(500):
 
 The matrix multiplication that evaluates the polynomial is ordinary PyTorch.
 clifra is responsible for the meaning of the resulting bivectors and their
-action on vectors. The fixed low-degree basis provides enough smoothness for this example, so no separate regularization term is used. A more flexible field
+action on vectors. The fixed low-degree basis imposes a smooth parameterization,
+so this example uses no separate regularization term. A more flexible field
 would need enough observations or a suitable prior to determine behavior
 between samples.
 

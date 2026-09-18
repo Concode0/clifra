@@ -15,7 +15,9 @@ from clifra.optimizers import clip_coefficients_, normalize_coefficients_, post_
 algebra = make_algebra(2)
 mixed = algebra.layout((0, 1, 2))
 coefficients = torch.nn.Parameter(torch.tensor([0.1, -0.2, 0.3, 0.4]))
+
 assert coefficients.shape[-1] == mixed.dim
+
 optimizer = torch.optim.Adam([coefficients], lr=0.01)
 optimizer.zero_grad()
 algebra.lane_energy(coefficients, input=mixed).sum().backward()
@@ -55,8 +57,10 @@ from clifra.optimizers import exponential_update, project_to_rotor_tangent_space
 algebra = make_algebra(3, dtype=torch.float64)
 bivector = algebra.layout((2,))
 full = TensorContract.canonical(algebra.layout())
+
 rotor = torch.zeros(algebra.dim, dtype=torch.float64)
 rotor[0] = 1
+
 ambient = bivector.full(torch.tensor([0.02, 0., 0.], dtype=torch.float64))
 tangent = project_to_rotor_tangent_space(rotor, ambient, algebra)
 updated = exponential_update(rotor, tangent, algebra)

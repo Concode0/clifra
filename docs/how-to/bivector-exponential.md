@@ -12,13 +12,16 @@ from clifra import make_algebra
 algebra = make_algebra(3, dtype=torch.float64)
 bivectors = algebra.layout((2,))
 even = algebra.layout((0, 2))
+
 exponential = algebra.plan_bivector_exp(input=bivectors, output=even)
 theta = torch.tensor(0.4, dtype=torch.float64, requires_grad=True)
 B = torch.stack((theta, theta * 0, theta * 0))
 value = exponential(B)
+
 expected = torch.stack((theta.cos(), theta.sin(), theta * 0, theta * 0))
-torch.testing.assert_close(value, expected)
 derivative, = torch.autograd.grad(value[0], (theta,))
+
+torch.testing.assert_close(value, expected)
 torch.testing.assert_close(derivative, -theta.detach().sin())
 ```
 

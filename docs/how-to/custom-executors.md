@@ -55,10 +55,12 @@ class ScalarProvider:
 registry = ExecutorRegistry((ScalarProvider(), *ExecutorRegistry.default().providers))
 algebra = make_algebra(3, dtype=torch.float64, registry=registry)
 scalar = algebra.layout((0,))
+
 product = algebra.plan_product(left=scalar, right=scalar, output=scalar)
 x = torch.tensor([[2.], [3.]], dtype=torch.float64, requires_grad=True)
 y = torch.tensor([4.], dtype=torch.float64, requires_grad=True)
 result = product(x, y)
+
 torch.testing.assert_close(result, x * y)
 dx, dy = torch.autograd.grad(result.sum(), (x, y))
 torch.testing.assert_close(dx, y.expand_as(x))

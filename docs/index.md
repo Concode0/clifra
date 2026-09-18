@@ -13,8 +13,10 @@ from clifra import make_algebra
 
 algebra = make_algebra(3, 0)
 vectors = algebra.layout((1,))
+
 a = torch.tensor([1.0, 0.0, 0.0])
 b = torch.tensor([0.0, 1.0, 0.0])
+
 ab = algebra.geometric_product(a, b, left=vectors, right=vectors)
 # [0, 1, 0, 0]: coefficients of 1, e12, e13, e23
 ```

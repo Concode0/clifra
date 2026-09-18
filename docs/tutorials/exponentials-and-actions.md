@@ -17,12 +17,15 @@ import torch
 from clifra import make_algebra
 
 algebra = make_algebra(2, 0, dtype=torch.float64)
+
 vectors = algebra.layout((1,))
 bivectors = algebra.layout((2,))
 even = algebra.layout((0, 2))
+
 exponential = algebra.plan_bivector_exp(input=bivectors, output=even)
 theta = torch.tensor([0.7], dtype=torch.float64, requires_grad=True)
 exp_b = exponential(theta)
+
 torch.testing.assert_close(exp_b, torch.cat((theta.cos(), theta.sin())))
 ```
 
@@ -45,11 +48,13 @@ sandwich = algebra.plan_sandwich_action(
     left=even, input=vectors, right=even, output=vectors,
 )
 x = torch.tensor([1.0, 0.0], dtype=torch.float64)
+
 rotor = exponential(-theta / 2)
 inverse_rotor = exponential(theta / 2)
 explicit = sandwich(rotor, x, inverse_rotor)
 induced = action(x, theta)
 expected = torch.cat((theta.cos(), theta.sin()))
+
 torch.testing.assert_close(induced, expected)
 torch.testing.assert_close(explicit, induced)
 ```
@@ -68,10 +73,12 @@ the transformed geometry. The two routes represent the same mathematical action,
 ```python
 points = torch.tensor([[1.0, 2.0], [-0.5, 0.3]], dtype=torch.float64)
 rotated = action(points, theta)
+
 torch.testing.assert_close(rotated.square().sum(-1), points.square().sum(-1))
 torch.testing.assert_close(action(rotated, -theta), points)
 
 derivative, = torch.autograd.grad(induced[1], theta)
+
 torch.testing.assert_close(derivative, theta.cos())
 ```
 

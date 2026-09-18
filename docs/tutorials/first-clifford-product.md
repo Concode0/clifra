@@ -40,8 +40,10 @@ yields a mixed-grade multivector, distinct from elementwise multiplication of th
 ```python
 a = torch.tensor([2.0, 1.0])
 b = torch.tensor([1.0, 3.0])
+
 ab = algebra.geometric_product(a, b, left=vectors, right=vectors, output=products)
 ba = algebra.geometric_product(b, a, left=vectors, right=vectors, output=products)
+
 assert torch.equal(ab, torch.tensor([5.0, 5.0]))
 assert torch.equal(ba, torch.tensor([5.0, -5.0]))
 ```

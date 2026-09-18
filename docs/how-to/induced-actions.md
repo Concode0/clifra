@@ -17,11 +17,14 @@ from clifra import make_algebra
 algebra = make_algebra(3, dtype=torch.float64)
 vectors = algebra.layout((1,))
 bivectors = algebra.layout((2,))
+
 action = algebra.plan_versor_action(grade=2, input=vectors, parameter=bivectors)
 theta = torch.tensor(torch.pi / 2, dtype=torch.float64, requires_grad=True)
+
 B = torch.stack((theta, theta * 0, theta * 0))
 x = torch.tensor([[1., 0., 0.], [0., 0., 1.]], dtype=torch.float64)
 y = action(x, B)
+
 torch.testing.assert_close(y, torch.tensor([[0., 1., 0.], [0., 0., 1.]], dtype=x.dtype))
 gradient, = torch.autograd.grad(y[0, 0], (theta,))
 torch.testing.assert_close(gradient, torch.tensor(-1., dtype=x.dtype))

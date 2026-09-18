@@ -13,10 +13,12 @@ from clifra import make_algebra
 algebra = make_algebra(3, dtype=torch.float64)
 mixed = algebra.layout((0, 1, 2))
 bivectors = algebra.layout((2,))
+
 x = torch.arange(1, mixed.dim + 1, dtype=torch.float64)
 grades = mixed.grade_indices_tensor()
 reverse = algebra.plan_unary(op="reverse", input=mixed)
 torch.testing.assert_close(reverse(reverse(x)), x)
+
 conjugated = algebra.clifford_conjugation(x, input=mixed)
 torch.testing.assert_close(
     conjugated, algebra.grade_involution(reverse(x), input=mixed),

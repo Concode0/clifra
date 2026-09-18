@@ -11,11 +11,14 @@ from clifra import make_algebra
 
 algebra = make_algebra(3, dtype=torch.float64)
 vectors = algebra.layout((1,))
+
 x = torch.tensor([[1., 2., 3.], [-1., 0., 2.]], dtype=torch.float64)
 normal = torch.tensor([1., 0., 0.], dtype=x.dtype)
+
 reflection = algebra.plan_strict_reflect(input=vectors, normal=vectors)
 result = reflection(x, normal)
 expected = x * torch.tensor([-1., 1., 1.], dtype=x.dtype)
+
 torch.testing.assert_close(result, expected)
 torch.testing.assert_close(reflection(result, normal), x)
 torch.testing.assert_close(reflection(x, 3 * normal), result)
@@ -32,6 +35,7 @@ X = torch.tensor([1., 2., 3., 4., 5., 6., 7.], dtype=x.dtype)
 reflect_mixed = algebra.plan_strict_reflect(input=mixed, normal=vectors)
 reflected = reflect_mixed(X, normal)
 signs = torch.tensor([1., -1., 1., -1., 1., -1., 1.], dtype=X.dtype)
+
 torch.testing.assert_close(reflected, X * signs)
 torch.testing.assert_close(reflect_mixed(reflected, normal), X)
 ```
