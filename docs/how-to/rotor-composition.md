@@ -2,8 +2,9 @@
 
 Materialize rotors when their coefficients need to be stored, combined, or
 used in further products. If $R_1$ acts first and $R_2$ second, the composite
-is $R_2R_1$. Order matters: bivectors in different planes generally do not
-commute, and exponentiating their sum does not reproduce sequential actions.
+is $R_2R_1$. Order matters: to reproduce sequential actions, multiply the
+rotors directly. Bivectors in different planes generally do not commute, so
+exponentiating their sum yields a different transformation.
 
 ```python
 import torch

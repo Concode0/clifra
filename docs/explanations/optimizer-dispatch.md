@@ -2,7 +2,7 @@
 
 Clifford coefficients can be ordinary PyTorch parameters. A loss differentiates
 through products or actions to those coordinates, and an optimizer determines
-the update. clifra does not infer a parameter's geometric role from its width,
+the update. Geometric parameter roles are declared explicitly; clifra does not infer them from tensor width,
 grade, or name.
 
 ## Ordinary coefficient parameters
@@ -35,8 +35,7 @@ care as in the forward calculation.
 
 `clip_coefficients_` bounds Euclidean coefficient length along a selected axis.
 `normalize_coefficients_` gives each nonzero coefficient vector unit Euclidean
-length and leaves zero vectors at zero. Neither operation certifies unit
-signature norm, blade simplicity, or rotor membership.
+length and leaves zero vectors at zero. Both operations use the Euclidean coefficient norm; they do not certify unit signature norm, blade simplicity, or rotor membership.
 
 `post_update` runs explicit callbacks in order under `torch.no_grad()`.
 `PostUpdateSGD` provides the same boundary after a successful SGD step, outside
@@ -92,16 +91,15 @@ For \(T=RB\), this is \(R\exp(B)\). The signed step size is already included in
 \(\exp(-B/2)\) for a generated action must be supplied explicitly if desired.
 
 Both helpers require identically shaped tensors in canonical full storage,
-with dtype and device matching the algebra. The caller supplies a unit rotor;
-the helpers do not test or repair arbitrary multivectors. The group update is
-differentiable, but is not claimed to be the Riemannian exponential for an
-arbitrary metric and does not transport optimizer moments.
+with dtype and device matching the algebra. The caller must supply a unit rotor,
+as the helpers do not test or repair arbitrary multivectors. The group update is differentiable, but it is not the Riemannian exponential
+for an arbitrary metric and leaves optimizer moments unchanged.
 
 ## Conditioning and constraints
 
 Strict inversion raises at an exactly zero denominator, while a very small
 nonzero denominator can still produce large values and gradients. Stabilized
-inversion changes that formula near zero. Neither choice resolves whether an
+inversion changes that formula near zero. Neither choice determines whether an
 application should approach a null direction.
 
 Similarly, coefficient normalization has a singular geometric target at zero;

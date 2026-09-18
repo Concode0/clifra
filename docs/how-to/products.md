@@ -34,7 +34,7 @@ torch.testing.assert_close(planned(e1, e2), product)
 ```
 
 `symmetric_product` means $(AB+BA)/2$. `commutator_product` means $AB-BA$,
-and `anti_commutator_product` means $AB+BA$; the latter two have no factor of
+and `anti_commutator_product` means $AB+BA$; the latter two omit the factor of
 one half. `scalar_product` selects $\langle AB\rangle_0$, without reversing
 either factor. These distinctions matter for mixed-grade coefficients.
 

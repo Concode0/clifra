@@ -76,8 +76,7 @@ for step in range(500):
 
 The matrix multiplication that evaluates the polynomial is ordinary PyTorch.
 clifra is responsible for the meaning of the resulting bivectors and their
-action on vectors. The fixed low-degree basis supplies smoothness; this
-example does not need a separate regularization term. A more flexible field
+action on vectors. The fixed low-degree basis provides enough smoothness for this example, so no separate regularization term is used. A more flexible field
 would need enough observations or a suitable prior to determine behavior
 between samples.
 

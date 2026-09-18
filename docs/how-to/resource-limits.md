@@ -7,8 +7,7 @@ can, planning raises an error rather than silently truncating the algebra.
 
 Pass a `ResourceLimits` value when constructing the algebra. The defaults
 warn at 2,048 lanes or 1,000,000 interactions and reject requirements above
-4,096 lanes or 8,000,000 interactions. These bounds govern feasibility;
-they do not select a preferred algorithm or promise a particular runtime.
+4,096 lanes or 8,000,000 interactions. These bounds govern feasibility only; they do not select a preferred algorithm or promise a particular runtime.
 
 Reduce the declared coefficient spaces when the mathematics permits it. A
 vector dot product needs vector inputs and scalar output:
@@ -50,8 +49,8 @@ can change feasibility, not just allocation size at the call site.
 
 `algebra.resource_limits` exposes the exact injected frozen value through a
 read-only property. To use another budget, construct another algebra and
-build its plans. Moving an algebra or `CliffordModule` preserves the budget;
-moving a previously built plan does not reassess it against a new one.
+build its plans. Moving an algebra or `CliffordModule` preserves the budget,
+and moving a previously built plan does not trigger reassessment against another budget.
 
 The static budget includes resident route structures, coexisting child plans,
 and larger known fixed-shape temporaries. It excludes caller-controlled batch
@@ -59,5 +58,5 @@ dimensions and is not a byte-level device memory limit. Large batches and
 pairwise item axes can still exhaust memory after a plan succeeds. Chunk those
 axes in ordinary PyTorch code. For bivector-generated transformations, request
 an induced action when you need transformed values rather than a materialized
-rotor. Custom providers must report conservative resource requirements through
-their assessments; they do not bypass the guards.
+rotor. Custom providers are subject to the same guards and must report
+conservative resource requirements through their assessments.

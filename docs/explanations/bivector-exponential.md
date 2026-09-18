@@ -61,8 +61,8 @@ finite closure with different scalar coefficient formulas.
 
 ## Materializing the exponential
 
-`algebra.bivector_exp(B, input=bivectors)` returns coefficients of $\exp(B)$.
-There is no implicit minus sign or half-angle factor. Compact grade-2 input
+`algebra.bivector_exp(B, input=bivectors)` returns coefficients of $\exp(B)$
+exactly as formulated. The convention $\exp(-B/2)$ must be applied explicitly. Compact grade-2 input
 defaults to an even-grade output layout. A full-basis input is first projected
 to grade 2.
 
@@ -77,8 +77,7 @@ subalgebra. Materialized built-in exponentials support
 dimensions 2 through 12, subject to resource limits. The Taylor path requires
 coefficient L1 norm at most 65,536.
 
-A compact input or narrow output does not guarantee compact intermediates.
-The full even subalgebra has $2^{n-1}$ lanes.
+Intermediate computations may span the full even subalgebra even when the input or requested output uses a compact layout. The full even subalgebra has $2^{n-1}$ lanes.
 
 ## General numerical evaluation
 
@@ -140,15 +139,13 @@ u=\operatorname{finfo}(\mathrm{dtype}).\mathrm{eps}.
 \]
 
 This explains why lower precision calls for a wider polynomial interval.
-The thresholds stabilize scalar coefficient evaluation; they do not change
+The thresholds stabilize scalar coefficient evaluation without changing
 the Clifford exponential into a low-rank approximation.
 
 Large hyperbolic generators can produce large exponential coefficients.
-Finite closure does not prevent overflow, and a finite input does not
-guarantee a representable output. General materialized routes require float32
-or float64; device support can impose additional restrictions. MPS does not
-support float64 output, and some methods use CPU transfers for unsupported
-operations.
+Finite closure bounds the algebraic expansion but not coefficient magnitude: a finite input can still exceed the representable output range.
+General materialized routes require float32 or float64; device support can impose
+additional restrictions. Among the supported output dtypes, MPS is limited to float32, and some methods transfer unsupported operations to CPU.
 
 ## Applying the induced action
 

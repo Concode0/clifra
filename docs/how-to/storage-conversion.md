@@ -32,9 +32,9 @@ result.sum().backward()
 torch.testing.assert_close(x.grad, 2 * x.detach())
 ```
 
-A canonical contract for vectors requires full-width storage but still means
-only grade 1. Operations gather the declared lanes; coefficients outside the
-layout do not become extra semantic inputs. Canonical outputs place zeros
+A canonical contract for vectors requires full-width storage but still
+semantically represents only grade 1. Operations gather only the declared lanes,
+ignoring coefficients outside the layout. Canonical outputs place zeros
 outside the declared layout. `TensorContract.validate` checks the lane axis,
 not whether undeclared canonical lanes contain zeros.
 

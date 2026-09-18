@@ -32,7 +32,7 @@ assert by_grade.shape == (2, 3)
 torch.testing.assert_close(by_grade[:, 1:2], energy)
 ```
 
-Scalar quantities retain a final width-one axis and do not reduce batches.
+Scalar quantities retain a final width-one axis and preserve batch dimensions.
 Grade energies and norms instead have a final axis of length $n+1$, including
 zeros for absent grades. `lane_energy(..., grades=(...))` restricts the
 coefficient penalty to selected grades. `lane_grade_distribution` normalizes
@@ -44,7 +44,6 @@ layouts by canonical blade identity, treating absent lanes as zero. Their
 leading axes still broadcast normally.
 
 A zero signed square need not mean zero coefficients; the first row above
-is a nonzero null vector. Do not take its square root as a positive norm or
-use it as a nonnegative loss. If division by this form is required, choose
-the domain and singular-input policy explicitly. Squared coefficient energy
-also avoids the square-root derivative singularity of a norm at zero.
+is a nonzero null vector. Use the Euclidean coefficient norm when you need a positive norm, or coefficient energy when you need a nonnegative loss.
+
+If division by this form is required, choose the domain and singular-input policy explicitly. Squared coefficient energy also avoids the square-root derivative singularity of a norm at zero.

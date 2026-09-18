@@ -1,8 +1,7 @@
 # Geometric Representations and Parameters
 
 A layout defines the coefficient space. The same tensor representation can be
-used as fixed data, a differentiable input, or a PyTorch parameter. Its grade
-does not determine whether it is a model weight, a sample, or an operand.
+used as fixed data, a differentiable input, or a PyTorch parameter. Its application role—model weight, sample, or operand—is independent of its grade.
 
 The operation gives the coefficients their role. A vector may enter a product,
 define a reflection normal, or be projected onto a blade. A mixed-grade value
@@ -45,8 +44,8 @@ torch.testing.assert_close(square, torch.tensor([9.0, 4.0, 8.0, 0.0]))
 ```
 
 Here \((2+v)^2=4+4v+v^2=9+4v\). The output selection retains the scalar and
-vector terms. This calculation neither needs a full multivector tensor nor
-introduces a transformation parameter.
+vector terms. This calculation uses only the specified grades and proceeds
+without introducing a transformation parameter.
 
 ## Bivectors and explicit rotors
 
@@ -100,7 +99,7 @@ An intermediate projection can remove terms needed later, so a narrow result
 cannot always replace the complete value in another expression.
 
 An exact reflection or rotor action preserves the signature-sensitive vector
-form. A subsequent coordinate gate or generic tensor map need not preserve it.
-Likewise, a coefficient normalization changes scale but does not certify blade
-simplicity or a signed invariant. Mathematical claims should refer to the
-complete calculation being used.
+form, while a subsequent coordinate gate or generic tensor map need not.
+Likewise, a coefficient normalization changes scale, but verifying blade
+simplicity or a signed invariant requires an explicit check. Mathematical
+claims should refer to the complete calculation being used.

@@ -57,8 +57,8 @@ counts are evidence about this probe procedure, not a recovery theorem for the
 data's intrinsic metric. Training work is controlled by `num_probes`,
 `probe_epochs`, `probe_lr`, and `max_probe_features`; `k` controls neighborhoods.
 
-The following optional smoke example deliberately uses little training. Its
-output should not be treated as a converged representation decision.
+The following optional smoke example deliberately uses little training. Treat
+its output as an API demonstration rather than a converged representation decision.
 
 ```python title="Optional signature probe"
 from clifra.analysis.experimental import SignatureProbeAnalyzer

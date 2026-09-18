@@ -2,8 +2,8 @@
 
 Use `plan_*` when the same mathematical operation recurs with new coefficients.
 The returned module fixes the signature, operation, input and output layouts,
-storage contracts, and any pairwise item-axis convention. It does not fix the
-coefficient values or ordinary leading batch dimensions.
+storage contracts, and any pairwise item-axis convention while leaving
+coefficient values and ordinary leading batch dimensions dynamic.
 
 ```python
 import torch
@@ -28,9 +28,7 @@ for batch in (2, 5):
     assert torch.isfinite(x.grad).all()
 ```
 
-Each call executes the resolved operation without consulting the algebra or
-planner. Gradients belong to the input tensor graph; reusing a plan does not
-retain a previous call's graph. Register plans on an `nn.Module` to move their
+Each call executes the resolved operation directly, without consulting the algebra or planner. Gradients belong to the input tensor graph; reusing a plan does not retain a previous call's graph.
 buffers and compose them with other operations.
 
 Construction checks the algebra's `resource_limits` against the static
@@ -47,7 +45,7 @@ function.
 
 Changing an input layout, requested output grades, or `pairwise` requires a new
 plan. `.to()` changes execution placement, not the mathematical contracts. Build
-plans in the intended precision: movement converts buffers but does not rerun
-algorithm selection. Request only the output grades needed by the next operation;
-the requested result is a grade projection, not a requirement to construct every
-intermediate full multivector.
+plans in the intended precision: movement converts execution buffers directly
+rather than rerunning algorithm selection. Request only the output grades needed
+by the next operation; the requested result is a grade projection, not a
+requirement to construct every intermediate full multivector.

@@ -43,8 +43,8 @@ assert product(torch.ones(5, 1, 3), torch.ones(7, 3)).shape == (5, 7, 4)
 ```
 
 Calling a retained operation converts declared storage, validates operand
-boundaries, and executes its tensor program. It does not ask the algebra to
-resolve another plan. A plan is an `nn.Module`, so it can own buffers, move with
+boundaries, and executes its tensor program directly, independent of the
+algebra and planner. A plan is an `nn.Module`, so it can own buffers, move with
 `.to()`, and be registered as a child of another module.
 
 The execution method is fixed, but its numerical program can contain
@@ -59,10 +59,10 @@ machinery and per-algebra caches. Use them for an eager expression; retain a
 plan when a repeated computation should have an explicit module boundary.
 
 `algebra.to(...)` changes defaults for future plans and clears its planning
-caches. Existing plans move independently. Moving one plan does not change the
-placement of another plan that originally shared cached work. Moving a plan
-also does not reselect its implementation. Construct a new plan when selection
-should be reconsidered for another dtype or device.
+caches. Existing plans move independently, each retaining its selected
+implementation. Moving one plan leaves the placement of other plans unchanged,
+even when they originally shared cached work. Construct a new plan when
+selection should be reconsidered for another dtype or device.
 
 Private executor types, route names, and cost formulas are not plan
 inspection APIs. The stable result of planning is the callable operation and
@@ -71,8 +71,8 @@ state is not a portable serialization format across library versions.
 
 ## What resource checks measure
 
-Compact storage removes coefficients absent from the layout. It does not imply
-that every operation costs only the output width. A full layout has \(2^n\)
+Compact storage removes coefficients absent from the layout, but an operation
+can still cost more than the output width. A full layout has \(2^n\)
 lanes; a grade-\(k\) layout has \(\binom nk\). An operation can also require many
 input interactions or a larger intermediate layout.
 
@@ -101,16 +101,16 @@ See [Set resource limits](../how-to/resource-limits.md) for examples.
 
 Providers first assess conservative resource requirements. The router compares
 them with the budget; only feasible built-in candidates reach performance
-ranking. Raising a limit permits a computation but does not make it preferred.
-Budgets do not alter the operation's mathematics or request an approximation.
+ranking. Raising a limit permits a computation, but performance ranking remains separate.
+Budgets define resource feasibility; they do not alter the operation's mathematics or request an approximation.
 
 Caller-controlled batch and item dimensions are excluded from these static
 counts. A legal pairwise product can still create an output proportional to
 \(L R\), and its backward pass may retain additional tensors. Size or chunk
 those dimensions in the application.
 
-Limits reject unavailable computations; they do not request a lower-rank
-approximation. Narrowing the output changes the requested projection, whereas
+Limits reject unavailable computations; they do not request a lower-rank approximation.
+Narrowing the output changes the requested projection, whereas
 changing a registry changes the available implementations.
 
 Private configuration and harness utilities serve kernel tests and benchmark
@@ -138,8 +138,8 @@ expansion at the boundary.
 
 A supplied registry replaces the default registry. Prepending an external
 provider to the default providers gives it precedence when eligible; appending
-one makes it a fallback. Rejected and over-budget providers do not establish
-precedence. Provider identities and behavior remain fixed while a registry is
+one makes it a fallback. Precedence applies only to accepted providers; rejected and over-budget
+providers are skipped. Provider identities and behavior remain fixed while a registry is
 in use. There is no global registration state.
 
 [Provide a custom executor](../how-to/custom-executors.md) gives a complete

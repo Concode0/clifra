@@ -77,9 +77,9 @@ storage is useful at explicit boundaries, for a genuinely full multivector, or
 when interoperating with code that requires canonical blade positions.
 
 A canonical-width tensor can still be interpreted through a narrow layout. In
-that case the layout remains the semantic declaration; coefficients outside it
-are not silently promoted into additional grades. Width validation alone does
-not verify that those outside-layout coefficients are zero.
+that case the layout remains the semantic declaration, and coefficients outside it remain outside the declared semantics unless the layout is changed explicitly. Width validation confirms
+the tensor size, but verifying that those outside-layout coefficients are zero
+requires a separate check.
 
 ## `TensorContract` removes width ambiguity
 
@@ -92,10 +92,9 @@ A `TensorContract` combines three facts:
 | `LaneStorage` | Are those blades compacted or placed in canonical positions? |
 
 The resulting lane width is deterministic. Modules can validate a tensor at
-their boundary, convert storage deliberately, and preserve meaning through
-planned operations. This matters because shape checking alone cannot determine
-whether six values are the bivectors of $Cl(4, 0)$, the vectors of $Cl(6, 0)$,
-or an unrelated feature axis.
+their boundary, convert storage deliberately, and preserve meaning through planned operations. A layout explicitly defines the geometric
+meaning; shape checking alone cannot determine whether six values are the
+bivectors of $Cl(4, 0)$, the vectors of $Cl(6, 0)$, or an unrelated feature axis.
 
 ## Layout and contract helpers
 
@@ -135,7 +134,7 @@ With `pairwise=True`, the penultimate axes are explicit item axes:
 A layout passed to an operation declares compact storage. Use
 `TensorContract.canonical(layout)` for canonical storage with that layout.
 Omitted input declarations mean the full basis. Width validates a declaration;
-it never selects the layout or storage mode.
+the caller must select the layout and storage mode explicitly.
 
 Compact tensors compose directly with PyTorch. Addition requires aligned lane
 meanings; use `target.convert(values, source)` before combining different

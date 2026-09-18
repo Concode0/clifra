@@ -56,13 +56,12 @@ torch.testing.assert_close(explicit, induced)
 
 The direct action returns compact vector coefficients. Its `grade=2` declares
 the generator grade, not the output grade. Bivector conjugation preserves the
-grade of the input, so a vector result does not require an intervening full
-multivector tensor in user code.
+grade of the input, allowing user code to work directly with a compact vector
+result instead of an intervening full multivector tensor.
 
 Use the exponential when the rotor itself is needed, for example to compose or
 inspect explicit versors. Use the induced action when the desired result is
-the transformed geometry. Neither numerical route should be assumed to be
-bitwise identical to the other; the comparison uses floating-point tolerances.
+the transformed geometry. The two routes represent the same mathematical action, but their numerical results are compared using floating-point tolerances.
 
 ## Check geometry and gradients
 

@@ -6,9 +6,8 @@ storage. These declarations live on call sites or planned operations, not on a
 special tensor subclass.
 
 The final axis holds Clifford coefficients. Other axes can represent samples,
-channels, quadrature points, or any application-defined dimensions. Their
-names have no effect on execution: ordinary shape and broadcasting rules
-determine how tensors combine.
+channels, quadrature points, or any application-defined dimensions. Ordinary
+shape and broadcasting rules determine how tensors combine; axis names have no effect on execution.
 
 ## Composition preserves declarations
 
@@ -38,7 +37,7 @@ discrete declarations, not differentiable variables.
 Broadcasting also determines gradient accumulation. If one product operand is
 shared across many samples, its gradient sums contributions from those uses.
 Giving each sample its own operand changes both the parameterization and the
-gradient shape; no separate clifra routing mechanism is required.
+gradient shape; PyTorch handles this without a separate clifra routing mechanism.
 
 Coefficient-space losses can use ordinary PyTorch arithmetic. For example,
 `(prediction - target).square().mean()` compares aligned coefficients. A signed
@@ -93,13 +92,13 @@ input tensors still need the appropriate placement.
 When a `CliffordModule` moves, it obtains an algebra context with the new
 defaults. Other owners of the original context keep their defaults.
 An ordinary `nn.Module` moves registered parameters, buffers, and child plans,
-but does not know how to update a plain algebra reference.
+but updating a plain algebra reference requires explicit handling.
 
 Reconstruct plans from signature, layouts, storage forms, and operation
-arguments before loading application parameters. Do not treat a saved private
-kernel layout as an interchange format. Post-update callbacks and custom
-executor providers are also application configuration, not learned tensor
-state.
+arguments before loading application parameters. Use these explicit
+declarations as your interchange format, rather than saved private kernel
+layouts. Post-update callbacks and custom executor providers are also
+application configuration, not learned tensor state.
 
 ## Compilation and numerical behavior
 
@@ -116,6 +115,7 @@ Check forward values and gradients on the intended dtype and device.
 Autograd follows the implemented formulas, including clamps and piecewise
 numerical choices. A strict inverse can be ill-conditioned near a null input;
 a norm has a nonsmooth point at zero; a large exponential can overflow.
-Differentiability through the tensor program does not remove these properties
-of the computation. See [Compile Clifford computations](../how-to/compilation.md)
+These numerical properties remain present when differentiating through the tensor program.
+
+See [Compile Clifford computations](../how-to/compilation.md)
 for a reproducible capture and gradient check.

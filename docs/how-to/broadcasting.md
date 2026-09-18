@@ -1,8 +1,6 @@
 # Work with leading dimensions and broadcasting
 
-The final tensor axis contains coefficients. All earlier axes use ordinary
-PyTorch broadcasting; clifra does not assign them batch, channel, or spatial
-roles. Insert singleton axes to state which values share a parameter.
+The final tensor axis contains coefficients. All earlier axes follow ordinary PyTorch broadcasting rules; their batch, channel, or spatial roles are application-defined. Insert singleton axes to state which values share a parameter.
 
 Here each of two batches contains four vectors. One vector per batch is
 multiplied with every item in that batch.
@@ -24,8 +22,8 @@ for batch in range(2):
         torch.testing.assert_close(y[batch, item], product(x[batch, item], w[batch]))
 ```
 
-Without `[:, None, :]`, the shapes `(2, 4, 3)` and `(2, 3)` do not express
-this association: their leading axes `(2, 4)` and `(2,)` are incompatible.
+The alignment must be explicit: without `[:, None, :]`, the leading axes
+`(2, 4)` and `(2,)` from shapes `(2, 4, 3)` and `(2, 3)` are incompatible.
 A scalar-valued Clifford result keeps a final lane of width one. Use
 `squeeze(-1)` only when the consumer needs an ordinary scalar tensor.
 

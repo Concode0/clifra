@@ -50,6 +50,6 @@ through this composition, so involutivity does not hold at that fallback.
 
 `plan_versor_action(grade=1, input=..., parameter=vectors)` also represents
 reflection away from singular inputs. Its action routes normalize and
-regularize normals differently; do not rely on identical near-null
-fallback values between it and `reflect`. Use a strict reflection when
+regularize normals differently. Their near-null fallback values may differ
+between it and `reflect`. Use a strict reflection when
 undefined normals must be reported rather than regularized.

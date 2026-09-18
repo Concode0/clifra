@@ -5,7 +5,7 @@ three generator coefficients, in the order $e_{12},e_{13},e_{23}$. The planned
 action turns those coefficients into a length-preserving transformation;
 PyTorch supplies the parameter, coordinate loss, and optimizer. This is one
 use of differentiation through a planned operation: the training loop acts on
-ordinary tensors and does not change the operation's contracts.
+ordinary tensors while preserving the operation's contracts.
 
 ## Construct a correspondence problem
 
@@ -77,10 +77,10 @@ with torch.no_grad():
 ```
 
 The recovered action matters more than exact recovery of the generator.
-Exponential coordinates are not globally unique, and large rotations can
-produce equivalent transformations from different coefficients. Starting near
-zero and fitting a moderate rotation keeps this example in a simple local
-regime; arbitrary initializations need not have the same optimization behavior.
+Because exponential coordinates are not globally unique, large rotations can
+produce equivalent transformations from different coefficients. This example
+starts near zero to stay within a simple local regime; arbitrary initializations
+need not have the same optimization behavior.
 
 A module can register both the generator and the planned action as attributes,
 then use ordinary `model.parameters()` and `.to()`. No additional abstraction

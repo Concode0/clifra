@@ -24,14 +24,10 @@ for got, want in zip(actual_grad, expected_grad):
     torch.testing.assert_close(got, want)
 ```
 
-`aot_eager` checks graph capture and differentiation without generating an
-optimized device kernel. This is also the backend used by the repository's
-representative compilation tests; it does not establish a speedup or support
-for every optimizing backend. Select and test an optimizing backend for your
-device, dtype, operation, and workload separately.
+`aot_eager` checks graph capture and differentiation without generating an optimized device kernel. It is also the backend used by the repository's representative compilation tests; those tests verify graph capture and differentiation, not speedup or support for every optimizing backend. Select and test an optimizing backend for your device, dtype, operation, and workload separately.
 
 Batch shapes remain ordinary tensor shapes. PyTorch may specialize or recompile
-for new shapes; a reusable clifra plan does not promise one compiled graph for
-every batch size. Move the module to its intended device and dtype before
+for new shapes; a reusable clifra plan accommodates this flexibility but does
+not promise a single compiled graph across all batch sizes. Move the module to its intended device and dtype before
 compiling. Data-dependent strict geometry checks may raise from compiled
 execution when their mathematical preconditions fail.

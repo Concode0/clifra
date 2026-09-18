@@ -2,7 +2,7 @@
 
 An executor provider implements a mathematical operation on compact coefficient
 tensors. It receives public tensor contracts, requested dtype and device, and
-operation names. It does not receive an algebra, planner, or built-in algorithm
+operation names; it does not receive an algebra, planner, or built-in algorithm
 configuration. A returned `nn.Module` must preserve the requested mathematics,
 ordinary broadcasting, and differentiation through its tensor computation.
 
@@ -66,8 +66,9 @@ torch.testing.assert_close(dy, x.sum(dim=0))
 assert any(isinstance(module, ScalarProduct) for module in product.modules())
 ```
 
-Assessment must not allocate execution buffers. Its `lanes` and `pairs` are
-conservative maxima for coefficient width and static pair/interaction footprint,
+Assessment is a static phase and must not allocate execution buffers.
+Its `lanes` and `pairs` are conservative maxima for coefficient width and static
+pair/interaction footprint,
 including coexisting child plans and larger known fixed-shape temporaries.
 Caller-controlled batch dimensions are excluded. Zero means no additional
 requirement; the input and output widths are guarded independently. A successful

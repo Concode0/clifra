@@ -14,8 +14,8 @@ e1 = torch.tensor([1.0, 0.0])
 e2 = torch.tensor([0.0, 1.0])
 ```
 
-The final axis stores coefficients of $e_1,e_2$. The layout is supplied to
-the operation; tensor width alone does not declare its meaning.
+The final axis stores coefficients of $e_1,e_2$. The layout supplied to
+the operation explicitly assigns the tensor's geometric meaning.
 
 ```python
 products = algebra.layout((0, 2))
@@ -34,8 +34,8 @@ The result lanes are scalar and $e_{12}$. For general vectors,
 $ab=\langle ab\rangle_0+a\wedge b$.
 
 The scalar part is the Euclidean inner product in this signature. The bivector
-part measures oriented area: reversing the order reverses its sign. The result
-is neither another vector nor an elementwise multiplication of the two arrays.
+part measures oriented area: reversing the order reverses its sign. This
+yields a mixed-grade multivector, distinct from elementwise multiplication of the arrays.
 
 ```python
 a = torch.tensor([2.0, 1.0])

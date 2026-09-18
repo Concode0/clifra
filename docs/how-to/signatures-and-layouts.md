@@ -32,6 +32,7 @@ contiguous slices are not generally grade selections. A grade-$k$ layout in
 dimension $n$ has $\binom nk$ lanes, while `algebra.layout()` has $2^n$.
 Whole-grade layouts are the currently supported layout implementation.
 
-Pass the layout at operation boundaries. The same width can represent
-different grades, so clifra does not infer a layout from a tensor's shape.
-Omitting a declaration means the full basis.
+Pass the layout explicitly at operation boundaries. Clifra relies on these
+declarations rather than inferring layout from tensor shape, since the same
+width can represent different grades. Omitting a declaration implies the full
+basis.

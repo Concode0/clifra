@@ -34,6 +34,6 @@ scores or bivector relations are needed.
 
 The pairwise axis convention is fixed when planning. For a one-item input,
 insert an item axis with `unsqueeze(-2)`. For large item sets, split an item
-axis into chunks before execution: compact coefficients do not remove the
-$NM$ growth of a pairwise output. Reduce results with ordinary PyTorch
+axis into chunks before execution, as the pairwise output still grows as $NM$
+regardless of coefficient compactness. Reduce results with ordinary PyTorch
 operations after deciding which item axis the reduction represents.

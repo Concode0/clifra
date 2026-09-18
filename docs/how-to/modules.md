@@ -37,10 +37,8 @@ signature above it equals a coefficient dot product; with a mixed signature
 the same declaration computes the signed pairing. The parameter and loss
 remain ordinary PyTorch tensors in either case.
 
-Moving the module moves its parameters and registered plans. It does not move
-the caller's input tensors or change the algebra used to construct it. Plans
-execute independently of that algebra, and moving one plan does not change
-another plan that originally shared cached execution buffers.
+Moving the module moves its parameters and registered plans without affecting
+caller inputs or the original algebra. Plans execute and move independently, even when they originally shared cached execution buffers.
 
 Use `CliffordModule` when the module also needs an algebra reference for future
 construction or direct algebra calls:

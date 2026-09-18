@@ -111,8 +111,8 @@ Away from singular denominators it agrees with the sandwich formula.
 Its numerical normalization and guards differ from the direct inverse
 composition, so their regularized null behavior need not agree.
 
-A general sandwich `sandwich_product(L, X, R, ...)` computes \(LXR\).
-It does not infer that \(R=L^{-1}\). For a rotor \(R\), the usual action is
+A general sandwich `sandwich_product(L, X, R, ...)` computes \(LXR\) with the
+provided factors. It does not infer that \(R=L^{-1}\). For a rotor \(R\), the usual action is
 \(RX\widetilde R\); this inverse relation follows from rotor membership,
 not simply from an even-grade layout.
 

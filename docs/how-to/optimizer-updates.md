@@ -30,13 +30,13 @@ torch.testing.assert_close(directions, torch.tensor([[0.6, 0.8], [0., 0.]]))
 
 These in-place helpers run without recording gradients and preserve tensor
 identity. Their norm is the positive Euclidean coefficient norm; normalization
-does not establish a signed unit norm or rotor membership. Zero vectors remain
-zero. Inputs must be finite real floating-point tensors. The helpers scale
-coefficients before taking a norm to avoid overflow for large finite values.
+scales the coefficient vector to length one without establishing a signed unit
+norm or rotor membership. Zero vectors remain zero. Inputs must be finite real
+floating-point tensors. The helpers scale coefficients before taking a norm to
+avoid overflow for large finite values.
 
 `post_update` executes zero-argument callbacks in order after `optimizer.step()`
-and outside any loss closure. It discovers no parameters and does not change
-optimizer moments. An exception leaves earlier adjustments applied.
+and outside any loss closure. It runs only the specified callbacks and does not discover parameters or modify optimizer moments itself. An exception leaves earlier adjustments applied.
 `PostUpdateSGD(..., post_update=callback)` provides the same explicit callback
 after each successful SGD step, including steps with no gradients. Reattach
 the callback when restoring optimizer state; `differentiable=True` is unsupported.
@@ -69,7 +69,7 @@ The projection is $R\langle\widetilde R V\rangle_2$, an idempotent map onto
 tangents $RB$ under the unit-rotor assumption. It is not generally a Euclidean
 orthogonal projection in mixed or degenerate signatures. The update is
 $R\exp(\langle\widetilde R T\rangle_2)$. Supply the complete signed step in
-$T$, including the learning rate and any half-angle convention; the function
-adds neither a minus sign nor a factor of one half. Both functions are
-differentiable, but do not transport optimizer moments or define a general
+$T$, including the learning rate and any half-angle convention, as the function
+uses $T$ exactly as provided. Both functions are
+differentiable, but they leave optimizer moments unchanged and do not define a general
 Riemannian exponential for an independently chosen metric.

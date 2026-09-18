@@ -32,7 +32,7 @@ def main():
         with TemporaryDirectory(prefix="clifra-doc-examples-") as temporary:
             os.chdir(temporary)
             for path in pages:
-                source = path.read_text()
+                source = path.read_text(encoding="utf-8")
                 namespace = {"__name__": "__main__"}
                 blocks = 0
                 for match in pattern.finditer(source):

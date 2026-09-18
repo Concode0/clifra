@@ -2,9 +2,7 @@
 
 clifra plans an operation before it sees the coefficient values or leading
 tensor dimensions used at execution time. When several built-in executors can
-implement the same request, `DefaultPolicy` therefore cannot be a latency
-predictor over runtime inputs. It needs a static comparison derived from the
-declared algebraic structure.
+implement the same request, `DefaultPolicy` uses a static comparison based on the declared algebraic structure rather than predicting latency from runtime inputs.
 
 The policy is built in two stages:
 
@@ -13,8 +11,8 @@ The policy is built in two stages:
 2. calibrate a small shared score over those structural coordinates using
    forced-route benchmark measurements.
 
-The distinction matters. Benchmark timings choose coefficients and crossover
-boundaries; they do not define the structural features. Conversely, a
+The distinction matters. Benchmark timings calibrate coefficients and crossover
+boundaries over structural features. Conversely, a
 structural count is not claimed to be an elapsed-time estimate.
 
 This page describes that methodology. The scores are private planning
@@ -29,10 +27,11 @@ Route selection uses information fixed by the request: the signature,
 operation, layouts, dtype, and structural counts that can be derived from
 them. Selected child plans are also available when a parent route is assessed.
 
-The policy deliberately does not depend on leading batch dimensions, runtime
-coefficient values, forward-versus-backward intent, or backend timing tables.
-Those quantities can change the fastest implementation, but making them part
-of `DefaultPolicy` would change the planning contract.
+The policy relies strictly on information fixed by the request. It deliberately
+excludes leading batch dimensions, runtime coefficient values,
+forward-versus-backward intent, and backend timing tables. Those quantities
+can change the fastest implementation, but making them part of `DefaultPolicy`
+would change the planning contract.
 
 Feasibility is a separate question. `ResourceRequirements` first rejects
 routes whose static storage or interaction requirements exceed the configured
@@ -576,10 +575,7 @@ The structural model claims that route selection is based on algorithmic work
 that can be known when planning occurs, with a small empirical calibration of
 their relative importance.
 
-It does not claim that the score predicts latency, that its coefficients are
-portable hardware constants, or that every runtime call follows the exact
-structural path used by the score. It also does not use benchmark observations
-to invent arbitrary planner features.
+The score models relative algorithmic work rather than latency. Its coefficients are not portable hardware constants, and runtime calls need not follow the exact structural path represented by the score. Benchmark observations calibrate known structural features; they do not introduce arbitrary planner features.
 
 The methodology is:
 

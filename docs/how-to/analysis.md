@@ -41,7 +41,7 @@ The commutator diagnostics use the full bracket $[a,b]=ab-ba$, following the cor
 `commutator_product` convention without a factor of one half. Mean commutator norm measures
 the coefficient norm of $[a_i,\bar a]$, averaged over observations. The vector
 pair measurement and basis-bivector ratios answer different questions; they
-do not classify an algebra or infer a signature from the observations.
+measure asymmetry and basis alignment within the declared signature rather than classifying an algebra or inferring a signature from the observations.
 
 To test closure of a specific bivector span, supply its canonical blade indices:
 

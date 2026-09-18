@@ -28,7 +28,7 @@ gives $1+B$. General bivectors need not have scalar squares, so applying
 this two-term formula to their coefficient norm is incorrect.
 
 Use an explicit output layout to select coefficients of the exponential.
-This selection does not project every intermediate power in the series.
+The output layout selects coefficients from the final result; intermediate powers may use wider layouts.
 Full-basis input is accepted but projected to grade 2 first; this API is not
 a general mixed-grade multivector exponential.
 

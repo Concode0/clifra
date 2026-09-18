@@ -51,8 +51,7 @@ reduces both sample and scalar axes. Broadcasting shares the direction across
 samples, and autograd adds their contributions to its gradient.
 
 The gradient above is a derivative in coefficient coordinates. In $Cl(3,0)$
-the scalar product also agrees with the ordinary dot product. This equality
-does not extend unchanged to an indefinite signature: metric signs enter the
+the scalar product also agrees with the ordinary dot product. While this equality holds for a Euclidean signature, an indefinite signature alters it: metric signs enter the
 Clifford product, while PyTorch still differentiates its coordinate expression.
 
 ```python
@@ -81,8 +80,7 @@ Changing an algebra context's defaults affects future plans; existing plans
 move independently. A new signature, layout, storage choice, or operation
 requires a corresponding new plan.
 
-Planning can reduce repeated setup, but it does not remove the cost of the
-requested computation. Output width and the number of interacting blades
+Planning reduces repeated setup overhead, but the requested tensor computation still incurs its execution cost. Output width and the number of interacting blades
 still matter, and broadcasting can create a large result. Request only the
 grades the next computation needs.
 
