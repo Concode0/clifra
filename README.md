@@ -38,7 +38,7 @@ tensor contract declares compact or canonical storage. Planned operations fix
 these declarations while coefficient values and leading tensor dimensions
 remain ordinary PyTorch inputs.
 
-[Tutorials](https://concode0.github.io/clifra/tutorials/) · [How-to guides](https://concode0.github.io/clifra/how-to/) · [Explanations](https://concode0.github.io/clifra/explanations/) · [Research](https://concode0.github.io/clifra/research/) · [API reference](https://concode0.github.io/clifra/reference/)
+[Tutorials](https://concode0.github.io/clifra/tutorials/) · [How-to guides](https://concode0.github.io/clifra/how-to/) · [Explanations](https://concode0.github.io/clifra/explanations/) · [Research](https://concode0.github.io/clifra/research/) · [Model benchmarks](https://github.com/Concode0/clifra-model-bench) · [API reference](https://concode0.github.io/clifra/reference/)
 
 ## Development
 
