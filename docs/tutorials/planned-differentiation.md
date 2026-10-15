@@ -80,6 +80,14 @@ Changing an algebra context's defaults affects future plans; existing plans
 move independently. A new signature, layout, storage choice, or operation
 requires a corresponding new plan.
 
+Determinant-backed linear actions and Taylor bivector exponentials support
+`torch.func.grad`, `jvp`, `jacrev`, `jacfwd`, and `hessian`, as well as `vmap`
+and nested differentiation and batching. Taylor exponentials retain their
+numerical input envelope under batching. When compiling a mapped plan, wrap
+the tensor call in a function, such as `def apply(x): return operation(x)`,
+before applying `vmap`; this avoids a PyTorch tracing limitation when formatting
+an `nn.Module` directly. Keep plan construction outside the transformed function.
+
 Planning reduces repeated setup overhead, but the requested tensor computation still incurs its execution cost. Output width and the number of interacting blades
 still matter, and broadcasting can create a large result. Request only the
 grades the next computation needs.

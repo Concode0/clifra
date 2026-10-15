@@ -13,6 +13,39 @@ from torch import nn
 from clifra.core._kernel.numerics import _matrix_exp_singleton_workaround
 
 
+# Preserve the custom batching rule when Dynamo captures an enclosing vmap.
+@torch.compiler.allow_in_graph
+class _TaylorEnvelope(torch.autograd.Function):
+    """Validate every mapped norm without branching on a batched tensor."""
+
+    @staticmethod
+    def forward(norm):
+        valid = (norm <= 65536.0).all()
+        # MPS lacks the assertion kernel; transfer only this validation scalar.
+        if norm.device.type == "mps":
+            valid = valid.cpu()
+        torch._assert_async(valid, "bivector_exp Taylor requires coefficient L1 norm <= 65536")
+        return norm.clone(), False
+
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        pass
+
+    @staticmethod
+    def backward(ctx, gradient, marker_gradient):
+        return gradient
+
+    @staticmethod
+    def jvp(ctx, tangent):
+        return tangent, None
+
+    @staticmethod
+    def vmap(info, in_dims, norm):
+        # Recursion validates the physical batch, including any outer vmap.
+        checked, _ = _TaylorEnvelope.apply(norm)
+        return (checked, True), (in_dims[0], None)
+
+
 class TaylorPolynomial(nn.Module):
     """Horner evaluation with statically pruned intermediate grade contracts."""
 
@@ -131,11 +164,10 @@ class BivectorExpExecutor(nn.Module):
     def _taylor(self, values):
         norm = values.detach().abs().sum(-1, keepdim=True)
         # A finite numerical envelope also bounds the compiled control-flow graph.
-        valid = (norm <= 65536.0).all()
-        # MPS lacks the assertion kernel; transfer only this validation scalar.
-        if values.device.type == "mps":
-            valid = valid.cpu()
-        torch._assert_async(valid, "bivector_exp Taylor requires coefficient L1 norm <= 65536")
+        norm, mapped = _TaylorEnvelope.apply(norm)
+        if mapped:
+            # vmap cannot use value-dependent branches or ragged partitions.
+            return self._scaled_taylor(values, fixed_steps=True)
         if torch.compiler.is_compiling():
             return torch.cond((norm > 1).any(), self._scaled_taylor, self._plain_taylor, (values,))
         active = norm > 1
@@ -171,13 +203,18 @@ class BivectorExpExecutor(nn.Module):
         degree = 18 if values.dtype == torch.float64 else 12
         return self.polynomial(values, f"output_{degree}")
 
-    def _scaled_taylor(self, values):
+    def _scaled_taylor(self, values, *, fixed_steps=False):
         scaling = torch.ceil(torch.log2(values.detach().abs().sum(-1, keepdim=True).clamp_min(1)))
         degree = 18 if values.dtype == torch.float64 else 12
         result = self.polynomial(values * torch.exp2(-scaling), f"full_{degree}")
         for step in range(16):
             active = scaling > step
-            if torch.compiler.is_compiling():
+            if fixed_steps:
+                # Do not square inactive rows: a finite large exponential can
+                # overflow on the unused branch and contaminate its derivatives.
+                square_input = torch.where(active, result, 0)
+                result = torch.where(active, self.square.forward_compact(square_input, square_input), result)
+            elif torch.compiler.is_compiling():
                 result = torch.cond(
                     active.any(),
                     lambda x, mask: torch.where(mask, self.square.forward_compact(x, x), x),

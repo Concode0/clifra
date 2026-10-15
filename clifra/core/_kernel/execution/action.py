@@ -213,18 +213,33 @@ class GradedLinearActionExecutor(nn.Module):
         self.input_contract.validate(values, name="values")
 
 
+# Let AOTAutograd trace the tensor formulas; Dynamo cannot inline a custom JVP.
+@torch.compiler.allow_in_graph
 class _ActionDeterminant(torch.autograd.Function):
     """Small determinant execution with polynomial derivatives at singular maps."""
 
+    generate_vmap_rule = True
+
     @staticmethod
-    def forward(ctx, matrix):
-        ctx.save_for_backward(matrix)
+    def forward(matrix):
         if matrix.device.type == "mps":
             if matrix.shape[-1] == 4:
                 return _grade4_determinant(matrix)
             if matrix.shape[-1] == 5 and matrix.numel() <= 2048 * 25:
                 return _grade5_determinant(matrix)
         return torch.linalg.det(matrix.reshape(-1, matrix.shape[-1], matrix.shape[-1])).reshape(matrix.shape[:-2])
+
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        (matrix,) = inputs
+        ctx.save_for_backward(matrix)
+        ctx.save_for_forward(matrix)
+
+    @staticmethod
+    def jvp(ctx, tangent):
+        (matrix,) = ctx.saved_tensors
+        cofactors = _ActionDeterminant.backward(ctx, torch.ones_like(matrix[..., 0, 0]))
+        return (cofactors * tangent).sum(dim=(-2, -1))
 
     @staticmethod
     def backward(ctx, gradient):
