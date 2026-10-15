@@ -41,6 +41,15 @@ def _uniform_output_group_size(positions: torch.Tensor, output_dim: int) -> int:
     return group_size if bool(torch.all(counts == group_size)) else 0
 
 
+def _masked_pairwise_contraction(left, right_gathered, coefficients):
+    # Both operands must exclude absent interactions before multiplication.
+    # Masking only a zero coefficient still contracts nonfinite lanes with zero.
+    present = coefficients != 0
+    left = torch.where(present, left.unsqueeze(-1), 0)
+    right = torch.where(present, right_gathered, 0) * coefficients
+    return torch.einsum("...lik,...rik->...lrk", left, right)
+
+
 class GradeProductExecutor(nn.Module):
     """Compile-friendly grade-restricted product using a static interaction plan.
 
@@ -186,6 +195,8 @@ class GradeProductExecutor(nn.Module):
                 self.left_layout.dim,
                 self.output_dim,
             )
+            if self.pair_count < self.pairwise_coefficients.numel():
+                return _masked_pairwise_contraction(left, right_gathered, self.pairwise_coefficients)
             weighted_right = right_gathered * self.pairwise_coefficients
             return torch.einsum("...li,...rik->...lrk", left, weighted_right)
 
@@ -195,6 +206,8 @@ class GradeProductExecutor(nn.Module):
             self.right_layout.dim,
             self.output_dim,
         )
+        if self.pair_count < self.pairwise_coefficients.numel():
+            return _masked_pairwise_contraction(right, left_gathered, self.pairwise_coefficients).transpose(-3, -2)
         weighted_left = left_gathered * self.pairwise_coefficients
         return torch.einsum("...ljk,...rj->...lrk", weighted_left, right)
 
@@ -257,6 +270,8 @@ class FullTableProductExecutor(nn.Module):
         self.right_contract.validate(right, name="right")
         left, right = _pairwise_inputs(left, right)
         right_gathered = self._gather_right(right)
+        if self.pair_count < self.signs.numel():
+            return _masked_pairwise_contraction(left, right_gathered, self.signs)
         weighted_right = right_gathered * self.signs
         return torch.einsum("...li,...rik->...lrk", left, weighted_right)
 
