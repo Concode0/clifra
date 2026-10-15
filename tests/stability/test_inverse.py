@@ -23,6 +23,32 @@ def test_blade_inverse_preserves_negative_signature_denominator():
     assert torch.allclose(product[0, 0], torch.tensor(1.0, dtype=torch.float64))
 
 
+@pytest.mark.parametrize("dtype,coefficients", [(torch.float64, [1e-8, 0.0]), (torch.float16, [0.0, 0.0])])
+def test_moved_blade_inverse_uses_active_precision(dtype, coefficients):
+    algebra = AlgebraContext(1, 1, dtype=torch.float32)
+    layout = algebra.layout((1,))
+    moved = algebra.plan_blade_inverse(input=layout).to(dtype=dtype)
+    fresh = AlgebraContext(1, 1, dtype=dtype).plan_blade_inverse(input=layout)
+    blade = torch.tensor(coefficients, dtype=dtype)
+
+    torch.testing.assert_close(moved(blade), fresh(blade))
+    assert torch.isfinite(moved(blade)).all()
+
+
+@pytest.mark.parametrize("route", ["vector_matrix", "full_action_matrix"])
+def test_moved_reflection_uses_active_precision(route):
+    def operation(dtype):
+        algebra = configured_algebra(1, 1, dtype=dtype, planning_policy=PreferRoute("action", route))
+        return algebra.plan_versor_action(grade=1, input=algebra.layout(), parameter=algebra.layout((1,)))
+
+    moved = operation(torch.float32).to(dtype=torch.float64)
+    fresh = operation(torch.float64)
+    values = torch.arange(1, 5, dtype=torch.float64)
+    normal = torch.tensor([1.0, 1.0], dtype=torch.float64)
+
+    torch.testing.assert_close(moved(values, normal), fresh(values, normal))
+
+
 def _geometry_result(algebra, name, values, blade, layout):
     if name.endswith("blade_inverse"):
         return getattr(algebra, name)(blade, input=layout)

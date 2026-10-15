@@ -366,7 +366,6 @@ class VersorVectorMatrixExecutor(nn.Module):
         *,
         grade: int,
         parameter_layout: GradeLayout,
-        eps: float,
         generator: BivectorVectorGeneratorExecutor | None,
         metric_signs: torch.Tensor,
         eye: torch.Tensor,
@@ -377,7 +376,6 @@ class VersorVectorMatrixExecutor(nn.Module):
         self.parameter_contract = TensorContract.compact(parameter_layout)
         self.parameter_layout = self.parameter_contract.layout
         self.n = parameter_layout.spec.n
-        self.eps = float(eps)
         if self.grade == 2:
             if generator is None:
                 raise ValueError("grade-2 vector action requires a prepared generator")
@@ -414,7 +412,7 @@ class VersorVectorMatrixExecutor(nn.Module):
         scale = signature_norm_squared.abs().clamp_min(eps_like(signature_norm_squared)).sqrt()
         normals = weights / scale
         denominator = (normals * normals * signs).sum(dim=-1, keepdim=True)
-        denominator = signed_clamp_min(denominator, self.eps)
+        denominator = signed_clamp_min(denominator, eps_like(denominator) ** 2)
         weighted_normals = normals * signs
         outer = normals.unsqueeze(-1) * weighted_normals.unsqueeze(-2)
         return self.eye - 2.0 * outer / denominator.unsqueeze(-1)
@@ -513,7 +511,6 @@ class VersorActionExecutor(nn.Module):
         full_action: FullSandwichActionExecutor | None,
         rotor_full_indices: torch.Tensor,
         parameter_full_indices: torch.Tensor,
-        eps_sq: float,
     ):
         super().__init__()
         self.input_contract = TensorContract.compact(input_layout)
@@ -542,7 +539,6 @@ class VersorActionExecutor(nn.Module):
         self.middle_layout = None
         self.full_action = full_action
         self.full_dim = input_layout.spec.dim
-        self.eps_sq = float(eps_sq)
         self.rotor_layout = components.rotor_layout
         self.middle_layout = components.middle_layout
         self.bivector_exp = components.exponential
@@ -566,7 +562,8 @@ class VersorActionExecutor(nn.Module):
         scale = signature_norm_squared.abs().clamp_min(eps_like(signature_norm_squared)).sqrt()
         versor = weights / scale
         left = versor
-        denominator = signed_clamp_min(self.parameter_signature_norm_squared(versor), self.eps_sq)
+        denominator = self.parameter_signature_norm_squared(versor)
+        denominator = signed_clamp_min(denominator, eps_like(denominator) ** 2)
         right = self.parameter_reverse(versor) / denominator
         left_full = _materialize_full_from_indices(left, self.parameter_full_indices, self.full_dim)
         right_full = _materialize_full_from_indices(right, self.parameter_full_indices, self.full_dim)

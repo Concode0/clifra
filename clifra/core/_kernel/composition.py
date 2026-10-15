@@ -3,14 +3,13 @@
 from torch import nn
 
 from .basis import expand_output_grades
-from .numerics import require_nonzero, signed_clamp_min
+from .numerics import eps_like, require_nonzero, signed_clamp_min
 
 
 class Geometry(nn.Module):
     def __init__(self, algebra, kind, inputs, output):
         super().__init__()
         self.kind = kind
-        self.eps_sq = algebra.eps_sq
         blade = inputs[0] if kind == "blade_inverse" else inputs[1]
         self.reverse = algebra.plan_unary(op="reverse", input=blade, output=blade)
         self.norm = algebra.plan_signature_norm_squared(input=blade)
@@ -51,7 +50,8 @@ class Geometry(nn.Module):
         return x - result if self.kind == "blade_reject" else result
 
     def _inverse(self, blade):
-        denominator = signed_clamp_min(self.norm(blade), self.eps_sq)
+        denominator = self.norm(blade)
+        denominator = signed_clamp_min(denominator, eps_like(denominator) ** 2)
         return self.reverse(blade) / denominator
 
 

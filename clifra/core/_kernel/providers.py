@@ -771,7 +771,6 @@ def _build_action(request, route, preparation):
         vector_matrix = VersorVectorMatrixExecutor(
             grade=request.grade,
             parameter_layout=request.inputs[1].layout,
-            eps=request.algebra.eps_sq,
             generator=generator,
             metric_signs=metric_signs,
             eye=eye,
@@ -796,7 +795,6 @@ def _build_action(request, route, preparation):
         full_action=selected_full_action,
         rotor_full_indices=rotor_indices,
         parameter_full_indices=request.inputs[1].layout.indices_tensor(device=request.device),
-        eps_sq=request.algebra.eps_sq,
     )
 
 
