@@ -1,4 +1,4 @@
-"""Pure, unweighted structural work profiles for prepared routes."""
+"""Pure structural work profiles; None child entries denote unavailable work."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def product_work_profile(route: str, *, interactions: int, output_width: int, fu
 class ProductCall:
     """Repeated execution of one selected child product, with its route intact."""
 
-    profile: ProductWorkProfile
+    profile: ProductWorkProfile | None
     calls: int = 1
 
 
@@ -51,12 +51,18 @@ class BivectorExpWorkProfile:
     grade4_width: int
     even_width: int
     output_width: int
-    fixed_products: tuple[ProductWorkProfile, ...] = ()
-    plain_products: tuple[ProductWorkProfile, ...] = ()
-    scaled_products: tuple[ProductWorkProfile, ...] = ()
+    fixed_products: tuple[ProductWorkProfile | None, ...] = ()
+    plain_products: tuple[ProductWorkProfile | None, ...] = ()
+    scaled_products: tuple[ProductWorkProfile | None, ...] = ()
     square_product: ProductWorkProfile | None = None
     plain_stage_widths: tuple[int, ...] = ()
     scaled_stage_widths: tuple[int, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return all(
+            child is not None for child in (*self.fixed_products, *self.plain_products, *self.scaled_products)
+        ) and (self.route != "taylor" or self.square_product is not None)
 
     def closed(self) -> BivectorExpWorkEquation:
         if self.route != "closed":
@@ -82,8 +88,8 @@ class BivectorExpWorkProfile:
         )
 
     def taylor_scaled(self, squares: int) -> BivectorExpWorkEquation:
-        if self.route != "taylor" or self.square_product is None:
-            raise ValueError("scaled Taylor work requires the Taylor route and a square child")
+        if self.route != "taylor":
+            raise ValueError("scaled Taylor work requires the Taylor route")
         if isinstance(squares, bool) or not isinstance(squares, int) or not 1 <= squares <= 16:
             raise ValueError("Taylor square count must be a runtime integer in [1, 16]")
         return BivectorExpWorkEquation(
@@ -181,10 +187,19 @@ class ActionWorkProfile:
     reflection_cells: int = 0
     vector_matrix_exp_order: int = 0
     lift: ActionLiftProfile | None = None
-    product_children: tuple[ProductWorkProfile, ...] = ()
+    product_children: tuple[ProductWorkProfile | None, ...] = ()
     exponential_child: BivectorExpWorkProfile | None = None
     full_action_matrix_order: int = 0
     full_action_cells: int = 0
+    elementwise_cells: tuple[int | None, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        if any(child is None for child in (*self.product_children, *self.elementwise_cells)):
+            return False
+        if self.grade == 2 and self.route != "vector_matrix":
+            return self.exponential_child is not None and self.exponential_child.complete
+        return True
 
 
 @dataclass(frozen=True)
@@ -195,9 +210,13 @@ class SandwichWorkProfile:
     input_widths: tuple[int, int, int]
     output_width: int
     middle_width: int = 0
-    product_children: tuple[ProductWorkProfile, ...] = ()
+    product_children: tuple[ProductWorkProfile | None, ...] = ()
     full_action_matrix_order: int = 0
     full_action_cells: int = 0
+
+    @property
+    def complete(self) -> bool:
+        return all(child is not None for child in self.product_children)
 
     def __post_init__(self) -> None:
         counts = (
@@ -211,8 +230,8 @@ class SandwichWorkProfile:
             isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in counts
         ):
             raise ValueError("sandwich work widths and counts must be non-negative integers")
-        if any(not isinstance(child, ProductWorkProfile) for child in self.product_children):
-            raise TypeError("sandwich product children require ProductWorkProfile values")
+        if any(child is not None and not isinstance(child, ProductWorkProfile) for child in self.product_children):
+            raise TypeError("sandwich product children require ProductWorkProfile values or None")
         if self.route == "composed_products":
             if len(self.product_children) != 2:
                 raise ValueError("composed_products work requires two ordered product calls")

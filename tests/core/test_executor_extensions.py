@@ -98,6 +98,46 @@ class ExternalSandwichProvider:
         return ScalarSandwich()
 
 
+class RecordingExecutor(nn.Module):
+    def __init__(self, operation, calls):
+        super().__init__()
+        self.operation = operation
+        self.calls = calls
+
+    def forward(self, *values):
+        self.calls.append("execute")
+        return self.operation(*values)
+
+
+@dataclass(frozen=True)
+class ReferenceProvider:
+    """External modules built only from public contracts and retained reference plans."""
+
+    calls: list
+    identity: tuple[str, str] = ("product", "reference")
+
+    def assess(self, request):
+        assert type(request) is ExecutorRequest
+        self.calls.append("assess")
+        return Assessment(lanes=request.output.spec.dim, pairs=8 * request.output.spec.dim**2)
+
+    def build(self, request, assessment):
+        self.calls.append("build")
+        spec = request.output.spec
+        reference = make_algebra(spec.p, spec.q, spec.r, dtype=request.dtype, device=request.device)
+        if request.family == "product":
+            operation = reference.plan_product(
+                op=request.operation, left=request.inputs[0], right=request.inputs[1], output=request.output
+            )
+        elif request.family == "unary":
+            operation = reference.plan_unary(op=request.operation, input=request.inputs[0], output=request.output)
+        elif request.family == "metric":
+            operation = reference.plan_signature_norm_squared(input=request.inputs[0])
+        else:
+            operation = reference.plan_bivector_exp(input=request.inputs[0], output=request.output)
+        return RecordingExecutor(operation, self.calls)
+
+
 def registry_with_external(calls):
     return ExecutorRegistry((ExternalScalarProvider(calls), *ExecutorRegistry.default().providers))
 
@@ -163,6 +203,77 @@ def test_external_action_provider_can_override_public_sandwich_planning():
     assert [event for event, *_ in calls] == ["assess", "build"]
     request = calls[0][1]
     assert request.inputs == (TensorContract.compact(scalar),) * 3
+
+
+def test_external_product_participates_in_builtin_sandwich():
+    calls = []
+    algebra = make_algebra(3, dtype=torch.float64, registry=registry_with_external(calls))
+    scalar = algebra.layout((0,))
+    operation = algebra.plan_sandwich_action(left=scalar, input=scalar, right=scalar, output=scalar)
+    left, values, right = (torch.randn(2, 1, dtype=torch.float64, requires_grad=True) for _ in range(3))
+    actual, expected = operation(left, values, right), left * values * right
+
+    torch.testing.assert_close(actual, expected)
+    for found, reference in zip(
+        torch.autograd.grad(actual.sum(), (left, values, right)),
+        torch.autograd.grad(expected.sum(), (left, values, right)),
+    ):
+        torch.testing.assert_close(found, reference)
+    assert any(isinstance(module, ScalarProduct) for module in operation.modules())
+
+
+@pytest.mark.parametrize("family,grade", [("product", 2), ("bivector_exp", 2), ("unary", 2), ("metric", 1)])
+def test_external_children_participate_recursively_in_builtin_actions(family, grade):
+    calls = []
+    registry = ExecutorRegistry(
+        (ReferenceProvider(calls, (family, "reference")), *ExecutorRegistry.default().providers)
+    )
+    algebra = make_algebra(4, dtype=torch.float64, registry=registry)
+    reference = make_algebra(4, dtype=torch.float64)
+    inputs, parameter = algebra.layout(), algebra.layout((grade,))
+    operation = algebra.plan_versor_action(grade=grade, input=inputs, parameter=parameter)
+    expected_operation = reference.plan_versor_action(grade=grade, input=inputs, parameter=parameter)
+    values = torch.randn(2, inputs.dim, dtype=torch.float64, requires_grad=True)
+    weights = (torch.randn(parameter.dim, dtype=torch.float64) * 0.1).requires_grad_()
+    prepared = calls.copy()
+
+    actual, expected = operation(values, weights), expected_operation(values, weights)
+
+    torch.testing.assert_close(actual, expected, atol=2e-12, rtol=2e-12)
+    for found, wanted in zip(
+        torch.autograd.grad(actual.sum(), (values, weights)), torch.autograd.grad(expected.sum(), (values, weights))
+    ):
+        torch.testing.assert_close(found, wanted, atol=2e-11, rtol=2e-11)
+    assert calls[: len(prepared)] == prepared and calls[len(prepared) :]
+    assert set(calls[len(prepared) :]) == {"execute"}
+
+
+def test_taylor_with_external_products_handles_mixed_scaling_without_work_estimates():
+    calls = []
+    # Keep Taylor as the only exponential route, with ordinary registry precedence.
+    providers = tuple(
+        provider
+        for provider in ExecutorRegistry.default().providers
+        if provider.identity[0] != "bivector_exp" or provider.identity[1] == "taylor"
+    )
+    algebra = make_algebra(6, dtype=torch.float64, registry=ExecutorRegistry((ReferenceProvider(calls), *providers)))
+    bivector, scalar = algebra.layout((2,)), algebra.layout((0,))
+    operation = algebra.plan_bivector_exp(input=bivector, output=scalar)
+    reference = make_algebra(6, dtype=torch.float64).plan_bivector_exp(input=bivector, output=scalar)
+    values = torch.zeros(10, bivector.dim, dtype=torch.float64)
+    values[:, 0] = 0.01
+    values[-1, 0] = 2.0
+    values.requires_grad_()
+    actual, expected = operation(values), reference(values)
+
+    torch.testing.assert_close(actual, expected, atol=2e-12, rtol=2e-12)
+    torch.testing.assert_close(
+        torch.autograd.grad(actual.sum(), values)[0],
+        torch.autograd.grad(expected.sum(), values)[0],
+        atol=2e-12,
+        rtol=2e-12,
+    )
+    assert "execute" in calls
 
 
 def test_external_provider_pairwise_and_compile_need_only_forward():

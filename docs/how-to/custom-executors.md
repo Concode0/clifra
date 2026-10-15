@@ -91,6 +91,14 @@ provider gives it precedence when eligible; appending it makes it a fallback
 after built-in capability. Rejection or an over-budget assessment falls through
 without calling that provider's `build`. An empty registry remains empty.
 
+Built-in compositions select their children through the same registry, so an
+external product can also execute inside a sandwich, exponential, or versor
+action. Providers need no private planning metadata. A composition containing
+a selected child with unavailable work takes precedence over fully profiled
+alternatives; competing partial compositions compare their remaining known
+work, with registration order breaking ties. Optional execution heuristics
+that require the missing estimates are disabled.
+
 The wrapper converts canonical storage to compact storage and supplies pairwise
 expansion. The provider still needs only `forward(left, right)`:
 

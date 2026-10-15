@@ -113,8 +113,9 @@ class PlanningPolicy(Protocol):
     def evaluate(self, candidate: PlanCandidate) -> PolicyEvaluation: ...
 
 
-def _product_child_work(profile: ProductWorkProfile) -> int:
-    return profile.bulk + profile.output
+def _product_child_work(profile: ProductWorkProfile | None) -> int:
+    # Only known work contributes to a partial profile's score.
+    return 0 if profile is None else profile.bulk + profile.output
 
 
 def _equation_work(equation) -> float:
@@ -131,8 +132,6 @@ def _exp_profile_score(profile: BivectorExpWorkProfile) -> float:
     if profile.route == "left_matrix_exp":
         return _equation_work(profile.left_matrix_exp())
     if profile.route == "taylor":
-        if profile.square_product is None:
-            raise ValueError("Taylor work requires a selected square product")
         plain = _equation_work(profile.taylor_plain())
         scaled_base = (
             sum(_product_child_work(child) for child in profile.scaled_products)
@@ -155,6 +154,8 @@ def _sandwich_profile_score(profile: SandwichWorkProfile, request: ExecutorReque
     if profile.route == "composed_products":
         score = 0.0
         for child in profile.product_children:
+            if child is None:
+                continue
             bulk_weight = {"sparse": 0.25, "full_table": 1.0}.get(child.route)
             if bulk_weight is None:
                 raise ValueError(f"unknown sandwich product child route {child.route!r}")
@@ -167,7 +168,7 @@ def _sandwich_profile_score(profile: SandwichWorkProfile, request: ExecutorReque
 
 
 def _action_profile_score(profile: ActionWorkProfile, request: ExecutorRequest) -> float:
-    products = profile.product_children
+    products = tuple(child for child in profile.product_children if child is not None)
     score = (
         profile.generator_terms
         + profile.reflection_cells
@@ -191,11 +192,7 @@ def _action_profile_score(profile: ActionWorkProfile, request: ExecutorRequest) 
             + lift.grade1_matvec_cells
             + lift.output_assembly_cells
         )
-    if profile.route == "rotor_product":
-        score += profile.exponential_child.even_width + products[0].output + request.output.layout.dim
-    elif profile.route == "full_action_matrix":
-        score += request.output.spec.dim + request.inputs[0].layout.dim
-    return score
+    return score + sum(cells for cells in profile.elementwise_cells if cells is not None)
 
 
 @dataclass(frozen=True)
@@ -210,7 +207,7 @@ class DefaultPolicy:
             return PolicyEvaluation(score, "structural_product_work")
         if family == "bivector_exp":
             profile = facts.work_profile
-            if route == "left_matrix_exp" and _small_matrix_exp_regime(request, profile):
+            if profile.complete and route == "left_matrix_exp" and _small_matrix_exp_regime(request, profile):
                 # Explicit selection preference at the first biquadratic/small-matrix crossover.
                 return PolicyEvaluation(0.0, "small_matrix_exp_regime")
             return PolicyEvaluation(_exp_profile_score(profile), "structural_exp_work")
@@ -261,19 +258,24 @@ def _finite(value, name: str) -> float:
 
 
 def select_policy_route(policy: PlanningPolicy, candidates: tuple[PlanCandidate, ...]) -> RouteDecision:
-    """Select the minimum-score feasible built-in candidate."""
+    """Preserve unprofiled child precedence, then minimize known work and order."""
     keys = [(candidate.family, candidate.route) for candidate in candidates]
     if len(keys) != len(set(keys)):
         raise ValueError("route candidates may contain only one candidate per family and route")
     diagnostics: list[Mapping[str, object]] = []
-    matches: list[tuple[float, int, PlanCandidate]] = []
+    matches: list[tuple[bool, float, int, PlanCandidate]] = []
     for order, candidate in enumerate(candidates):
         evaluation = policy.evaluate(candidate)
         if not evaluation.accepted:
             diagnostics.append({"route": candidate.route, "status": evaluation.reason, **dict(evaluation.details)})
             continue
         score = _finite(evaluation.score, f"score.{candidate.family}.{candidate.route}")
-        matches.append((score, order, candidate))
+        profile = getattr(candidate.facts, "work_profile", None)
+        # A selected external child's unavailable cost must not make its parent
+        # lose to a route that bypasses it. Compare the remaining known work
+        # within that precedence group, retaining registration-order ties.
+        complete = getattr(profile, "complete", True)
+        matches.append((complete, score, order, candidate))
     if not matches:
         if candidates:
             raise PolicyCoverageError(
@@ -283,7 +285,7 @@ def select_policy_route(policy: PlanningPolicy, candidates: tuple[PlanCandidate,
         raise NoAvailableRouteError("No implemented operation route is available")
     best = matches[0]
     for item in matches[1:]:
-        if item[:2] < best[:2]:
+        if item[:3] < best[:3]:
             best = item
-    _, _, candidate = best
+    _, _, _, candidate = best
     return RouteDecision(candidate.route, candidate.facts, candidate.family)

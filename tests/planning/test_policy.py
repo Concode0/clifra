@@ -8,6 +8,8 @@ from clifra.core import AlgebraContext, ResourceLimits, TensorContract
 from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.planning.action import _linear_action_structure
 from clifra.core._kernel.planning.policy import (
+    DEFAULT_PLANNING_POLICY,
+    BivectorExpFacts,
     PlanCandidate,
     PolicyCoverageError,
     PolicyEvaluation,
@@ -15,8 +17,13 @@ from clifra.core._kernel.planning.policy import (
     SandwichFacts,
     select_policy_route,
 )
-from clifra.core._kernel.planning.work import ProductWorkProfile, SandwichWorkProfile, action_lift_profile
-from clifra.core._kernel.providers import BuiltinProvider, action_execution_request
+from clifra.core._kernel.planning.work import (
+    BivectorExpWorkProfile,
+    ProductWorkProfile,
+    SandwichWorkProfile,
+    action_lift_profile,
+)
+from clifra.core._kernel.providers import BuiltinProvider, action_execution_request, exp_execution_request
 from clifra.core.executors import ExecutorRequest
 from tests.planning._grade_plan_helpers import select_product_route
 
@@ -40,6 +47,36 @@ def test_minimum_score_and_registration_order_ties():
     candidates = (candidate("first", 2), candidate("second", 1))
     assert select_policy_route(ScoringPolicy(lambda c: c.facts.work_profile.bulk), candidates).route == "second"
     assert select_policy_route(ScoringPolicy(lambda c: 0), candidates).route == "first"
+
+
+def test_unprofiled_child_takes_precedence_over_cheaper_fully_profiled_composition():
+    algebra = AlgebraContext(3, dtype=torch.float64)
+    request = exp_execution_request(algebra.spec, "cpu", torch.float64, algebra.layout((0, 2)))
+    closed = BivectorExpWorkProfile("closed", 3, 0, 4, 4)
+    matrix = BivectorExpWorkProfile("left_matrix_exp", 3, 0, 4, 4, fixed_products=(None,))
+    candidates = tuple(
+        PlanCandidate("bivector_exp", profile.route, request, BivectorExpFacts(profile)) for profile in (closed, matrix)
+    )
+
+    assert select_policy_route(DEFAULT_PLANNING_POLICY, candidates).route == "left_matrix_exp"
+
+
+def test_partial_compositions_compare_known_work_then_registration_order():
+    algebra = AlgebraContext(4)
+    request = exp_execution_request(algebra.spec, "cpu", torch.float32, algebra.layout((0, 2, 4)))
+    matrix = BivectorExpWorkProfile("left_matrix_exp", 6, 0, 8, 8, fixed_products=(None,))
+
+    def closed(bulk):
+        profile = BivectorExpWorkProfile(
+            "closed", 6, 1, 8, 8, fixed_products=(ProductWorkProfile("sparse", bulk, 0), None, None)
+        )
+        return PlanCandidate("bivector_exp", "closed", request, BivectorExpFacts(profile))
+
+    matrix = PlanCandidate("bivector_exp", "left_matrix_exp", request, BivectorExpFacts(matrix))
+    assert select_policy_route(DEFAULT_PLANNING_POLICY, (closed(449), matrix)).route == "closed"
+    assert select_policy_route(DEFAULT_PLANNING_POLICY, (closed(451), matrix)).route == "left_matrix_exp"
+    assert select_policy_route(DEFAULT_PLANNING_POLICY, (closed(450), matrix)).route == "closed"
+    assert select_policy_route(DEFAULT_PLANNING_POLICY, (matrix, closed(450))).route == "left_matrix_exp"
 
 
 def test_uncovered_routes_report_rejection():

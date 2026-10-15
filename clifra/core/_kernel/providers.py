@@ -35,6 +35,7 @@ from clifra.core._kernel.planning.resources import ResourceRequirements
 from clifra.core._kernel.planning.work import (
     ActionWorkProfile,
     BivectorExpWorkProfile,
+    ProductWorkProfile,
     SandwichWorkProfile,
     action_lift_profile,
 )
@@ -223,6 +224,11 @@ def _combined_requirements(base, children):
     )
 
 
+def _child_work_profile(child, profile_type):
+    profile = None if child is None else getattr(child.facts, "work_profile", None)
+    return profile if isinstance(profile, profile_type) else None
+
+
 @dataclass(frozen=True)
 class BuiltinProvider:
     identity: tuple[str, str]
@@ -396,10 +402,12 @@ def _assess_exp(request, route):
                 grade4_width=spec.layout((4,)).dim if route == "closed" and spec.n >= 4 else 0,
                 even_width=even.dim,
                 output_width=output.dim,
-                fixed_products=tuple(item.facts.work_profile for item in fixed if item is not None),
-                plain_products=tuple(item.facts.work_profile for item in plain),
-                scaled_products=tuple(item.facts.work_profile for item in scaled),
-                square_product=None if square is None else square.facts.work_profile,
+                fixed_products=tuple(
+                    _child_work_profile(item, ProductWorkProfile) for item in fixed if item is not None
+                ),
+                plain_products=tuple(_child_work_profile(item, ProductWorkProfile) for item in plain),
+                scaled_products=tuple(_child_work_profile(item, ProductWorkProfile) for item in scaled),
+                square_product=_child_work_profile(square, ProductWorkProfile),
                 plain_stage_widths=tuple(layout.dim for layout in taylor_layouts(spec, output, degree)[1:])
                 if route == "taylor"
                 else (),
@@ -483,7 +491,7 @@ def _build_exp(request, route, preparation):
 
         def product_proxy(child):
             # Preserve the eager-CPU partition heuristic's old P + indexed-P proxy exactly.
-            profile = child.facts.work_profile
+            profile = _child_work_profile(child, ProductWorkProfile)
             return profile.bulk + (
                 profile.bulk if profile.route == "sparse" and profile.output > 1 and profile.bulk > 0 else 0
             )
@@ -493,11 +501,16 @@ def _build_exp(request, route, preparation):
 
         plain = preparation.polynomial_18 if degree == 18 else preparation.polynomial_12
         full = preparation.full_polynomial_18 if degree == 18 else preparation.full_polynomial_12
-        taylor_work = (
-            schedule_work(plain),
-            schedule_work(full),
-            product_proxy(preparation.square),
-        )
+        # The optional partition heuristic needs comparable work for every child.
+        # Keep execution on the unpartitioned path when an external estimate is absent.
+        if all(
+            _child_work_profile(child, ProductWorkProfile) is not None for child in (*plain, *full, preparation.square)
+        ):
+            taylor_work = (
+                schedule_work(plain),
+                schedule_work(full),
+                product_proxy(preparation.square),
+            )
 
     return BivectorExpExecutor(
         plan,
@@ -535,7 +548,7 @@ def _assess_sandwich(request, route):
                 middle_width=middle.dim,
                 # Keep both calls as execution work even when their prepared
                 # resident state is identical and deduplicated below.
-                product_children=tuple(child.facts.work_profile for child in children),
+                product_children=tuple(_child_work_profile(child, ProductWorkProfile) for child in children),
             )
         )
         resources = _combined_requirements(
@@ -621,7 +634,6 @@ def _assess_action(request, route):
             norm = planner.router.select(norm_request, planner.policy, planner.limits, warn_selected=False)
             involution = _unary_child(planner, inputs, "grade_involution", request.dtype, request.device)
             reverse = _unary_child(planner, parameter, "reverse", request.dtype, request.device)
-    product_facts = ()
     if route == "vector_matrix":
         generator_terms, resources = _linear_action_structure(
             inputs,
@@ -632,10 +644,21 @@ def _assess_action(request, route):
         if grade == 1:
             resources = ResourceRequirements(resources.lanes, resources.pairs + 2 * spec.n**2 + spec.n)
     else:
-        product_facts = tuple(
-            child.facts for child in (left, right) if child is not None and isinstance(child.facts, ProductFacts)
-        )
         generator_terms = 0
+    elementwise_cells = (
+        (rotor.dim, middle.dim, output.dim)
+        if route == "rotor_product"
+        else (spec.dim, inputs.dim)
+        if route == "full_action_matrix"
+        else ()
+    )
+    # Unary and metric work has no separate built-in profile. Retain selected
+    # external auxiliary work as unavailable alongside the known parent work.
+    elementwise_cells += tuple(
+        None
+        for child in (reverse, norm, involution)
+        if child is not None and not isinstance(child.provider, BuiltinProvider)
+    )
     facts = ActionFacts(
         ActionWorkProfile(
             route=route,
@@ -644,10 +667,13 @@ def _assess_action(request, route):
             reflection_cells=spec.n**2 if route == "vector_matrix" and grade == 1 else 0,
             vector_matrix_exp_order=spec.n**3 if route == "vector_matrix" and grade == 2 else 0,
             lift=action_lift_profile(spec.n, inputs.grades, output.grades) if route == "vector_matrix" else None,
-            product_children=tuple(item.work_profile for item in product_facts),
-            exponential_child=None if exponential is None else exponential.facts.work_profile,
+            product_children=tuple(
+                _child_work_profile(child, ProductWorkProfile) for child in (left, right) if child is not None
+            ),
+            exponential_child=_child_work_profile(exponential, BivectorExpWorkProfile),
             full_action_matrix_order=spec.dim**3 if route == "full_action_matrix" else 0,
             full_action_cells=spec.dim**2 if route == "full_action_matrix" else 0,
+            elementwise_cells=elementwise_cells,
         )
     )
     children = tuple(child for child in (exponential, reverse, left, right, norm, involution) if child is not None)
