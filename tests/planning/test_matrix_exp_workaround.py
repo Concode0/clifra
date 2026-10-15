@@ -5,6 +5,7 @@ import torch
 
 from clifra.core._kernel.configuration import configured_algebra
 from clifra.core._kernel.numerics import _matrix_exp_singleton_workaround
+from tests.helpers.bivector_exp_oracle import bivector_exp_cpu_reference
 from tests.helpers.policy import PreferRoute
 
 PLACEMENTS = [("cpu", torch.float32), ("cpu", torch.float64)] + (
@@ -94,4 +95,26 @@ def test_materialized_matrix_exp_singleton_matches_closed_route():
     torch.testing.assert_close(actual, expected, atol=1e-12, rtol=1e-10)
     torch.testing.assert_close(
         torch.autograd.grad(actual.sum(), b)[0], torch.autograd.grad(expected.sum(), b)[0], atol=1e-12, rtol=1e-10
+    )
+
+
+def test_singleton_exp_reference_matches_closed_formula_and_gradients():
+    algebra = configured_algebra(3, dtype=torch.float64)
+    values = torch.tensor(
+        [[0.0006260542828131938, 0.03370877725776058, -0.0150453758709296]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    actual = bivector_exp_cpu_reference(
+        algebra, values, input_layout=algebra.layout((2,)), output_layout=algebra.layout((0, 2))
+    )
+    angle = values.norm(dim=-1, keepdim=True)
+    expected = torch.cat((angle.cos(), values * torch.sinc(angle / torch.pi)), dim=-1)
+
+    torch.testing.assert_close(actual, expected, atol=2e-12, rtol=2e-12)
+    torch.testing.assert_close(
+        torch.autograd.grad(actual.sum(), values)[0],
+        torch.autograd.grad(expected.sum(), values)[0],
+        atol=2e-11,
+        rtol=2e-11,
     )

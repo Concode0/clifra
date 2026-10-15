@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import torch
 
+from clifra.core._kernel.numerics import _matrix_exp_singleton_workaround
 from tests.helpers.small_oracle import SmallCliffordOracle
 
 
@@ -29,7 +30,7 @@ def bivector_exp_cpu_reference(
         output_indices=operator_indices,
     )
     operator = columns.transpose(-1, -2)
-    even_output = torch.matrix_exp(operator)[..., :, operator_positions[0]]
+    even_output = _matrix_exp_singleton_workaround(operator)[..., :, operator_positions[0]]
     output = even_output.new_zeros(*even_output.shape[:-1], output_layout.dim)
     for output_position, output_index in enumerate(output_layout.basis_indices):
         operator_position = operator_positions.get(output_index)
